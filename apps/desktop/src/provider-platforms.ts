@@ -9,8 +9,6 @@ export type ProviderPlatform = {
   readonly label: { readonly zh: string; readonly en: string };
   readonly source: string;
   readonly baseUrl: string;
-  /** Cloud-governed model names shown as model-ID suggestions, never a local hard-coded catalog. */
-  readonly models: readonly string[];
 };
 
 const CLOUD_CATEGORY_BY_CAPABILITY: Record<ConfigurableProviderCapability, WorkbenchProviderCategory> = {
@@ -36,14 +34,18 @@ const RUNTIME_BY_CLOUD_PROVIDER: Record<string, Pick<ProviderPlatform, "source" 
 };
 
 function cloudPlatforms(capability: ConfigurableProviderCapability): readonly ProviderPlatform[] {
-  return WORKBENCH_PROVIDER_CATALOG[CLOUD_CATEGORY_BY_CAPABILITY[capability]].map((provider) => {
+  return WORKBENCH_PROVIDER_CATALOG[CLOUD_CATEGORY_BY_CAPABILITY[capability]]
+    // A generic OpenAI-compatible model list has no standard modality field.
+    // It cannot prove that an account's returned model is a media model, so
+    // keep it text-only instead of permitting text models in media settings.
+    .filter((provider) => capability === "text" || provider.providerId !== "openai_compatible")
+    .map((provider) => {
     const runtime = RUNTIME_BY_CLOUD_PROVIDER[provider.providerId] ?? { source: provider.providerId, baseUrl: "" };
     return {
       id: provider.providerId,
       label: { zh: provider.providerLabel, en: provider.providerLabel },
       source: runtime.source,
       baseUrl: runtime.baseUrl,
-      models: provider.models,
     };
   });
 }

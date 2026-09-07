@@ -11,12 +11,12 @@ test("media model fields expose the configured catalog and selected model", () =
   assert.deepEqual(modelField.options?.map((option) => option.value), ["speech-2.8-turbo", "speech-2.8-hd"])
 })
 
-test("stale media selections fall back to the first configured model", () => {
+test("video features retain arbitrary model IDs from the configured video profile", () => {
   const feature = WORKBENCH_MEDIA_FEATURES.find((item) => item.id === "text-to-video")!
-  const resolved = applyConfiguredMediaModels(feature, ["configured-video-a", "configured-video-b"], "removed-video")
+  const resolved = applyConfiguredMediaModels(feature, ["account-model-a", "account-model-b"], "removed-model")
   const modelField = resolved.fields.find((field) => field.id === "model")!
-  assert.equal(modelField.defaultValue, "configured-video-a")
-  assert.deepEqual(modelField.options?.map((option) => option.value), ["configured-video-a", "configured-video-b"])
+  assert.equal(modelField.defaultValue, "account-model-a")
+  assert.deepEqual(modelField.options?.map((option) => option.value), ["account-model-a", "account-model-b"])
 })
 
 test("media tabs use the selected capability profile when it has no model catalog", () => {
@@ -27,12 +27,12 @@ test("media tabs use the selected capability profile when it has no model catalo
   assert.deepEqual(modelField.options?.map((option) => option.value), ["MiniMax-Hailuo-H3"])
 })
 
-test("AI music keeps music models separate from speech-only audio profiles", () => {
+test("audio features retain the configured audio profile without model-name heuristics", () => {
   const feature = WORKBENCH_MEDIA_FEATURES.find((item) => item.id === "ai-music")!
   const resolved = applyConfiguredMediaModels(feature, ["speech-2.8-hd", "speech-2.8-turbo"], "speech-2.8-hd")
   const modelField = resolved.fields.find((field) => field.id === "model")!
-  assert.deepEqual(modelField.options?.map((option) => option.value), ["music-2.6", "music-2.6-free", "music-cover", "music-cover-free"])
-  assert.equal(modelField.defaultValue, "music-2.6")
+  assert.deepEqual(modelField.options?.map((option) => option.value), ["speech-2.8-hd", "speech-2.8-turbo"])
+  assert.equal(modelField.defaultValue, "speech-2.8-hd")
 })
 
 test("video feature fields follow the online model parameter contract", () => {

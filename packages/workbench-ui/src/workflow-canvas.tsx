@@ -40,7 +40,7 @@ export type WorkflowCanvasExecutionSnapshot = {
 /** Pointer-event bridge used by the desktop node palette. HTML5 drag events are unreliable in native WebViews. */
 export const WORKFLOW_PALETTE_DRAG_EVENT = "coworkany:workflow-palette-drag-start";
 export const WORKFLOW_PALETTE_DROP_EVENT = "coworkany:workflow-palette-drop";
-type WorkflowPaletteDragDetail = { type: string; pointerId: number };
+type WorkflowPaletteDragDetail = { type: string; pointerId: number; startClientX?: number; startClientY?: number };
 export type WorkflowCanvasProps = {
   className?: string;
   locale: "zh" | "en";
@@ -123,7 +123,7 @@ type ConnectionPortPair = { sourcePortId: string; targetPortId: string; kind: Wo
 type PendingPortChoice = ConnectionTarget & { sourceNodeKey: string; x: number; y: number };
 type SelectedEdge = { edge: WorkflowCanvasEdge; sourcePortId: string; targetPortId: string };
 type SelectionBox = { startX: number; startY: number; endX: number; endY: number };
-type PaletteDragState = { type: WorkflowNodeType; pointerId: number };
+type PaletteDragState = { type: WorkflowNodeType; pointerId: number; startClientX: number; startClientY: number; moved: boolean };
 
 const clampScale = (value: number) =>
   Math.max(MIN_CANVAS_SCALE, Math.min(MAX_CANVAS_SCALE, Number(value.toFixed(2))));
@@ -300,7 +300,7 @@ export function WorkflowCanvas({
     [nodeExecutionSnapshots],
   );
   const copyableSelectedNodeKeys = useMemo(
-    () => selectedNodeKeys.filter((nodeKey) => nodeKey !== "input" && nodeKey !== "output"),
+    () => selectedNodeKeys.filter((nodeKey) => nodeKey !== "input"),
     [selectedNodeKeys],
   );
 
@@ -420,7 +420,15 @@ export function WorkflowCanvas({
 
   useEffect(() => {
     const handleMove = (event: PointerEvent) => {
-      if (paletteDragRef.current?.pointerId === event.pointerId) return;
+      const paletteDrag = paletteDragRef.current;
+      if (paletteDrag?.pointerId === event.pointerId) {
+        if (!paletteDrag.moved && (Math.abs(event.clientX - paletteDrag.startClientX) > 6 || Math.abs(event.clientY - paletteDrag.startClientY) > 6)) {
+          const next = { ...paletteDrag, moved: true };
+          paletteDragRef.current = next;
+          setPaletteDrag(next);
+        }
+        return;
+      }
       const drag = dragRef.current;
       if (!drag) return;
       if (drag.kind === "pan") {
@@ -489,7 +497,7 @@ export function WorkflowCanvas({
     const handlePaletteDragStart = (event: Event) => {
       const detail = (event as CustomEvent<WorkflowPaletteDragDetail>).detail;
       if (!detail || !isWorkflowNodeType(detail.type) || !onAddNodeAtPoint) return;
-      const next = { type: detail.type, pointerId: detail.pointerId };
+      const next = { type: detail.type, pointerId: detail.pointerId, startClientX: detail.startClientX ?? 0, startClientY: detail.startClientY ?? 0, moved: false };
       paletteDragRef.current = next;
       setPaletteDrag(next);
     };
@@ -498,6 +506,7 @@ export function WorkflowCanvas({
       if (!active || active.pointerId !== event.pointerId) return;
       paletteDragRef.current = null;
       setPaletteDrag(null);
+      if (!active.moved) return;
       const bounds = rootRef.current?.getBoundingClientRect();
       if (!bounds || event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) return;
       const point = canvasPointFromClient(event.clientX, event.clientY);
@@ -804,7 +813,9 @@ export function WorkflowCanvas({
               })));
             const hasPreviewableMedia = nodeHasPreviewableMedia(node);
             const mediaInteractionEnabled = mediaInteractionNodeKey === node.nodeKey;
-            const fixedNode = node.nodeKey === "input" || node.nodeKey === "output";
+            // Only the default input is structural. Result preview nodes are
+            // regular graph nodes so a workflow can expose multiple outputs.
+            const fixedNode = node.nodeKey === "input";
             const parameterEntries = (definition?.configSchema ?? [])
               .filter((field) => field.rendererId !== "asset" && field.rendererId !== "agent" && field.rendererId !== "dataset" && field.rendererId !== "custom")
               .map((field) => {

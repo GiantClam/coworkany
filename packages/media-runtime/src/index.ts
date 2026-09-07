@@ -169,6 +169,94 @@ export interface DirectProviderOptions {
 
 export const IMAGE_GENERATION_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
+type WorkflowLocalMediaFile = {
+  readonly bytes: Uint8Array;
+  readonly contentType: string;
+  readonly fileName: string;
+};
+
+async function readWorkflowLocalMediaFile(
+  value: string,
+  options: DirectProviderOptions,
+  cancellation: CancellationPort,
+  workflowLocalAttachments: boolean,
+  allowedContentType: RegExp,
+  maxBytes: number,
+): Promise<WorkflowLocalMediaFile> {
+  if (!workflowLocalAttachments) throw new Error("image_reference_path_unsafe");
+  cancellation.throwIfCancelled();
+  const workspacePath = text(options.workspacePath);
+  if (!workspacePath) throw new Error("image_reference_workspace_required");
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const root = path.resolve(workspacePath);
+  const absoluteValue = path.isAbsolute(value);
+  const candidate = absoluteValue && workflowLocalAttachments ? path.resolve(value) : path.resolve(root, value);
+  if ((!absoluteValue || !workflowLocalAttachments) && (candidate === root || !candidate.startsWith(`${root}${path.sep}`))) throw new Error("image_reference_path_unsafe");
+  const metadata = await fs.stat(candidate).catch(() => undefined);
+  if (!metadata?.isFile()) throw new Error("image_reference_file_missing");
+  if (metadata.size > maxBytes) throw new Error(`image_reference_too_large:${maxBytes}`);
+  const contentType = mediaContentTypeForExtension(path.extname(candidate));
+  if (!contentType || !allowedContentType.test(contentType)) throw new Error("image_reference_type_unsupported");
+  return { bytes: new Uint8Array(await fs.readFile(candidate)), contentType, fileName: path.basename(candidate) };
+}
+
+async function resolveProviderImageReference(value: string, options: DirectProviderOptions, cancellation: CancellationPort, workflowLocalAttachments: boolean, maxBytes: number) {
+  let parsed: URL | undefined;
+  try { parsed = new URL(value); } catch { parsed = undefined; }
+  if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "data:")) return value;
+  const local = await readWorkflowLocalMediaFile(value, options, cancellation, workflowLocalAttachments, /^image\//u, maxBytes);
+  return `data:${local.contentType};base64,${Buffer.from(local.bytes).toString("base64")}`;
+}
+
+function isDashScopeTemporaryUrl(value: string) {
+  return value.trim().toLowerCase().startsWith("oss://");
+}
+
+async function uploadDashScopeMediaReference(value: string, model: string, options: DirectProviderOptions, cancellation: CancellationPort, allowedContentType: RegExp, maxBytes: number) {
+  let parsed: URL | undefined;
+  try { parsed = new URL(value); } catch { parsed = undefined; }
+  if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "data:" || parsed.protocol === "oss:")) return value;
+  const local = await readWorkflowLocalMediaFile(value, options, cancellation, true, allowedContentType, maxBytes);
+  const policy = await jsonRequest(options, "/api/v1/uploads", { method: "POST" }, cancellation, { action: "getPolicy", model });
+  const data = policy.data && typeof policy.data === "object" ? policy.data as Record<string, unknown> : {};
+  const uploadHost = text(data.upload_host ?? data.uploadHost);
+  const uploadDirectory = text(data.upload_dir ?? data.uploadDir);
+  const accessKeyId = text(data.oss_access_key_id ?? data.ossAccessKeyId);
+  const policyToken = text(data.policy);
+  const signature = text(data.signature);
+  if (!isHttpEndpoint(uploadHost) || !uploadDirectory || !accessKeyId || !policyToken || !signature) throw new Error("media_provider_upload_invalid_policy");
+  const key = `${uploadDirectory.replace(/\/+$/u, "")}/${Date.now()}-${local.fileName}`;
+  const form = new FormData();
+  form.set("OSSAccessKeyId", accessKeyId);
+  form.set("Signature", signature);
+  form.set("policy", policyToken);
+  form.set("x-oss-object-acl", text(data.x_oss_object_acl ?? data.xOssObjectAcl) || "private");
+  form.set("x-oss-forbid-overwrite", text(data.x_oss_forbid_overwrite ?? data.xOssForbidOverwrite) || "true");
+  form.set("key", key);
+  form.set("success_action_status", "200");
+  form.set("file", new Blob([local.bytes as unknown as BlobPart], { type: local.contentType }), local.fileName);
+  const requestAbort = requestAbortSignal(cancellation.signal, options.requestTimeoutMs);
+  let response: Response;
+  try {
+    response = await (options.fetchImpl ?? fetch)(uploadHost, { method: "POST", body: form, signal: requestAbort.signal });
+    await response.text();
+  } catch (error) {
+    if (requestAbort.didTimeout()) throw new Error("media_provider_request_timeout");
+    if (cancellation.signal?.aborted) cancellation.throwIfCancelled();
+    throw error;
+  } finally {
+    requestAbort.cleanup();
+  }
+  if (!response.ok) throw new Error(`media_provider_upload_http_${response.status}`);
+  return `oss://${key}`;
+}
+
+async function resolveDashScopeMediaReference(value: string, model: string, options: DirectProviderOptions, cancellation: CancellationPort, kind: "image" | "video" | "audio") {
+  if (kind === "image") return resolveProviderImageReference(value, options, cancellation, true, 20 * 1024 * 1024);
+  return uploadDashScopeMediaReference(value, model, options, cancellation, new RegExp(`^${kind}/`, "u"), 100 * 1024 * 1024);
+}
+
 function providerUrl(baseUrl: string, path: string, query?: Record<string, string>) {
   // Treat provider paths as relative to the configured base path. A leading
   // slash would make URL() discard a `/v1` prefix used by OpenAI-compatible
@@ -263,6 +351,7 @@ function mapProviderStatus(value: unknown): MediaTaskStatus {
 
 const mediaUrlKeys = ["url", "uri", "image_url", "imageUrl", "video_url", "videoUrl", "audio_url", "audioUrl", "file_url", "fileUrl", "download_url", "downloadUrl", "image"] as const;
 const mediaEncodedKeys = ["b64_json", "base64", "base64_json", "image_base64", "imageBase64"] as const;
+const mediaContainerKeys = new Set(["data", "output", "outputs", "result", "results", "images", "image", "audio", "video", "assets", "files", "content"]);
 
 function normalizeMediaOutput(value: unknown): Record<string, unknown> | undefined {
   if (typeof value === "string") {
@@ -281,33 +370,53 @@ function normalizeMediaOutput(value: unknown): Record<string, unknown> | undefin
   };
 }
 
+function hasMediaOutput(value: Record<string, unknown>) {
+  return mediaUrlKeys.some((key) => typeof value[key] === "string" && Boolean((value[key] as string).trim()))
+    || mediaEncodedKeys.some((key) => typeof value[key] === "string" && Boolean((value[key] as string).trim()));
+}
+
+/**
+ * Providers commonly wrap an image URL several levels deep (for example
+ * `data.result.images[0].image.url`). Keep the adapter tolerant of those
+ * equivalent response envelopes instead of making the host guess at them.
+ */
+function collectMediaOutputs(value: unknown, parentKey = "", depth = 0): Record<string, unknown>[] {
+  if (depth > 8 || value === undefined || value === null) return [];
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return mediaContainerKeys.has(parentKey) && /^(?:https?:\/\/|data:)/iu.test(trimmed) ? [{ url: trimmed }] : [];
+  }
+  if (Array.isArray(value)) return value.flatMap((item) => collectMediaOutputs(item, parentKey, depth + 1));
+  if (typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const direct = hasMediaOutput(record) ? normalizeMediaOutput(record) : undefined;
+  if (direct) return [direct];
+  return Object.entries(record).flatMap(([key, nested]) => collectMediaOutputs(nested, key, depth + 1));
+}
+
 function asTask(provider: MediaProviderId, payload: Record<string, unknown>, fallbackId?: string): MediaTask {
   const output = payload.output && typeof payload.output === "object" ? payload.output as Record<string, unknown> : payload;
   const providerTaskId = text(output.task_id) || text(output.taskId) || text(payload.task_id) || text(payload.taskId) || text(payload.id) || fallbackId || `sync-${Date.now()}`;
   const providerStatus = output.task_status ?? output.taskStatus ?? output.status ?? payload.task_status ?? payload.taskStatus ?? payload.status ?? payload.state;
-  const values: unknown[] = [];
-  const addValue = (value: unknown) => {
-    if (value === undefined || value === null || values.includes(value)) return;
-    if (Array.isArray(value)) values.push(value);
-    else values.push(value);
+  const values: Array<readonly [string, unknown]> = [];
+  const addValue = (parentKey: string, value: unknown) => {
+    if (value === undefined || value === null || values.some(([, existing]) => existing === value)) return;
+    values.push([parentKey, value]);
   };
   const hasDirectMedia = (source: Record<string, unknown>) => mediaUrlKeys.some((key) => typeof source[key] === "string" && Boolean((source[key] as string).trim())) || mediaEncodedKeys.some((key) => typeof source[key] === "string" && Boolean((source[key] as string).trim()));
-  for (const value of [output.audio, output.result, output.results, output.images, output.data, payload.output, payload.data, payload.result, payload.results, payload.outputs, payload.images]) addValue(value);
-  if (hasDirectMedia(output)) addValue(output);
-  if (output !== payload && hasDirectMedia(payload)) addValue(payload);
+  for (const [parentKey, value] of [
+    ["audio", output.audio], ["result", output.result], ["results", output.results], ["images", output.images], ["data", output.data],
+    ["output", payload.output], ["data", payload.data], ["result", payload.result], ["results", payload.results], ["outputs", payload.outputs], ["images", payload.images],
+  ] as const) addValue(parentKey, value);
+  if (hasDirectMedia(output)) addValue("output", output);
+  if (output !== payload && hasDirectMedia(payload)) addValue("output", payload);
   for (const source of [output, payload]) {
     for (const key of mediaEncodedKeys) {
-      if (typeof source[key] === "string" && source[key].trim()) addValue({ [key]: source[key] });
+      if (typeof source[key] === "string" && source[key].trim()) addValue(key, { [key]: source[key] });
     }
   }
   const seen = new Set<string>();
-  const outputs = values.flatMap((value) => {
-    const candidates = Array.isArray(value) ? value : [value];
-    return candidates.flatMap((item) => {
-      const normalized = normalizeMediaOutput(item);
-      return normalized ? [normalized] : [];
-    });
-  }).filter((item) => {
+  const outputs = values.flatMap(([parentKey, value]) => collectMediaOutputs(value, parentKey)).filter((item) => {
     const key = JSON.stringify(item);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -422,6 +531,73 @@ async function curlImageRequest(options: DirectProviderOptions, body: Record<str
     throw error;
   } finally {
     requestAbort.cleanup();
+  }
+}
+
+type CurlImageEditReference = { readonly blob: Blob; readonly fileName: string };
+
+async function curlImageEditRequest(
+  options: DirectProviderOptions,
+  fields: readonly (readonly [string, string])[],
+  references: readonly CurlImageEditReference[],
+  cancellation: CancellationPort,
+  idempotencyKey?: string,
+) {
+  requireInjectedProviderConfig(options, "media");
+  cancellation.throwIfCancelled();
+  const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { extname, join } = await import("node:path");
+  const tempDirectory = await mkdtemp(join(tmpdir(), "coworkany-image-edit-"));
+  const requestAbort = requestAbortSignal(cancellation.signal, options.requestTimeoutMs ?? IMAGE_GENERATION_REQUEST_TIMEOUT_MS);
+  try {
+    const files = await Promise.all(references.map(async (reference, index) => {
+      cancellation.throwIfCancelled();
+      const extension = extname(reference.fileName).replace(/[^a-z0-9.]/giu, "") || ".png";
+      const filePath = join(tempDirectory, `reference-${index}${extension}`);
+      await writeFile(filePath, new Uint8Array(await reference.blob.arrayBuffer()));
+      return { filePath, contentType: reference.blob.type || "image/png" };
+    }));
+    const args = [
+      "-sS", "--connect-timeout", String(Math.max(5, Math.ceil((options.requestTimeoutMs ?? IMAGE_GENERATION_REQUEST_TIMEOUT_MS) / 3000))),
+      "--max-time", String(Math.max(10, Math.ceil((options.requestTimeoutMs ?? IMAGE_GENERATION_REQUEST_TIMEOUT_MS) / 1000))),
+      ...(process.platform === "win32" ? ["--ssl-no-revoke"] : []),
+      "-X", "POST", providerUrl(options.baseUrl, "/images/edits").toString(),
+      "-H", `Authorization: Bearer ${options.apiKey}`,
+      "-H", "Accept: application/json",
+      ...(idempotencyKey ? ["-H", `Idempotency-Key: ${idempotencyKey}`] : []),
+      ...fields.flatMap(([key, value]) => ["--form-string", `${key}=${value}`]),
+      ...files.flatMap(({ filePath, contentType }) => ["--form", `image=@${filePath};type=${contentType}`]),
+      "-w", "\n__HTTP_STATUS__:%{http_code}",
+    ];
+    const result = await (options.curlRunner ?? defaultCurlRunner)(args, { signal: requestAbort.signal });
+    if (requestAbort.didTimeout()) throw new Error("media_provider_request_timeout");
+    if (cancellation.signal?.aborted) cancellation.throwIfCancelled();
+    const marker = "\n__HTTP_STATUS__:";
+    const markerIndex = result.stdout.lastIndexOf(marker);
+    if (markerIndex === -1) throw new Error("media_provider_curl_response_malformed");
+    const status = Number.parseInt(result.stdout.slice(markerIndex + marker.length).trim(), 10);
+    let payload: Record<string, unknown> = {};
+    try { payload = JSON.parse(result.stdout.slice(0, markerIndex) || "{}") as Record<string, unknown>; } catch { throw new Error("media_provider_invalid_response"); }
+    if (result.code === 28) throw new Error("media_provider_request_timeout");
+    if (result.code !== 0 || !Number.isFinite(status) || status <= 0) {
+      const detail = result.stderr.trim().slice(-180);
+      throw new Error(`media_provider_curl_failed${detail ? `:${detail}` : ""}`);
+    }
+    if (status < 200 || status >= 300) {
+      const error = payload.error && typeof payload.error === "object" ? payload.error as Record<string, unknown> : payload;
+      const detail = text(error.message ?? error.msg ?? error.code).slice(0, 180);
+      throw new Error(`media_provider_http_${status}${detail ? `:${detail}` : ""}`);
+    }
+    return payload;
+  } catch (error) {
+    if (requestAbort.didTimeout()) throw new Error("media_provider_request_timeout");
+    if (cancellation.signal?.aborted) cancellation.throwIfCancelled();
+    if (error instanceof Error && error.message.includes("ENOENT")) throw new Error("media_provider_curl_unavailable");
+    throw error;
+  } finally {
+    requestAbort.cleanup();
+    await rm(tempDirectory, { recursive: true, force: true });
   }
 }
 
@@ -552,6 +728,7 @@ export function createOpenAICompatibleImageAdapter(options: DirectProviderOption
       const input = request.input as Record<string, unknown>;
       const prompt = text(input.prompt);
       if (!prompt) throw new Error("image_prompt_required");
+      const workflowLocalAttachments = input.workflowLocalAttachments === true;
       const count = Math.max(1, Math.min(9, Math.floor(numberValue(input.n, 1))));
       const referenceImageUrls = [...new Set([
         ...(Array.isArray(input.referenceImageUrls) ? input.referenceImageUrls.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).map((value) => value.trim()) : []),
@@ -581,33 +758,27 @@ export function createOpenAICompatibleImageAdapter(options: DirectProviderOption
           return { blob: new Blob([await response.arrayBuffer()], { type: contentType }), fileName };
         }
 
-        const workspacePath = text(options.workspacePath);
-        if (!workspacePath) throw new Error("image_reference_workspace_required");
-        const fs = await import("node:fs/promises");
-        const path = await import("node:path");
-        const root = path.resolve(workspacePath);
-        const candidate = path.resolve(root, value);
-        if (candidate === root || !candidate.startsWith(`${root}${path.sep}`)) throw new Error("image_reference_path_unsafe");
-        const metadata = await fs.stat(candidate).catch(() => undefined);
-        if (!metadata?.isFile()) throw new Error("image_reference_file_missing");
-        const extension = path.extname(candidate).toLowerCase();
-        const contentType = extension === ".jpg" || extension === ".jpeg" ? "image/jpeg" : extension === ".webp" ? "image/webp" : "image/png";
-        return { blob: new Blob([await fs.readFile(candidate) as unknown as BlobPart], { type: contentType }), fileName: path.basename(candidate) };
+        const local = await readWorkflowLocalMediaFile(value, options, cancellation, workflowLocalAttachments, /^image\//u, 20 * 1024 * 1024);
+        return { blob: new Blob([local.bytes as unknown as BlobPart], { type: local.contentType }), fileName: local.fileName };
       };
       const submit = async (modelId: string, idempotencyKey?: string) => {
         if (referenceImageUrls.length) {
-          const form = new FormData();
-          form.set("model", modelId);
-          form.set("prompt", prompt);
-          form.set("n", String(count));
+          const fields: Array<readonly [string, string]> = [["model", modelId], ["prompt", prompt], ["n", String(count)]];
           for (const key of ["size", "quality", "output_format", "response_format"]) {
             const value = text(input[key]);
-            if (value) form.set(key, value);
+            if (value) fields.push([key, value]);
           }
-          if (outputCompression !== undefined && outputFormat !== "png") form.set("output_compression", String(Math.max(0, Math.min(100, outputCompression))));
+          if (outputCompression !== undefined && outputFormat !== "png") fields.push(["output_compression", String(Math.max(0, Math.min(100, outputCompression)))]);
+          const loadedReferences: CurlImageEditReference[] = [];
           for (const [index, reference] of referenceImageUrls.entries()) {
             const loaded = await loadReferenceImage(reference, index);
-            form.append("image", loaded.blob, loaded.fileName);
+            loadedReferences.push(loaded);
+          }
+          if (options.imageTransport === "curl") return curlImageEditRequest(options, fields, loadedReferences, cancellation, idempotencyKey);
+          const form = new FormData();
+          for (const [key, value] of fields) form.set(key, value);
+          for (const reference of loadedReferences) {
+            form.append("image", reference.blob, reference.fileName);
           }
           return jsonRequest(options, "/images/edits", {
             method: "POST",
@@ -649,20 +820,39 @@ export function createBailianImageAdapter(options: DirectProviderOptions): Media
       const input = request.input as Record<string, unknown>;
       const prompt = text(input.prompt);
       if (!prompt) throw new Error("image_prompt_required");
-      const parameters = {
-        size: text(input.size) || "1024*1024",
-        n: Math.max(1, Math.min(4, Math.floor(numberValue(input.n, 1)))),
+      const references = [...new Set([
+        ...(Array.isArray(input.referenceImages) ? input.referenceImages : []),
+        ...(Array.isArray(input.referenceImageUrls) ? input.referenceImageUrls : []),
+        ...(text(input.inputImageUrl) ? [text(input.inputImageUrl)] : []),
+      ].flatMap((value) => typeof value === "string" && value.trim() ? [value.trim()] : []))].slice(0, 3);
+      const model = request.modelId.toLowerCase();
+      if (model.includes("qwen-image") && /(?:-edit|image-to-image|img2img)/iu.test(model) && references.length === 0) throw new Error("image_reference_required");
+      const parameters: Record<string, unknown> = {
+        size: text(input.size).replace(/x/giu, "*") || "1024*1024",
+        n: Math.max(1, Math.min(model.includes("qwen-image") ? 6 : 4, Math.floor(numberValue(input.n, 1)))),
         ...(text(input.style) ? { style: text(input.style) } : {}),
-        ...(text(input.seed) ? { seed: numberValue(input.seed, 0) } : {}),
+        ...(text(input.negativePrompt) ? { negative_prompt: text(input.negativePrompt) } : {}),
+        ...(input.promptExtend !== undefined ? { prompt_extend: input.promptExtend === true || text(input.promptExtend).toLowerCase() === "true" } : {}),
+        ...(input.watermark !== undefined ? { watermark: input.watermark === true || text(input.watermark).toLowerCase() === "true" } : {}),
+        ...(input.seed !== undefined && Number.isFinite(Number(input.seed)) ? { seed: Math.max(0, Math.floor(Number(input.seed))) } : {}),
       };
-      const payload = await jsonRequest(options, "/api/v1/services/aigc/text2image/image-synthesis", {
+      const useMultimodal = references.length > 0 || model.includes("qwen-image");
+      const resolvedReferences = await Promise.all(references.map((reference) => resolveProviderImageReference(reference, options, cancellation, input.workflowLocalAttachments === true, 10 * 1024 * 1024)));
+      const body = useMultimodal
+        ? {
+            model: request.modelId,
+            input: { messages: [{ role: "user", content: [...resolvedReferences.map((image) => ({ image })), { text: prompt }] }] },
+            parameters,
+          }
+        : {
+            model: request.modelId,
+            input: { prompt },
+            parameters,
+          };
+      const payload = await jsonRequest(options, useMultimodal ? "/api/v1/services/aigc/multimodal-generation/generation" : "/api/v1/services/aigc/text2image/image-synthesis", {
         method: "POST",
-        body: JSON.stringify({
-          model: request.modelId,
-          input: { prompt, ...(text(input.negativePrompt) ? { negative_prompt: text(input.negativePrompt) } : {}) },
-          parameters,
-        }),
-        headers: { "X-DashScope-Async": "enable", ...(request.idempotencyKey ? { "X-Request-ID": request.idempotencyKey } : {}) },
+        body: JSON.stringify(body),
+        headers: { ...(useMultimodal ? {} : { "X-DashScope-Async": "enable" }), ...(request.idempotencyKey ? { "X-Request-ID": request.idempotencyKey } : {}) },
       }, cancellation, undefined, options.requestTimeoutMs ?? IMAGE_GENERATION_REQUEST_TIMEOUT_MS);
       return asTask(options.provider, payload);
     },
@@ -678,11 +868,51 @@ export function createBailianVideoAdapter(options: DirectProviderOptions): Media
       const input = request.input as Record<string, unknown>;
       const model = request.modelId;
       const prompt = text(input.prompt);
-      const feature = text(input.featureId) || (text(input.firstFrameUrl) ? "image-to-video" : "text-to-video");
+      const explicitFeature = text(input.featureId) || text(input.mode);
+      const referenceVideoInputs = Array.isArray(input.referenceVideoUrls) ? input.referenceVideoUrls : [];
+      const referenceAudioInputs = Array.isArray(input.referenceAudioUrls) ? input.referenceAudioUrls : [];
+      const feature = ["text-to-video", "image-to-video", "reference-to-video", "video-edit"].includes(explicitFeature)
+        ? explicitFeature
+        : text(input.sourceVideoUrl) ? "video-edit" : Array.isArray(input.referenceImageUrls) && input.referenceImageUrls.length ? "reference-to-video" : referenceVideoInputs.length || referenceAudioInputs.length ? "reference-to-video" : text(input.firstFrameUrl) ? "image-to-video" : "text-to-video";
       if (!prompt && feature !== "image-to-video") throw new Error("video_prompt_required");
-      const parameters = { resolution: text(input.resolution).toUpperCase() === "720P" ? "720P" : "1080P", ratio: text(input.ratio) || "16:9", duration: Math.max(3, Math.min(15, numberValue(input.duration, 5))) };
-      const body = { model, input: { ...(prompt ? { prompt } : {}), ...(feature === "image-to-video" && text(input.firstFrameUrl) ? { media: [{ type: "first_frame", url: text(input.firstFrameUrl) }] } : {}) }, parameters };
-      const payload = await jsonRequest(options, "/api/v1/services/aigc/video-generation/video-synthesis", { method: "POST", body: JSON.stringify(body), headers: { "X-DashScope-Async": "enable", ...(request.idempotencyKey ? { "X-Request-ID": request.idempotencyKey } : {}) } }, cancellation);
+      const parameters: Record<string, unknown> = {
+        resolution: text(input.resolution).toUpperCase() === "720P" ? "720P" : "1080P",
+        ...(feature !== "video-edit" ? { ratio: text(input.ratio) || "16:9", duration: Math.max(3, Math.min(15, numberValue(input.duration, 5))) } : {}),
+        ...(input.watermark !== undefined ? { watermark: input.watermark === true || text(input.watermark).toLowerCase() === "true" } : {}),
+        ...(text(input.audioSetting) ? { audio_setting: text(input.audioSetting) } : {}),
+        ...(input.seed !== undefined && Number.isFinite(Number(input.seed)) ? { seed: Math.max(0, Math.floor(Number(input.seed))) } : {}),
+      };
+      const media: Array<Record<string, string>> = [];
+      const wan3Model = text(model).toLowerCase().includes("wan3");
+      if (feature === "video-edit" && text(input.sourceVideoUrl)) {
+        const url = await resolveDashScopeMediaReference(text(input.sourceVideoUrl), text(model), options, cancellation, "video");
+        media.push({ type: wan3Model ? (isDashScopeTemporaryUrl(url) ? "file" : "link") : "video", url });
+      }
+      if ((feature === "image-to-video" || feature === "reference-to-video") && text(input.firstFrameUrl)) media.push({ type: "first_frame", url: text(input.firstFrameUrl) });
+      if (feature === "image-to-video" && text(input.lastFrameUrl)) media.push({ type: "last_frame", url: text(input.lastFrameUrl) });
+      const referenceImages = Array.isArray(input.referenceImageUrls) ? input.referenceImageUrls : [];
+      if (feature === "reference-to-video" || feature === "video-edit") {
+        for (const value of referenceImages) if (typeof value === "string" && value.trim()) media.push({ type: "reference_image", url: await resolveDashScopeMediaReference(value.trim(), text(model), options, cancellation, "image") });
+      }
+      if ((feature === "reference-to-video" || feature === "video-edit") && (referenceVideoInputs.length || referenceAudioInputs.length) && !wan3Model) throw new Error("provider_media_role_unsupported:video.reference");
+      if (feature === "reference-to-video" || feature === "video-edit") {
+        for (const value of referenceVideoInputs) if (typeof value === "string" && value.trim()) media.push({ type: "reference_video", url: await resolveDashScopeMediaReference(value.trim(), text(model), options, cancellation, "video") });
+        for (const value of referenceAudioInputs) if (typeof value === "string" && value.trim()) media.push({ type: "reference_audio", url: await resolveDashScopeMediaReference(value.trim(), text(model), options, cancellation, "audio") });
+      }
+      if (feature === "image-to-video" || feature === "reference-to-video") {
+        for (const key of ["first_frame", "last_frame"] as const) {
+          const index = media.findIndex((item) => item.type === key);
+          if (index < 0) continue;
+          const value = media[index]?.url;
+          if (value) media[index] = { type: key, url: await resolveDashScopeMediaReference(value, text(model), options, cancellation, "image") };
+        }
+      }
+      if (wan3Model && media.some((item) => item.type === "first_frame" || item.type === "last_frame") && media.some((item) => item.type === "reference_image" || item.type === "reference_video" || item.type === "reference_audio")) {
+        throw new Error("provider_media_combination_unsupported:wan3_frames_with_references");
+      }
+      const body = { model, input: { ...(prompt ? { prompt } : {}), ...(media.length ? { media } : {}) }, parameters };
+      const usesTemporaryFile = media.some((item) => isDashScopeTemporaryUrl(item.url));
+      const payload = await jsonRequest(options, "/api/v1/services/aigc/video-generation/video-synthesis", { method: "POST", body: JSON.stringify(body), headers: { "X-DashScope-Async": "enable", ...(usesTemporaryFile ? { "X-DashScope-OssResourceResolve": "enable" } : {}), ...(request.idempotencyKey ? { "X-Request-ID": request.idempotencyKey } : {}) } }, cancellation);
       return asTask(options.provider, payload);
     },
     query: async (providerTaskId, cancellation) => asTask(options.provider, await jsonRequest(options, `/api/v1/tasks/${encodeURIComponent(providerTaskId)}`, { method: "GET" }, cancellation), providerTaskId),
@@ -695,7 +925,10 @@ export function createMiniMaxVideoAdapter(options: DirectProviderOptions): Media
     provider: options.provider,
     execute: async (request, cancellation) => {
       const input = request.input as Record<string, unknown>;
-      const body = { model: request.modelId || "MiniMax-Hailuo-2.3", prompt: text(input.prompt) || "Create a polished marketing video with smooth cinematic motion.", duration: Math.max(6, Math.min(10, numberValue(input.duration, 6))), resolution: text(input.resolution) || "768P", prompt_optimizer: true, ...(text(input.firstFrameUrl) ? { first_frame_image: text(input.firstFrameUrl) } : {}) };
+      const workflowLocalAttachments = input.workflowLocalAttachments === true;
+      const firstFrameImage = text(input.firstFrameUrl) ? await resolveProviderImageReference(text(input.firstFrameUrl), options, cancellation, workflowLocalAttachments, 20 * 1024 * 1024) : undefined;
+      const lastFrameImage = text(input.lastFrameUrl) ? await resolveProviderImageReference(text(input.lastFrameUrl), options, cancellation, workflowLocalAttachments, 20 * 1024 * 1024) : undefined;
+      const body = { model: request.modelId || "MiniMax-Hailuo-2.3", prompt: text(input.prompt) || "Create a polished marketing video with smooth cinematic motion.", duration: Math.max(6, Math.min(10, numberValue(input.duration, 6))), resolution: text(input.resolution) || "768P", prompt_optimizer: true, ...(firstFrameImage ? { first_frame_image: firstFrameImage } : {}), ...(lastFrameImage ? { last_frame_image: lastFrameImage } : {}) };
       const payload = await jsonRequest(options, "/video_generation", { method: "POST", body: JSON.stringify(body), headers: request.idempotencyKey ? { "X-Request-ID": request.idempotencyKey } : {} }, cancellation);
       const task = asTask(options.provider, payload);
       const fileId = text((payload.output as Record<string, unknown> | undefined)?.file_id) || text(payload.file_id);
@@ -793,9 +1026,18 @@ export function createRunningHubAdapter(options: DirectProviderOptions & { reado
     const statusWithoutOutputs = task.providerTaskId && outputs.length === 0 && mappedStatus === "succeeded" ? "queued" : mappedStatus;
     return { ...task, status: statusWithoutOutputs, ...(outputs.length ? { outputs } : {}) };
   };
+  const mapInput = (input: Record<string, unknown>) => {
+    if (!options.submitPath.toLowerCase().includes("minimax/hailuo-h3/multimodal-to-video")) return input;
+    const mapped: Record<string, unknown> = { prompt: input.prompt, resolution: input.resolution, duration: input.duration, ratio: input.ratio };
+    if (Array.isArray(input.referenceImageUrls) && input.referenceImageUrls.length) mapped.imageUrls = input.referenceImageUrls;
+    if (Array.isArray(input.referenceVideoUrls) && input.referenceVideoUrls.length) mapped.videoUrls = input.referenceVideoUrls;
+    if (Array.isArray(input.referenceAudioUrls) && input.referenceAudioUrls.length) mapped.audioUrls = input.referenceAudioUrls;
+    if (input.watermark !== undefined) mapped.aigc_watermark = input.watermark;
+    return Object.fromEntries(Object.entries(mapped).filter(([, value]) => value !== undefined && value !== ""));
+  };
   return {
     provider: options.provider,
-    execute: async (request, cancellation) => map(await jsonRequest(options, options.submitPath, { method: "POST", body: JSON.stringify({ ...(request.input as Record<string, unknown>), ...(request.idempotencyKey ? { clientRequestId: request.idempotencyKey } : {}) }) }, cancellation)),
+    execute: async (request, cancellation) => map(await jsonRequest(options, options.submitPath, { method: "POST", body: JSON.stringify({ ...mapInput(request.input as Record<string, unknown>), ...(request.idempotencyKey ? { clientRequestId: request.idempotencyKey } : {}) }) }, cancellation)),
     query: async (providerTaskId, cancellation) => map(await jsonRequest(options, queryPath, { method: "POST", body: JSON.stringify({ taskId: providerTaskId }) }, cancellation), providerTaskId),
   };
 }
@@ -928,6 +1170,9 @@ function mediaContentTypeForExtension(extension: string) {
     case ".jpeg": return "image/jpeg";
     case ".webp": return "image/webp";
     case ".gif": return "image/gif";
+    case ".bmp": return "image/bmp";
+    case ".tif":
+    case ".tiff": return "image/tiff";
     default: return undefined;
   }
 }
@@ -1103,8 +1348,27 @@ export async function downloadMediaOutputs(task: MediaTask, directory: string, o
         name = `${options.filenamePrefix ?? "media"}-${index + 1}-${digest.slice(0, 12)}${extension}`;
         const target = path.join(directory, name);
         const targetExists = await fs.access(target).then(() => true).catch(() => false);
-        if (targetExists) await fs.rm(temporary, { force: true });
-        else await fs.rename(temporary, target);
+        if (targetExists) {
+          // A retry is allowed to refresh an existing same-name output. This
+          // is especially important on Windows, where rename does not replace
+          // an existing target like POSIX rename does.
+          await fs.copyFile(temporary, target);
+          await fs.rm(temporary, { force: true });
+        } else {
+          try {
+            await fs.rename(temporary, target);
+          } catch (error) {
+            // Multiple workflow retries can finish the same content-addressed
+            // output concurrently. The existence check above is intentionally
+            // only an optimization; another attempt may win the rename between
+            // the check and the commit. If the target is now present, the
+            // artifact is already durable and this attempt can be idempotent.
+            const targetCreatedByConcurrentAttempt = await fs.access(target).then(() => true).catch(() => false);
+            if (!targetCreatedByConcurrentAttempt) throw error;
+            await fs.copyFile(temporary, target);
+            await fs.rm(temporary, { force: true });
+          }
+        }
       } catch (error) {
         if (handle) await handle.close().catch(() => undefined);
         await fs.rm(temporary, { force: true }).catch(() => undefined);

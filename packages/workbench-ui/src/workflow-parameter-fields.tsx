@@ -2,7 +2,7 @@
 
 import React from "react";
 import { workflowNodeRegistry, type WorkflowDefinitionNodeV2, type WorkflowFieldDefinition } from "@coworkany/workflow-core";
-import { resolveWorkbenchMediaFeature, type WorkbenchMediaField } from "./media";
+import { resolveWorkbenchImageParameterFields, resolveWorkbenchMediaFeature, type WorkbenchMediaField } from "./media";
 
 type WorkflowParameterValue = string | number | boolean;
 
@@ -61,10 +61,20 @@ export type WorkbenchWorkflowModelOption = {
   label: string;
 };
 
+export type WorkbenchWorkflowProviderOption = {
+  value: string;
+  label: string;
+};
+
 export type WorkbenchWorkflowParameterFieldsProps = {
   locale: "zh" | "en";
   node: WorkflowDefinitionNodeV2;
   modelOptions?: readonly WorkbenchWorkflowModelOption[];
+  /** Hosts may give model IDs a domain-specific meaning, such as a registered remote workflow. */
+  modelLabel?: string;
+  /** A selected remote workflow is represented by the model selector, so do not expose its internal reference separately. */
+  hideWorkflowReference?: boolean;
+  providerOptions?: readonly WorkbenchWorkflowProviderOption[];
   onUpdate: (key: string, value: WorkflowParameterValue) => void;
   className?: string;
 };
@@ -103,10 +113,8 @@ function renderMediaField(field: WorkbenchMediaField, node: WorkflowDefinitionNo
  * asset, agent, and dataset pickers as extensions while standard controls
  * remain identical wherever a workflow definition is edited.
  */
-export function WorkbenchWorkflowParameterFields({ locale, node, modelOptions = [], onUpdate, className = "" }: WorkbenchWorkflowParameterFieldsProps) {
+export function WorkbenchWorkflowParameterFields({ locale, node, modelOptions = [], modelLabel, hideWorkflowReference = false, providerOptions = [], onUpdate, className = "" }: WorkbenchWorkflowParameterFieldsProps) {
   const fields = workflowNodeRegistry.get(node.type)?.configSchema ?? [];
-  const hasModelField = fields.some((field) => field.id === "model" || field.id === "selectedModelId");
-  const visibleFields = fields.filter((field) => isVisible(field, node.config) && !(modelOptions.length > 0 && hasModelField && field.id === "selectedProviderId"));
   const workflowVideoMode = typeof node.config.mode === "string" ? node.config.mode : "text-to-video";
   const workflowVideoFeatureId = workflowVideoMode === "image-to-video" || workflowVideoMode === "reference-to-video" || workflowVideoMode === "video-edit"
     ? workflowVideoMode
@@ -119,16 +127,30 @@ export function WorkbenchWorkflowParameterFields({ locale, node, modelOptions = 
         summary: "",
         submitLabel: "",
         fields: [{ id: "model", label: "模型", type: "select", defaultValue: String(node.config.model ?? ""), options: modelOptions.map((option) => ({ value: option.value, label: option.label })) }],
-      }, String(node.config.model ?? ""))
+      }, String(node.config.model ?? node.config.selectedModelId ?? ""), String(node.config.selectedProviderId ?? ""))
     : null;
-  const dynamicVideoFields = workflowVideoFeature?.fields.filter((field) => field.id !== "model" && !fields.some((candidate) => candidate.id === field.id)) ?? [];
+  const dynamicVideoFields = workflowVideoFeature?.fields.filter((field) => field.id !== "model") ?? [];
+  const dynamicVideoFieldIds = new Set(workflowVideoFeature?.fields.filter((field) => field.id !== "model").map((field) => field.id) ?? []);
+  const visibleFields = fields.filter((field) => isVisible(field, node.config)
+    && !(field.id === "selectedProviderId" && modelOptions.length > 0 && providerOptions.length === 0)
+    && !(hideWorkflowReference && field.id === "workflowRef")
+    // A selected model's parameter schema owns the common generation fields.
+    // Do not render the legacy duration/ratio/prompt defaults beside it.
+    && !(node.type === "video_generate" && dynamicVideoFieldIds.has(field.id))
+    && !(node.type === "video_generate" && dynamicVideoFieldIds.size > 0 && field.id === "sound"));
+  const workflowImageModel = String(node.config.model ?? node.config.selectedModelId ?? modelOptions[0]?.value ?? "");
+  const dynamicImageFields = node.type === "image_generate"
+    ? resolveWorkbenchImageParameterFields(workflowImageModel, String(node.config.selectedProviderId ?? "")).filter((field) => !fields.some((candidate) => candidate.id === field.id))
+    : [];
 
   const renderField = (field: WorkflowFieldDefinition) => {
     const value = valueForField(field, node.config);
-    const label = field.label[locale] ?? field.label.en ?? field.id;
+    const schemaLabel = field.label[locale] ?? field.label.en ?? field.id;
     const textarea = field.rendererId === "textarea" || ["prompt", "script", "text", "query", "systemPrompt", "scenePrompt"].includes(field.id);
     const modelSelect = (field.id === "model" || field.id === "selectedModelId") && modelOptions.length > 0;
-    const controlType = modelSelect || field.rendererId === "select" ? "select" : field.rendererId === "toggle" || field.valueType === "boolean" ? "toggle" : textarea ? "textarea" : "input";
+    const providerSelect = field.id === "selectedProviderId" && providerOptions.length > 0;
+    const label = modelSelect && modelLabel ? modelLabel : schemaLabel;
+    const controlType = modelSelect || providerSelect || field.rendererId === "select" ? "select" : field.rendererId === "toggle" || field.valueType === "boolean" ? "toggle" : textarea ? "textarea" : "input";
     if (field.rendererId === "asset" || field.rendererId === "agent" || field.rendererId === "dataset" || field.rendererId === "custom") {
       return <div key={field.id} className="workflow-editor-readonly"><span>{label}</span><small>{locale === "zh" ? "请通过相应的工作区选择此配置。" : "Select this configuration in its workspace."}</small></div>;
     }
@@ -138,6 +160,10 @@ export function WorkbenchWorkflowParameterFields({ locale, node, modelOptions = 
         {modelSelect ? (
           <select aria-label={label} title={label} value={String(value)} onChange={(event) => onUpdate(field.id, event.target.value)}>
             {modelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        ) : providerSelect ? (
+          <select aria-label={label} title={label} value={String(value)} onChange={(event) => onUpdate(field.id, event.target.value)}>
+            {providerOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         ) : field.rendererId === "select" && field.options?.length ? (
           <select aria-label={label} title={label} value={String(value)} onChange={(event) => onUpdate(field.id, event.target.value)}>
@@ -157,6 +183,7 @@ export function WorkbenchWorkflowParameterFields({ locale, node, modelOptions = 
   return (
     <div className={`workflow-node-parameter-list ${className}`.trim()}>
       {visibleFields.map(renderField)}
+      {dynamicImageFields.map((field) => renderMediaField(field, node, locale, onUpdate))}
       {dynamicVideoFields.map((field) => renderMediaField(field, node, locale, onUpdate))}
       {!visibleFields.length ? <small className="muted">{locale === "zh" ? "此节点没有可编辑参数" : "No editable parameters"}</small> : null}
     </div>

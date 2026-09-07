@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildMediaCapabilityInput } from "../runtime/media-input";
+import { assertVideoMediaCapability, resolveVideoMediaCapabilities } from "../runtime/media-capabilities";
 
 test("maps canvas image fields to the OpenAI-compatible image payload without transport configuration", () => {
   const input = buildMediaCapabilityInput("image_generate", {
@@ -23,6 +24,72 @@ test("does not send PNG compression and normalizes image edit references", () =>
   assert.deepEqual(input.referenceImageUrls, ["https://cdn.example.test/product.png"]);
   assert.equal("referenceImages" in input, false);
   assert.equal("inputImageUrl" in input, false);
+});
+
+test("passes local workflow images to the compatible image adapter as references", () => {
+  const input = buildMediaCapabilityInput("image_generate", {}, {
+    images: [{ fileName: "reference.png", mimeType: "image/png", localPath: "C:\\media\\reference.png" }],
+  });
+  assert.deepEqual(input.localAttachments, ["C:\\media\\reference.png"]);
+  assert.deepEqual(input.referenceImageUrls, ["C:\\media\\reference.png"]);
+});
+
+test("marks raw local reference paths as workflow attachments", () => {
+  const input = buildMediaCapabilityInput("image_generate", {}, {
+    referenceImages: ["C:\\media\\raw-reference.png"],
+  });
+  assert.deepEqual(input.localAttachments, ["C:\\media\\raw-reference.png"]);
+  assert.deepEqual(input.referenceImageUrls, ["C:\\media\\raw-reference.png"]);
+});
+
+test("preserves local video image roles for provider-specific data-url conversion", () => {
+  const input = buildMediaCapabilityInput("video_generate", {}, {
+    images: [{ fileName: "first.png", mimeType: "image/png", localPath: "C:\\media\\first.png" }],
+    "image.last_frame": [{ fileName: "last.png", mimeType: "image/png", localPath: "C:\\media\\last.png" }],
+    referenceImages: [{ fileName: "reference.png", mimeType: "image/png", localPath: "C:\\media\\reference.png" }],
+  });
+  assert.equal(input.firstFrameUrl, "C:\\media\\first.png");
+  assert.equal(input.lastFrameUrl, "C:\\media\\last.png");
+  assert.deepEqual(input.referenceImageUrls, ["C:\\media\\reference.png"]);
+  assert.deepEqual(input.localAttachments, ["C:\\media\\first.png", "C:\\media\\last.png", "C:\\media\\reference.png"]);
+});
+
+test("maps the canonical first-frame role input to the video provider field", () => {
+  const input = buildMediaCapabilityInput("video_generate", { firstFrameUrl: "C:\\media\\stale-configured-first.png" }, {
+    "image.first_frame": [{ fileName: "first.png", mimeType: "image/png", localPath: "C:\\media\\canonical-first.png" }],
+  });
+  assert.equal(input.firstFrameUrl, "C:\\media\\canonical-first.png");
+  assert.deepEqual(input.localAttachments, ["C:\\media\\canonical-first.png"]);
+});
+
+test("prefers a provider URL when an upstream artifact also has a local cache path", () => {
+  const input = buildMediaCapabilityInput("image_generate", {}, {
+    referenceImages: [{ url: "https://files.example.test/reference.png", localPath: "C:\\media\\reference.png" }],
+  });
+  assert.deepEqual(input.referenceImageUrls, ["https://files.example.test/reference.png"]);
+  assert.equal("localAttachments" in input, false);
+});
+
+test("tracks local frame paths configured directly on a video node", () => {
+  const input = buildMediaCapabilityInput("video_generate", {
+    firstFrameUrl: "C:\\media\\configured-first.png",
+    lastFrameUrl: "C:\\media\\configured-last.png",
+  }, {});
+  assert.deepEqual(input.localAttachments, ["C:\\media\\configured-first.png", "C:\\media\\configured-last.png"]);
+  assert.equal(input.firstFrameUrl, "C:\\media\\configured-first.png");
+  assert.equal(input.lastFrameUrl, "C:\\media\\configured-last.png");
+});
+
+test("maps provider-specific image parameters without losing their native names", () => {
+  const input = buildMediaCapabilityInput("image_generate", {
+    imageSize: "1536x1024", imageNegativePrompt: "blurry", imageCandidateCount: "3", imagePromptExtend: "false", imageWatermark: "true", imageSeed: "42",
+  }, { text: "A product image" });
+  assert.equal(input.size, "1536x1024");
+  assert.equal(input.negativePrompt, "blurry");
+  assert.equal(input.n, "3");
+  assert.equal(input.promptExtend, "false");
+  assert.equal(input.watermark, "true");
+  assert.equal(input.seed, "42");
 });
 
 test("routes music and speech nodes to their intended MiniMax operation", () => {
@@ -81,9 +148,56 @@ test("keeps role-specific video media inputs distinct and ordered", () => {
   assert.deepEqual(input.referenceAudioUrls, ["https://example.test/reference.mp3"]);
 });
 
+test("maps every canonical media role and legacy config field to provider inputs", () => {
+  const input = buildMediaCapabilityInput("video_generate", {
+    sourceVideoUrl: "C:\\media\\configured-source.mp4",
+    videoUrls: ["C:\\media\\configured-reference.mp4"],
+    audioUrls: ["C:\\media\\configured-reference.mp3"],
+  }, {
+    "image.first_frame": [{ localPath: "C:\\media\\first.png" }],
+    "image.last_frame": [{ localPath: "C:\\media\\last.png" }],
+    "image.reference": [{ localPath: "C:\\media\\reference.png" }],
+    "video.source": [{ localPath: "C:\\media\\source.mp4" }],
+    "video.reference": [{ localPath: "C:\\media\\reference-1.mp4" }, { localPath: "C:\\media\\reference-2.mp4" }],
+    "audio.reference": [{ localPath: "C:\\media\\reference.wav" }],
+  });
+  assert.equal(input.firstFrameUrl, "C:\\media\\first.png");
+  assert.equal(input.lastFrameUrl, "C:\\media\\last.png");
+  assert.deepEqual(input.referenceImageUrls, ["C:\\media\\reference.png"]);
+  assert.equal(input.sourceVideoUrl, "C:\\media\\source.mp4");
+  assert.deepEqual(input.referenceVideoUrls, ["C:\\media\\reference-1.mp4", "C:\\media\\reference-2.mp4"]);
+  assert.deepEqual(input.referenceAudioUrls, ["C:\\media\\reference.wav"]);
+  assert.equal((input.localMediaReferences as { sourceVideo: unknown[] }).sourceVideo.length, 1);
+  assert.equal((input.localMediaReferences as { referenceVideos: unknown[] }).referenceVideos.length, 2);
+  assert.equal((input.localMediaReferences as { referenceAudios: unknown[] }).referenceAudios.length, 1);
+});
+
+test("keeps the shared media normalizer within the broadest supported reference limits", () => {
+  const input = buildMediaCapabilityInput("video_generate", {
+    mode: "reference-to-video",
+    referenceImageUrls: Array.from({ length: 10 }, (_, index) => `https://example.test/ref-${index}.png`),
+    referenceVideoUrls: Array.from({ length: 5 }, (_, index) => `https://example.test/ref-${index}.mp4`),
+    referenceAudioUrls: Array.from({ length: 5 }, (_, index) => `https://example.test/ref-${index}.mp3`),
+  }, {});
+  assert.equal(input.referenceImageUrls?.length, 10);
+  assert.equal(input.referenceVideoUrls?.length, 5);
+  assert.equal(input.referenceAudioUrls?.length, 5);
+});
+
 test("requires the role-specific inputs selected by video mode", () => {
   assert.throws(() => buildMediaCapabilityInput("video_generate", { mode: "first-last-frame" }, {
     images: ["https://example.test/first.png"],
   }), /workflow_media_role_required:first-last-frame/);
   assert.throws(() => buildMediaCapabilityInput("video_generate", { mode: "video-edit" }, {}), /workflow_media_role_required:video.source/);
+});
+
+test("enforces the selected provider's reference limit before submission", () => {
+  const profile = resolveVideoMediaCapabilities("bailian", "happyhorse-1.1-r2v");
+  assert.throws(() => assertVideoMediaCapability(profile, { referenceImageUrls: ["1", "2", "3", "4"] }), /workflow_media_role_limit:image.reference:3/);
+});
+
+test("treats the DashScope provider alias as the Bailian media contract", () => {
+  const profile = resolveVideoMediaCapabilities("dashscope", "wan3.0-video-prime");
+  assert.equal(profile.supportsReferenceImages, true);
+  assert.equal(profile.supportsFirstFrame, true);
 });

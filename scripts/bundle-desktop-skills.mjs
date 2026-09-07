@@ -28,7 +28,7 @@ function lockedSkill(id) {
 const pptMaster = lockedSkill("ppt-master");
 const dashiPpt = lockedSkill("dashi-ppt");
 await mkdir(dirname(target), { recursive: true });
-await syncDirectory(source, target, new Set(["ppt-master", "dashi-ppt"]));
+await syncDirectory(source, target, new Set(["ppt-master", "dashi-ppt", "ppt-master.manifest.json", "dashi-ppt.manifest.json"]));
 // Agency Agents are OpenCode agents, not SKILL.md packages. Keep their
 // runtime definitions in dist-runtime/agents so the skill scanner never
 // attempts to resolve an agency-* ID as a Skill.

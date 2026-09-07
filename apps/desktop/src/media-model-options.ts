@@ -18,15 +18,10 @@ export function applyConfiguredMediaModels(
   if (!modelField) return feature
 
   const fallback = modelField.options?.map((option) => option.value) || []
-  const candidateModels = models?.length ? [...models] : [...(models || []), ...(selectedModel ? [selectedModel] : [])];
-  const mediaModels = candidateModels.filter((value) => {
-    const identity = value.toLowerCase()
-    if (feature.id === "ai-music") return /music/iu.test(identity)
-    return feature.group === "video"
-      ? /video|hailuo|seedance|wanx|digital[-_ ]?human|happyhorse|h3/iu.test(identity)
-      : /audio|speech|music|voice|tts|minimax/iu.test(identity)
-  })
-  const available = normalizedModels(mediaModels, fallback)
+  // The configured profile already supplies the capability boundary. Model IDs
+  // are account-defined strings, so filtering them by names such as `video`,
+  // `music`, or `speech` can silently hide valid account models.
+  const available = normalizedModels(models?.length ? models : (selectedModel ? [selectedModel] : []), fallback)
   if (!available.length) return feature
 
   const requested = selectedModel?.trim() || modelField.defaultValue?.trim() || ""

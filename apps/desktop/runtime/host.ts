@@ -11,6 +11,7 @@ import { createRpcReader, writeRpcResponse, writeRpcServiceRequest } from "./rpc
 import { createDesktopWorkflowPorts } from "./workflow-ports";
 import { buildMediaCapabilityInput } from "./media-input";
 import { assertVideoMediaCapability, resolveVideoMediaCapabilities } from "./media-capabilities";
+import { discoverProviderModels } from "../src/provider-model-discovery";
 import type { RunningHubWorkflowRegistration } from "../src/runninghub-workflow";
 import { migrateLegacyRunningHubWorkflows } from "../src/runninghub-workflow";
 // Namespace access is compatible with the Node 24 + tsx loader used by the
@@ -18,7 +19,7 @@ import { migrateLegacyRunningHubWorkflows } from "../src/runninghub-workflow";
 import * as chatAttachmentExtractor from "../../../lib/chat-attachments/extract.ts";
 import { promptRequestsArtifact } from "../src/artifact-intent";
 
-type HostCommand = { readonly version: 1; readonly requestId: string; readonly type: "chat.run" | "workflow.run" | "run.cancel" | "run.emergency_stop" | "run.retry" | "media.resume" | "media.voices" | "health" | "session.create" | "session.attach" | "session.prompt" | "permission.respond" | "question.list" | "question.reply" | "question.reject" | "attachment.extract" | "knowledge.index" | "knowledge.search"; readonly runId?: string; readonly sessionId?: string; readonly payload?: Record<string, unknown> };
+type HostCommand = { readonly version: 1; readonly requestId: string; readonly type: "chat.run" | "workflow.run" | "run.cancel" | "run.emergency_stop" | "run.retry" | "media.resume" | "media.voices" | "provider.models" | "health" | "session.create" | "session.attach" | "session.prompt" | "permission.respond" | "question.list" | "question.reply" | "question.reject" | "attachment.extract" | "knowledge.index" | "knowledge.search"; readonly runId?: string; readonly sessionId?: string; readonly payload?: Record<string, unknown> };
 type ProviderConfig = { readonly id?: string; readonly source?: string; readonly model?: string; readonly baseUrl?: string; readonly apiKey?: string; readonly reasoningEffort?: string; readonly timeout?: number | false; readonly chunkTimeout?: number | false; readonly endpoint?: string; readonly queryEndpoint?: string; readonly workflowId?: string; readonly digitalHumanWorkflowId?: string; readonly videoEnhanceWorkflowId?: string; readonly workflows?: readonly RunningHubWorkflowRegistration[] };
 const active = new Map<string, ReturnType<typeof spawn>>();
 const workflowControllers = new Map<string, AbortController>();
@@ -27,6 +28,7 @@ const pendingCancelledRuns = new Map<string, ReturnType<typeof setTimeout>>();
 const sessions = new Map<string, { readonly conversationId: string; readonly workspacePath: string; readonly sessionId: string; readonly provider?: ProviderConfig; readonly agentName?: string; readonly allowArtifacts: boolean; readonly client: OpenCodeServeClient }>();
 type DesktopServiceMethod = "knowledge.index" | "knowledge.search" | "knowledge.write" | "workflow.repository.create" | "workflow.repository.update_status" | "workflow.artifact.register" | "workflow.event.append" | "runtime.artifact.write";
 const serviceRequests = new Map<string, { readonly resolve: (value: Record<string, unknown>) => void; readonly reject: (error: Error) => void }>();
+const mediaCapabilityRuns = new Map<string, Promise<unknown>>();
 let shuttingDown = false;
 let openCodeConfigWriteQueue: Promise<void> = Promise.resolve();
 let skillWorkspaceQueue: Promise<void> = Promise.resolve();
@@ -43,7 +45,9 @@ function isAvailableWorkflowLocalFile(localPath: string) {
 function localPathFromWorkflowValue(value: unknown): string | undefined {
   if (typeof value === "string" && isAbsolute(value)) return value;
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const localPath = (value as Record<string, unknown>).localPath;
+  const record = value as Record<string, unknown>;
+  if (typeof record.url === "string" || typeof record.uri === "string" || typeof record.remoteUrl === "string") return undefined;
+  const localPath = record.localPath;
   return typeof localPath === "string" && isAbsolute(localPath) ? localPath : undefined;
 }
 
@@ -68,11 +72,41 @@ async function resolveRegisteredWorkflowInputs(
       }
       if (!isAvailableWorkflowLocalFile(localPath)) throw new Error(`workflow_local_file_missing:${localPath}`);
       const uploaded = await uploadRunningHubMediaAsset(providerOptions, localPath, cancellation);
-      output.push(uploaded.downloadUrl ?? uploaded.fileName);
+      // ComfyUI LoadImage/LoadVideo/LoadAudio nodes consume RunningHub's
+      // provider-relative fileName. download_url is for standard model APIs.
+      output.push(uploaded.fileName);
     }
     resolved[binding.inputId] = binding.valueType === "file_list" ? output : output[0];
   }
   return resolved;
+}
+
+async function uploadDirectRunningHubMediaReferences(
+  input: Record<string, unknown>,
+  localMediaReferences: Record<string, unknown>,
+  providerOptions: Parameters<typeof uploadRunningHubMediaAsset>[0],
+  cancellation: { readonly signal?: AbortSignal; throwIfCancelled(): void },
+) {
+  const uploaded = new Map<string, string>();
+  for (const key of ["firstFrame", "lastFrame", "referenceImages", "sourceVideo", "referenceVideos", "referenceAudios"]) {
+    const references = Array.isArray(localMediaReferences[key]) ? localMediaReferences[key] : [];
+    for (const reference of references) {
+      const localPath = localPathFromWorkflowValue(reference);
+      if (!localPath || uploaded.has(localPath)) continue;
+      const asset = await uploadRunningHubMediaAsset(providerOptions, localPath, cancellation);
+      if (!asset.downloadUrl) throw new Error("runninghub_media_upload_url_required");
+      uploaded.set(localPath, asset.downloadUrl);
+    }
+  }
+  if (!uploaded.size) return input;
+  const replace = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(replace);
+    if (typeof value === "string") return uploaded.get(value) ?? value;
+    if (!value || typeof value !== "object") return value;
+    const localPath = localPathFromWorkflowValue(value);
+    return localPath ? uploaded.get(localPath) ?? value : value;
+  };
+  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, ["firstFrameUrl", "lastFrameUrl", "referenceImageUrls", "sourceVideoUrl", "referenceVideoUrls", "referenceAudioUrls"].includes(key) ? replace(value) : value]));
 }
 
 function defaultOpenCodeExecutable() {
@@ -881,7 +915,26 @@ async function createFileArtifact(workspacePath: string, runId: string, nodeKey:
   return { artifact: { relativePath: typeof result.relativePath === "string" ? result.relativePath : relativePath, bytes: Number(result.byteLength ?? Buffer.byteLength(content, "utf8")), sha256: typeof result.sha256 === "string" ? result.sha256 : "" }, text: content };
 }
 
-async function runMediaCapability(command: HostCommand, runId: string, nodeKey: string, executorId: string, config: Record<string, unknown>, inputs: Record<string, unknown>, workspacePath: string, signal?: AbortSignal, resumeProviderTaskId?: string) {
+type MediaCapabilityResult = { readonly artifacts?: readonly unknown[]; readonly [key: string]: unknown };
+
+function mediaCapabilityRunKey(runId: string, nodeKey: string, executorId: string, workspacePath: string) {
+  return `${resolve(workspacePath)}:${runId}:${nodeKey}:${executorId}`;
+}
+
+async function runMediaCapability(command: HostCommand, runId: string, nodeKey: string, executorId: string, config: Record<string, unknown>, inputs: Record<string, unknown>, workspacePath: string, signal?: AbortSignal, resumeProviderTaskId?: string): Promise<MediaCapabilityResult> {
+  const key = mediaCapabilityRunKey(runId, nodeKey, executorId, workspacePath);
+  const existing = mediaCapabilityRuns.get(key);
+  if (existing) return await existing as MediaCapabilityResult;
+  const operation = runMediaCapabilityOnce(command, runId, nodeKey, executorId, config, inputs, workspacePath, signal, resumeProviderTaskId);
+  mediaCapabilityRuns.set(key, operation);
+  try {
+    return await operation;
+  } finally {
+    if (mediaCapabilityRuns.get(key) === operation) mediaCapabilityRuns.delete(key);
+  }
+}
+
+async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeKey: string, executorId: string, config: Record<string, unknown>, inputs: Record<string, unknown>, workspacePath: string, signal?: AbortSignal, resumeProviderTaskId?: string) {
   const configuredMedia = command.payload?.media && typeof command.payload.media === "object" ? command.payload.media as Record<string, unknown> : undefined;
   const textProvider = command.payload?.provider && typeof command.payload.provider === "object" ? command.payload.provider as Record<string, unknown> : undefined;
   const providerProfiles = readProviderMap(command.payload?.providers);
@@ -908,6 +961,7 @@ async function runMediaCapability(command: HostCommand, runId: string, nodeKey: 
     ? profile?.apiKey
     : (typeof config.apiKey === "string" ? config.apiKey : profile?.apiKey ?? (typeof command.payload?.apiKey === "string" ? command.payload.apiKey : undefined));
   const providerKind = (profile?.source ?? provider).toLowerCase();
+  const dashScopeProvider = providerKind.includes("bailian") || providerKind.includes("dashscope");
   const providerHostname = new URL(baseUrl).hostname.toLowerCase();
   const pptokenImageProvider = executorId === "image_generate" && (
     providerKind.includes("pptoken")
@@ -916,9 +970,16 @@ async function runMediaCapability(command: HostCommand, runId: string, nodeKey: 
     || providerHostname.endsWith(".pptoken.cc")
   );
   const providerOptions = { provider: provider as MediaProviderId, baseUrl, apiKey: apiKey ?? "", fetchImpl: fetch, workspacePath, requestTimeoutMs: executorId === "image_generate" ? IMAGE_GENERATION_REQUEST_TIMEOUT_MS : undefined, imageTransport: pptokenImageProvider ? "curl" as const : undefined };
+  const requestedModel = typeof config.model === "string" && config.model.trim()
+    ? config.model.trim()
+    : typeof config.selectedModelId === "string" && config.selectedModelId.trim()
+      ? config.selectedModelId.trim()
+      : "";
   // Workflow IDs are account-scoped Provider settings. Never trust a node's
   // portable config here: imported workflows may contain another account's ID.
-  const workflowId = typeof config.workflowRef === "string" ? config.workflowRef.trim() : "";
+  // For image/video nodes RunningHub exposes registered workflows as the model
+  // catalog, so the selected model is the workflow selector. Keep workflowRef
+  // only as a legacy fallback for definitions created before that contract.
   const workflowCapability = executorId === "image_generate"
     ? "image"
     : executorId === "video_generate" && config.featureId === "video-enhance"
@@ -930,6 +991,10 @@ async function runMediaCapability(command: HostCommand, runId: string, nodeKey: 
           : executorId === "audio_generate" || executorId === "music_generate" || executorId === "voice_synthesis" || executorId === "voice_clone"
             ? "audio"
             : undefined;
+  const legacyWorkflowId = typeof config.workflowRef === "string" ? config.workflowRef.trim() : "";
+  const workflowId = providerKind.includes("runninghub") && (executorId === "image_generate" || executorId === "video_generate")
+    ? requestedModel || legacyWorkflowId
+    : legacyWorkflowId;
   const workflowCandidates = workflowCapability ? profile?.workflows?.filter((workflow) => workflow.capability === workflowCapability) ?? [] : [];
   const registeredWorkflow = workflowId
     ? workflowCandidates.find((workflow) => workflow.id === workflowId || workflow.remoteWorkflowId === workflowId)
@@ -945,9 +1010,9 @@ async function runMediaCapability(command: HostCommand, runId: string, nodeKey: 
   const registeredWorkflowAdapter = providerKind.includes("runninghub") && registeredWorkflow && (registeredWorkflow.capability === "image" || registeredWorkflow.capability === "video" || registeredWorkflow.capability === "digital_human" || registeredWorkflow.capability === "video_enhance" || registeredWorkflow.capability === "audio")
     ? createRunningHubWorkflowAdapter({ ...providerOptions, workflowId: registeredWorkflow.remoteWorkflowId, bindings: registeredWorkflow.nodeBindings, queryPath: typeof config.queryEndpoint === "string" ? config.queryEndpoint : profile?.queryEndpoint ?? "/openapi/v2/query" })
     : undefined;
-  const adapter: MediaProviderAdapter = registeredWorkflowAdapter ?? (providerKind.includes("bailian") && executorId === "image_generate"
+  const adapter: MediaProviderAdapter = registeredWorkflowAdapter ?? (dashScopeProvider && executorId === "image_generate"
     ? createBailianImageAdapter(providerOptions)
-    : providerKind.includes("bailian") && (executorId === "video_generate" || executorId === "digital_human")
+    : dashScopeProvider && (executorId === "video_generate" || executorId === "digital_human")
       ? createBailianVideoAdapter(providerOptions)
       : providerKind.includes("minimax") && executorId === "video_generate"
       ? createMiniMaxVideoAdapter(providerOptions)
@@ -959,26 +1024,37 @@ async function runMediaCapability(command: HostCommand, runId: string, nodeKey: 
         ? createOpenAICompatibleImageAdapter(providerOptions)
        : createHttpMediaAdapter({ provider: provider as MediaProviderId, baseUrl, apiKey, submitPath: endpoint, queryPath: typeof config.queryEndpoint === "string" ? (taskId) => `${config.queryEndpoint}/${encodeURIComponent(taskId)}` : profile?.queryEndpoint ? (taskId) => `${profile.queryEndpoint}/${encodeURIComponent(taskId)}` : undefined, requestTimeoutMs: providerOptions.requestTimeoutMs }));
   if (resumeProviderTaskId && !adapter.query) throw new Error(`provider_resume_query_unsupported:${provider}`);
-  const modelId = imageCapability && configuredMediaProfile
-    ? profile?.model ?? "default"
-    : (typeof config.model === "string" ? config.model : profile?.model ?? "default");
+  // The node's selected model is part of the workflow contract. A configured
+  // media profile supplies transport credentials, but must not overwrite the
+  // model selected on an individual image node.
+  const modelId = requestedModel || profile?.model || "default";
   const mediaInput = buildMediaCapabilityInput(executorId, config, inputs);
   if (executorId === "video_generate" && !registeredWorkflow) assertVideoMediaCapability(resolveVideoMediaCapabilities(providerKind, modelId), mediaInput);
   const localAttachments = Array.isArray(mediaInput.localAttachments) ? mediaInput.localAttachments.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [];
+  const localMediaReferences = mediaInput.localMediaReferences && typeof mediaInput.localMediaReferences === "object"
+    ? mediaInput.localMediaReferences as Record<string, unknown>
+    : {};
   if (localAttachments.length) {
     for (const localPath of localAttachments) {
       if (!isAvailableWorkflowLocalFile(localPath)) throw new Error(`workflow_local_file_missing:${localPath}`);
     }
     const runningHubRegisteredWorkflow = Boolean(providerKind.includes("runninghub") && registeredWorkflow);
-    if ((executorId !== "voice_clone" || !providerKind.includes("minimax")) && !runningHubRegisteredWorkflow) throw new Error(`provider_local_file_unsupported:${provider}:${executorId}`);
+    const runningHubDirectVideo = executorId === "video_generate" && providerKind.includes("runninghub") && Boolean(configuredEndpoint);
+    const openAICompatibleImage = executorId === "image_generate" && (providerKind.includes("openai") || providerKind.includes("pptoken") || endpoint === "/images/generations");
+    const hasLocalNonImageVideoMedia = ["sourceVideo", "referenceVideos", "referenceAudios"].some((key) => Array.isArray(localMediaReferences[key]) && (localMediaReferences[key] as unknown[]).length > 0);
+    const inlineImageReferences = openAICompatibleImage
+      || (executorId === "image_generate" && dashScopeProvider)
+      || (executorId === "video_generate" && (dashScopeProvider || providerKind.includes("minimax")));
+    if ((executorId !== "voice_clone" || !providerKind.includes("minimax")) && !runningHubRegisteredWorkflow && !runningHubDirectVideo && !inlineImageReferences) throw new Error(`provider_local_file_unsupported:${provider}:${executorId}`);
+    if (inlineImageReferences) mediaInput.workflowLocalAttachments = true;
     if (executorId === "voice_clone") mediaInput.workflowLocalAttachments = true;
   }
   const providerInput = { ...mediaInput };
   delete providerInput.localMediaReferences;
-  const localMediaReferences = mediaInput.localMediaReferences && typeof mediaInput.localMediaReferences === "object"
-    ? mediaInput.localMediaReferences as Record<string, unknown>
-    : {};
   const cancellation = { signal, throwIfCancelled() { if (signal?.aborted) throw new Error("media_cancelled"); } };
+  if (executorId === "video_generate" && providerKind.includes("runninghub") && !registeredWorkflow && configuredEndpoint) {
+    Object.assign(providerInput, await uploadDirectRunningHubMediaReferences(providerInput, localMediaReferences, providerOptions, cancellation));
+  }
   if (registeredWorkflow) {
     const registeredInputSource: Record<string, unknown> = { ...config, ...providerInput, ...inputs };
     if (registeredWorkflow.capability === "digital_human") {
@@ -1138,6 +1214,16 @@ const hostReader = createRpcReader(process.stdin, (raw) => {
   const command = raw as unknown as HostCommand;
   if (!command.requestId || !command.type) return;
   if (command.type === "health") return respond(command, { status: "ok", capabilities: ["opencode", "opencode-serve", "persistent-sessions", "streaming", "artifacts", "full-access"] });
+  if (command.type === "provider.models") {
+    const provider = readProvider(command.payload?.provider);
+    if (!provider) return fail(command, "invalid_provider", "provider configuration is required");
+    const capability = typeof command.payload?.capability === "string" && ["text", "image", "video", "audio"].includes(command.payload.capability)
+      ? command.payload.capability as "text" | "image" | "video" | "audio"
+      : undefined;
+    return void discoverProviderModels({ ...provider, ...(capability ? { capability } : {}) })
+      .then(result => respond(command, result))
+      .catch(error => fail(command, "provider_model_list_failed", error instanceof Error ? error.message : String(error)));
+  }
   if (command.type === "attachment.extract") return void extractAttachment(command);
   if (command.type === "session.create") {
     const conversationId = typeof command.payload?.conversationId === "string" ? command.payload.conversationId : "";

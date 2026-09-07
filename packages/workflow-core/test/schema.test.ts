@@ -54,12 +54,16 @@ test("shares the online editor parameter contract for desktop workflow nodes", (
   const writer = workflowNodeRegistry.require("writer");
   const image = workflowNodeRegistry.require("image_generate");
   const video = workflowNodeRegistry.require("video_generate");
+  const voiceClone = workflowNodeRegistry.require("voice_clone");
   const ppt = workflowNodeRegistry.require("ppt_generate");
   const fieldIds = (definition: typeof writer) => new Set(definition.configSchema.map((field) => field.id));
 
   for (const id of ["selectedProviderId", "selectedModelId", "platform", "mode", "language"]) assert.equal(fieldIds(writer).has(id), true, id);
-  for (const id of ["imageSize", "imageQuality", "imageBackground", "imageOutputFormat", "imageModeration"]) assert.equal(fieldIds(image).has(id), true, id);
-  for (const id of ["model", "mode", "duration", "ratio", "sound"]) assert.equal(fieldIds(video).has(id), true, id);
+  for (const id of ["selectedProviderId", "selectedModelId"]) assert.equal(fieldIds(image).has(id), true, id);
+  assert.equal(fieldIds(image).has("workflowRef"), false);
+  for (const id of ["selectedProviderId", "model", "mode", "duration", "ratio", "sound"]) assert.equal(fieldIds(video).has(id), true, id);
+  assert.equal(fieldIds(video).has("workflowRef"), false);
+  assert.equal(fieldIds(voiceClone).has("model"), true);
   for (const id of ["previewRuntime", "model", "pageCount", "templateId", "language", "scenario"]) assert.equal(fieldIds(ppt).has(id), true, id);
 });
 

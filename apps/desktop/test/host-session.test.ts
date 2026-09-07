@@ -159,6 +159,60 @@ test("workflow-host keeps concurrent OpenCode sessions alive across provider con
   }
 });
 
+test("workflow-host coalesces duplicate media recovery requests for one node", async () => {
+  const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-media-recovery-dedupe-"));
+  let queryCount = 0;
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (request.method === "GET" && url.pathname === "/tasks/task-1") {
+      queryCount += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "task-1", status: "SUCCEEDED", output: [{ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/output.mp4` }] }));
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/output.mp4") {
+      response.writeHead(200, { "content-type": "video/mp4" });
+      response.end(Buffer.from("duplicate-recovery-video", "utf8"));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const child = startHost(desktopRoot);
+  const runId = `media-recovery-dedupe-${randomUUID()}`;
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const send = (requestId: string) => child.child.stdin.write(encodeRpcMessage({ version: 1, requestId, runId, type: "media.resume", payload: {
+    runId,
+    nodeKey: "capability",
+    executorId: "video_generate",
+    providerTaskId: "task-1",
+    workspacePath: workspace,
+    config: { provider: "fixture", source: "openai-compatible", baseUrl, apiKey: "fixture", model: "fixture-video", endpoint: "/videos/generations", queryEndpoint: "/tasks" },
+  } }));
+  try {
+    send(randomUUID());
+    send(randomUUID());
+    await child.waitFor((frame) => {
+      const event = (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined;
+      return event?.event === "done" && event.runId === runId;
+    });
+    await new Promise((resolveEvents) => setTimeout(resolveEvents, 100));
+    const terminalEvents = child.frames.map((frame) => (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined).filter((event) => event?.runId === runId && (event.event === "done" || event.event === "runtime_error"));
+    assert.equal(terminalEvents.filter((event) => event?.event === "runtime_error").length, 0);
+    assert.equal(terminalEvents.filter((event) => event?.event === "done").length, 2);
+    assert.equal(queryCount, 1);
+    const files = await readdir(join(workspace, "artifacts", runId, "capability"));
+    assert.equal(files.length, 1);
+    assert.match(files[0] ?? "", /^video_generate-1-[a-f0-9]{12}\.mp4$/u);
+  } finally {
+    if (child.child.exitCode === null) child.child.kill();
+    child.child.stdin.destroy();
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    await rm(workspace, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
 test("workflow-host cancels a persistent OpenCode session without waiting for the prompt response", async () => {
   const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-cancel-opencode-"));

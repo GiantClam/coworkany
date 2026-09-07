@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -70,6 +71,7 @@ test("OpenAI-compatible image adapter sends a local image generation request", a
 test("OpenAI-compatible image adapter normalizes common image output aliases", async () => {
   const payloads = [
     { data: [{ image_url: "https://files.invalid/image-url.png" }] },
+    { data: "https://files.invalid/image-data-string.png" },
     { output: { imageUrl: "https://files.invalid/image-url-camel.png" } },
     { images: [{ base64: "AQID" }] },
   ];
@@ -118,6 +120,27 @@ test("OpenAI-compatible image adapter sends reference images through the edits e
   assert.equal(form.get("prompt"), "Re-style the reference image");
   assert.equal(form.get("output_format"), "png");
   assert.equal((form.get("image") as File).type, "image/png");
+});
+
+test("OpenAI-compatible image adapter reads a validated workflow-local reference", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-image-reference-"));
+  try {
+    const sourcePath = join(workspace, "reference.png");
+    await writeFile(sourcePath, "PNG-fixture");
+    let request: RequestInit | undefined;
+    const adapter = createOpenAICompatibleImageAdapter({ provider: "fixture" as MediaProviderId, baseUrl: "https://api.example.test/v1", apiKey: "secret", workspacePath: workspace, fetchImpl: async (input, init) => {
+      request = init;
+      if (String(input).endsWith("/images/edits")) return new Response(JSON.stringify({ data: [{ b64_json: "AQID" }] }), { status: 200 });
+      throw new Error(`unexpected_request:${String(input)}`);
+    } });
+    const task = await adapter.execute({ provider: "fixture" as MediaProviderId, modelId: "gpt-image-2", input: { prompt: "Edit the local image", referenceImageUrls: [sourcePath], workflowLocalAttachments: true } }, cancellation());
+    assert.equal(task.status, "succeeded");
+    const form = request?.body as FormData;
+    assert.equal(form.get("model"), "gpt-image-2");
+    assert.equal((form.get("image") as File).name, "reference.png");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 test("image generation requests use a five minute provider timeout", async () => {
@@ -181,6 +204,51 @@ test("PPTOKEN image adapter can use the long-lived curl transport", async () => 
   assert.ok(args.includes("Idempotency-Key: curl:image:1"));
 });
 
+test("PPTOKEN image edits use curl multipart transport for reference images", async () => {
+  let args: readonly string[] = [];
+  const adapter = createOpenAICompatibleImageAdapter({
+    provider: "pptoken" as MediaProviderId,
+    baseUrl: "https://api.example.test/v1",
+    apiKey: "secret",
+    imageTransport: "curl",
+    fetchImpl: async () => { throw new Error("reference edit must not use fetch"); },
+    curlRunner: async (receivedArgs) => {
+      args = receivedArgs;
+      return { stdout: `${JSON.stringify({ data: [{ url: "https://files.invalid/edited.png" }] })}\n__HTTP_STATUS__:200`, stderr: "", code: 0 };
+    },
+  });
+  const task = await adapter.execute({
+    provider: "pptoken" as MediaProviderId,
+    modelId: "gpt-image-2",
+    input: { prompt: "edit with a reference", referenceImageUrls: ["data:image/png;base64,AQID"] },
+    idempotencyKey: "curl:image-edit:1",
+  }, cancellation());
+  assert.equal(task.status, "succeeded");
+  assert.equal(task.outputs[0]?.url, "https://files.invalid/edited.png");
+  assert.equal(args[args.indexOf("-X") + 1], "POST");
+  assert.ok(args.includes("https://api.example.test/v1/images/edits"));
+  assert.ok(args.includes("Idempotency-Key: curl:image-edit:1"));
+  const imageForm = args.find((value) => value.startsWith("image=@"));
+  assert.ok(imageForm);
+  assert.equal(existsSync(imageForm!.slice("image=@".length).split(";", 1)[0]), false);
+});
+
+test("OpenAI-compatible image adapter finds media nested in provider result envelopes", async () => {
+  const adapter = createOpenAICompatibleImageAdapter({
+    provider: "image-main" as MediaProviderId,
+    baseUrl: "https://api.example.test/v1",
+    apiKey: "secret",
+    fetchImpl: async () => new Response(JSON.stringify({
+      data: { result: { images: [{ image: { url: "https://files.example.test/generated.png" } }] } },
+    }), { status: 200 }),
+  });
+
+  const task = await adapter.execute({ provider: "image-main" as MediaProviderId, modelId: "gpt-image-2", input: { prompt: "nested output" } }, cancellation());
+
+  assert.equal(task.status, "succeeded");
+  assert.deepEqual(task.outputs, [{ url: "https://files.example.test/generated.png" }]);
+});
+
 test("image adapter preserves the configured model id when the provider returns 502", async () => {
   const requestBodies: Record<string, unknown>[] = [];
   const adapter = createOpenAICompatibleImageAdapter({
@@ -214,6 +282,53 @@ test("Bailian image adapter submits and polls DashScope task results", async () 
   assert.match(calls[0], /text2image\/image-synthesis$/);
 });
 
+test("Bailian Qwen image adapter sends multimodal and provider-specific parameters", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const adapter = createBailianImageAdapter({ provider: "bailian" as MediaProviderId, baseUrl: "https://dashscope.aliyuncs.com", apiKey: "secret", fetchImpl: async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+    return new Response(JSON.stringify({ output: { choices: [{ message: { content: [{ image: "https://files.invalid/qwen.png" }] } }] } }), { status: 200 });
+  } });
+  const task = await adapter.execute({ provider: "bailian" as MediaProviderId, modelId: "qwen-image-3.0-pro", input: {
+    prompt: "a blue kite", referenceImageUrls: ["https://files.invalid/reference.png"], size: "1536x1024", n: 2, negativePrompt: "blurry", promptExtend: "false", watermark: "true", seed: 42,
+  } }, cancellation());
+  const parameters = requestBody?.parameters as Record<string, unknown>;
+  const messages = (requestBody?.input as Record<string, unknown>)?.messages as Array<Record<string, unknown>>;
+  assert.equal(task.status, "succeeded");
+  assert.equal(requestBody?.model, "qwen-image-3.0-pro");
+  assert.equal(parameters.size, "1536*1024");
+  assert.equal(parameters.n, 2);
+  assert.equal(parameters.negative_prompt, "blurry");
+  assert.equal(parameters.prompt_extend, false);
+  assert.equal(parameters.watermark, true);
+  assert.equal(parameters.seed, 42);
+  assert.deepEqual(messages[0]?.content, [{ image: "https://files.invalid/reference.png" }, { text: "a blue kite" }]);
+});
+
+test("Bailian Qwen image edit rejects a request without a reference image", async () => {
+  const adapter = createBailianImageAdapter({ provider: "bailian" as MediaProviderId, baseUrl: "https://dashscope.aliyuncs.com", apiKey: "secret", fetchImpl: async () => new Response("{}", { status: 200 }) });
+  await assert.rejects(() => adapter.execute({ provider: "bailian" as MediaProviderId, modelId: "qwen-image-3.0-pro-edit", input: { prompt: "edit" } }, cancellation()), /image_reference_required/);
+});
+
+test("Bailian image adapter converts a local reference to a Base64 Data URL", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-bailian-image-reference-"));
+  try {
+    const sourcePath = join(workspace, "reference.png");
+    await writeFile(sourcePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    let requestBody: Record<string, unknown> | undefined;
+    const adapter = createBailianImageAdapter({ provider: "bailian" as MediaProviderId, baseUrl: "https://dashscope.aliyuncs.com", apiKey: "secret", workspacePath: workspace, fetchImpl: async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ output: { choices: [{ message: { content: [{ image: "https://files.invalid/output.png" }] } }] } }), { status: 200 });
+    } });
+    await adapter.execute({ provider: "bailian" as MediaProviderId, modelId: "qwen-image-3.0-pro", input: { prompt: "edit", referenceImageUrls: [sourcePath], workflowLocalAttachments: true } }, cancellation());
+    const messages = (requestBody?.input as Record<string, unknown>)?.messages as Array<Record<string, unknown>>;
+    const content = messages[0]?.content as Array<Record<string, unknown>>;
+    assert.match(String(content[0]?.image), /^data:image\/png;base64,/u);
+    assert.equal(String(content[0]?.image).includes(sourcePath), false);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("Bailian video adapter sends direct DashScope async request and polls task", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const adapter = createBailianVideoAdapter({ provider: "bailian" as MediaProviderId, baseUrl: "https://dashscope.aliyuncs.com", apiKey: "secret", fetchImpl: async (input, init) => {
@@ -229,11 +344,116 @@ test("Bailian video adapter sends direct DashScope async request and polls task"
   assert.equal((JSON.parse(String(calls[0].init?.body)) as { input: { prompt: string } }).input.prompt, "中文广告");
 });
 
+test("Bailian video adapter preserves reference/edit media parameters", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const adapter = createBailianVideoAdapter({ provider: "bailian" as MediaProviderId, baseUrl: "https://dashscope.aliyuncs.com", apiKey: "secret", fetchImpl: async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+    return new Response(JSON.stringify({ output: { task_id: "task-edit", task_status: "PENDING" } }), { status: 200 });
+  } });
+  await adapter.execute({ provider: "bailian" as MediaProviderId, modelId: "happyhorse-1.0-video-edit", input: {
+    featureId: "video-edit", prompt: "replace the background", sourceVideoUrl: "https://files.invalid/source.mp4", referenceImageUrls: ["https://files.invalid/ref.png"], resolution: "720P", audioSetting: "origin", watermark: "false", seed: 7,
+  } }, cancellation());
+  const parameters = requestBody?.parameters as Record<string, unknown>;
+  const input = requestBody?.input as Record<string, unknown>;
+  assert.equal(parameters.resolution, "720P");
+  assert.equal(parameters.audio_setting, "origin");
+  assert.equal(parameters.watermark, false);
+  assert.equal(parameters.seed, 7);
+  assert.deepEqual(input.media, [{ type: "video", url: "https://files.invalid/source.mp4" }, { type: "reference_image", url: "https://files.invalid/ref.png" }]);
+});
+
+test("Bailian video adapter converts local first and reference frames to Data URLs", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-bailian-video-reference-"));
+  try {
+    const firstPath = join(workspace, "first.png");
+    const referencePath = join(workspace, "reference.png");
+    await writeFile(firstPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await writeFile(referencePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    let requestBody: Record<string, unknown> | undefined;
+    const adapter = createBailianVideoAdapter({ provider: "bailian" as MediaProviderId, baseUrl: "https://dashscope.aliyuncs.com", apiKey: "secret", workspacePath: workspace, fetchImpl: async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ output: { task_id: "task-local", task_status: "PENDING" } }), { status: 200 });
+    } });
+    await adapter.execute({ provider: "bailian" as MediaProviderId, modelId: "wan3.0-video-prime", input: { prompt: "animate", featureId: "reference-to-video", firstFrameUrl: firstPath, referenceImageUrls: [referencePath], workflowLocalAttachments: true } }, cancellation());
+    const input = requestBody?.input as Record<string, unknown>;
+    const media = input.media as Array<Record<string, string>>;
+    assert.equal(media[0]?.type, "first_frame");
+    assert.match(media[0]?.url ?? "", /^data:image\/png;base64,/u);
+    assert.equal(media[1]?.type, "reference_image");
+    assert.match(media[1]?.url ?? "", /^data:image\/png;base64,/u);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Bailian Wan 3 adapter uploads local video and audio references before synthesis", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-bailian-video-media-"));
+  try {
+    const sourcePath = join(workspace, "source.mp4");
+    const referencePath = join(workspace, "reference.mp4");
+    const audioPath = join(workspace, "reference.mp3");
+    await writeFile(sourcePath, Buffer.from("source-video"));
+    await writeFile(referencePath, Buffer.from("reference-video"));
+    await writeFile(audioPath, Buffer.from("reference-audio"));
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const adapter = createBailianVideoAdapter({ provider: "bailian" as MediaProviderId, baseUrl: "https://dashscope.aliyuncs.com", apiKey: "secret", workspacePath: workspace, fetchImpl: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.includes("/uploads")) return new Response(JSON.stringify({ data: { policy: "policy", signature: "signature", upload_dir: "dashscope-instant/test", upload_host: "https://upload.invalid", oss_access_key_id: "access", x_oss_object_acl: "private", x_oss_forbid_overwrite: "true" } }), { status: 200 });
+      if (url === "https://upload.invalid") return new Response("", { status: 200 });
+      return new Response(JSON.stringify({ output: { task_id: "task-media", task_status: "PENDING" } }), { status: 200 });
+    } });
+    await adapter.execute({ provider: "bailian" as MediaProviderId, modelId: "wan3.0-video-prime", input: {
+      featureId: "reference-to-video", prompt: "animate", sourceVideoUrl: sourcePath, referenceVideoUrls: [referencePath], referenceAudioUrls: [audioPath], workflowLocalAttachments: true,
+    } }, cancellation());
+    const synthesis = requests.find((request) => request.url.includes("video-synthesis"));
+    assert.ok(synthesis);
+    const body = JSON.parse(String(synthesis.init?.body)) as { input: { media: Array<{ type: string; url: string }> } };
+    assert.deepEqual(body.input.media.map((item) => item.type), ["reference_video", "reference_audio"]);
+    assert.equal(body.input.media.every((item) => item.url.startsWith("oss://")), true);
+    assert.equal(new Headers(synthesis.init?.headers).get("X-DashScope-OssResourceResolve"), "enable");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Bailian Wan 3 rejects frame media combined with reference media", async () => {
+  const adapter = createBailianVideoAdapter({ provider: "bailian" as MediaProviderId, baseUrl: "https://dashscope.aliyuncs.com", apiKey: "secret", fetchImpl: async () => {
+    throw new Error("synthesis should not be called");
+  } });
+  await assert.rejects(
+    adapter.execute({ provider: "bailian" as MediaProviderId, modelId: "wan3.0-video-prime", input: {
+      featureId: "reference-to-video", prompt: "animate", firstFrameUrl: "https://files.invalid/frame.png", referenceImageUrls: ["https://files.invalid/ref.png"],
+    } }, cancellation()),
+    /provider_media_combination_unsupported:wan3_frames_with_references/,
+  );
+});
+
 test("MiniMax video adapter maps file ids to direct local-download URLs", async () => {
   const adapter = createMiniMaxVideoAdapter({ provider: "minimax" as MediaProviderId, baseUrl: "https://api.minimax.io", apiKey: "secret", fetchImpl: async () => new Response(JSON.stringify({ task_id: "task-2", status: "Success", file_id: "file-2" }), { status: 200 }) });
   const task = await adapter.execute({ provider: "minimax" as MediaProviderId, modelId: "MiniMax-Hailuo-2.3", input: { prompt: "demo" } }, cancellation());
   assert.equal(task.status, "succeeded");
   assert.match(String(task.outputs[0]?.url), /files\/retrieve\?file_id=file-2/);
+});
+
+test("MiniMax video adapter converts local first and last frames to Data URLs", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-minimax-video-reference-"));
+  try {
+    const firstPath = join(workspace, "first.png");
+    const lastPath = join(workspace, "last.png");
+    await writeFile(firstPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await writeFile(lastPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    let requestBody: Record<string, unknown> | undefined;
+    const adapter = createMiniMaxVideoAdapter({ provider: "minimax" as MediaProviderId, baseUrl: "https://api.minimax.io/v1", apiKey: "secret", workspacePath: workspace, fetchImpl: async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ task_id: "task-local", status: "Success", file_id: "file-local" }), { status: 200 });
+    } });
+    await adapter.execute({ provider: "minimax" as MediaProviderId, modelId: "MiniMax-Hailuo-2.3", input: { prompt: "animate", firstFrameUrl: firstPath, lastFrameUrl: lastPath, workflowLocalAttachments: true } }, cancellation());
+    assert.match(String(requestBody?.first_frame_image), /^data:image\/png;base64,/u);
+    assert.match(String(requestBody?.last_frame_image), /^data:image\/png;base64,/u);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 test("MiniMax music adapter keeps synchronous base64 output local", async () => {
@@ -394,6 +614,23 @@ test("RunningHub accepts taskStatus and fileUrl result aliases from H3 workflows
   assert.equal(submitted.status, "running");
   assert.equal(finished.status, "succeeded");
   assert.equal(finished.outputs[0]?.url, "https://files.invalid/h3.mp4");
+});
+
+test("RunningHub H3 adapter maps canonical media roles to the documented multimodal fields", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const adapter = createRunningHubAdapter({ provider: "runninghub" as MediaProviderId, baseUrl: "https://www.runninghub.cn", apiKey: "secret", submitPath: "/openapi/v2/minimax/hailuo-h3/multimodal-to-video", fetchImpl: async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(JSON.stringify({ data: { taskId: "h3-media", status: "RUNNING" } }), { status: 200 });
+  } });
+  await adapter.execute({ provider: "runninghub" as MediaProviderId, modelId: "MiniMax-Hailuo-H3", input: {
+    prompt: "use references", referenceImageUrls: ["https://files.invalid/ref.png"], referenceVideoUrls: ["https://files.invalid/ref.mp4"], referenceAudioUrls: ["https://files.invalid/ref.mp3"],
+  } }, cancellation());
+  assert.deepEqual(requestBody, {
+    prompt: "use references",
+    imageUrls: ["https://files.invalid/ref.png"],
+    videoUrls: ["https://files.invalid/ref.mp4"],
+    audioUrls: ["https://files.invalid/ref.mp3"],
+  });
 });
 
 test("RunningHub digital-human adapter submits the configured workflow and polls its task", async () => {

@@ -16,3 +16,29 @@ test("does not enable media roles for providers without an adapter contract", ()
   assert.equal(supportsVideoMediaRole(profile, "image.first_frame"), false);
   assert.throws(() => assertVideoMediaCapability(profile, { firstFrameUrl: "https://example.test/first.png" }), /provider_media_role_unsupported:image.first_frame/);
 });
+
+test("enables Wan 3 media roles that the DashScope adapter implements", () => {
+  const profile = resolveVideoMediaCapabilities("bailian", "wan3.0-video-prime");
+  for (const role of ["image.first_frame", "image.last_frame", "image.reference", "video.source", "video.reference", "audio.reference"]) {
+    assert.equal(supportsVideoMediaRole(profile, role), true, role);
+  }
+  assert.doesNotThrow(() => assertVideoMediaCapability(profile, {
+    firstFrameUrl: "https://example.test/first.png",
+    lastFrameUrl: "https://example.test/last.png",
+    referenceImageUrls: ["https://example.test/reference.png"],
+    sourceVideoUrl: "https://example.test/source.mp4",
+    referenceVideoUrls: ["https://example.test/reference.mp4"],
+    referenceAudioUrls: ["https://example.test/reference.mp3"],
+  }));
+});
+
+test("enables only the documented multimodal roles for the RunningHub H3 endpoint", () => {
+  const profile = resolveVideoMediaCapabilities("runninghub", "MiniMax-Hailuo-H3");
+  for (const role of ["image.reference", "video.reference", "audio.reference"]) assert.equal(supportsVideoMediaRole(profile, role), true, role);
+  assert.equal(supportsVideoMediaRole(profile, "image.first_frame"), false);
+  assert.doesNotThrow(() => assertVideoMediaCapability(profile, {
+    referenceImageUrls: ["https://example.test/reference.png"],
+    referenceVideoUrls: ["https://example.test/reference.mp4"],
+    referenceAudioUrls: ["https://example.test/reference.mp3"],
+  }));
+});

@@ -121,8 +121,24 @@ fn read_bounded_line(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
+fn development_runtime_file(name: &str) -> Option<PathBuf> {
+    let manifest_runtime = development_runtime_directory_from_manifest().map(|path| path.join(name));
+    let current_runtime = std::env::current_dir().ok().map(|path| path.join("apps").join("desktop").join("dist-runtime").join(name));
+    [manifest_runtime, current_runtime].into_iter().flatten().find(|path| path.is_file())
+}
+
+fn development_runtime_directory_from_manifest() -> Option<PathBuf> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("dist-runtime");
+    path.is_dir().then_some(path)
+}
+
 fn host_script(app: &AppHandle) -> Result<PathBuf, String> {
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
+    if cfg!(debug_assertions) {
+        if let Some(path) = development_runtime_file("host.mjs") {
+            return std::fs::canonicalize(path).map(crate::bootstrap::powershell_compatible_path).map_err(|error| error.to_string());
+        }
+    }
     let packaged = resource.join("dist-runtime").join("host.mjs");
     if packaged.is_file() { return std::fs::canonicalize(packaged).map(crate::bootstrap::powershell_compatible_path).map_err(|error| error.to_string()); }
     let up_packaged = resource.join("_up_").join("dist-runtime").join("host.mjs");
@@ -130,18 +146,23 @@ fn host_script(app: &AppHandle) -> Result<PathBuf, String> {
     let flattened = resource.join("host.mjs");
     if flattened.is_file() { return std::fs::canonicalize(flattened).map(crate::bootstrap::powershell_compatible_path).map_err(|error| error.to_string()); }
     if let Some(path) = configured_runtime_path(app, "hostPath").filter(|path| path.is_file()) { return Ok(path); }
-    let development = std::env::current_dir().map_err(|error| error.to_string())?.join("apps").join("desktop").join("dist-runtime").join("host.mjs");
-    if development.is_file() { return std::fs::canonicalize(development).map(crate::bootstrap::powershell_compatible_path).map_err(|error| error.to_string()); }
+    let development = development_runtime_file("host.mjs");
+    if let Some(development) = development { return std::fs::canonicalize(development).map(crate::bootstrap::powershell_compatible_path).map_err(|error| error.to_string()); }
     Err(format!("workflow_host_bundle_missing: {}", packaged.display()))
 }
 
 fn knowledge_script(app: &AppHandle) -> Result<PathBuf, String> {
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
+    if cfg!(debug_assertions) {
+        if let Some(path) = development_runtime_file("knowledge.mjs") {
+            return std::fs::canonicalize(path).map(crate::bootstrap::powershell_compatible_path).map_err(|error| error.to_string());
+        }
+    }
     let mut candidates = [
         resource.join("dist-runtime").join("knowledge.mjs"),
         resource.join("_up_").join("dist-runtime").join("knowledge.mjs"),
         resource.join("knowledge.mjs"),
-        std::env::current_dir().map_err(|error| error.to_string())?.join("apps").join("desktop").join("dist-runtime").join("knowledge.mjs"),
+        development_runtime_file("knowledge.mjs").unwrap_or_default(),
     ].into_iter().chain(configured_runtime_path(app, "knowledgePath"));
     candidates.find(|path| path.is_file()).and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path)).ok_or_else(|| "knowledge_service_bundle_missing".to_string())
 }
@@ -239,12 +260,22 @@ pub(crate) fn skills_directory(app: &AppHandle) -> Result<Option<PathBuf>, Strin
     let data = crate::data_dir(app)?;
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
     let configured = configured_runtime_path(app, "skillsPath");
-    Ok(select_skills_directory(crate::ordered_runtime_candidates(
-        [data.join("skills")],
-        [resource.join("dist-runtime/skills"), resource.join("_up_/dist-runtime/skills"), resource.join("skills")],
-        configured,
-        std::iter::empty(),
-    )))
+    let mut candidates = Vec::new();
+    if cfg!(debug_assertions) {
+        if let Some(path) = development_runtime_directory_from_manifest().or_else(|| std::env::current_dir().ok().map(|value| value.join("apps").join("desktop").join("dist-runtime")).filter(|value| value.is_dir())) {
+            candidates.push(path.join("skills"));
+        }
+    }
+    candidates.push(data.join("skills"));
+    candidates.extend([
+        resource.join("dist-runtime/skills"),
+        resource.join("_up_/dist-runtime/skills"),
+        resource.join("skills"),
+    ]);
+    if let Some(path) = configured {
+        candidates.push(path);
+    }
+    Ok(select_skills_directory(candidates))
 }
 
 fn select_skills_directory(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
@@ -567,6 +598,15 @@ pub fn stop_state(state: &HostState) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_runtime_resolves_the_current_source_bundle_and_skill_directory() {
+        let host = development_runtime_file("host.mjs").expect("source host bundle missing");
+        let expected = std::fs::canonicalize(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("dist-runtime").join("host.mjs")).unwrap();
+        assert_eq!(std::fs::canonicalize(host).unwrap(), expected);
+        let skills = development_runtime_directory_from_manifest().expect("source runtime directory missing").join("skills");
+        assert_eq!(select_skills_directory([skills.clone()]), Some(skills));
+    }
 
     #[test]
     fn packaged_skills_replace_cached_old_catalog_without_touching_it() {

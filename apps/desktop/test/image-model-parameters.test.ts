@@ -15,6 +15,8 @@ test("each image model exposes only its online parameter fields", () => {
   assert.deepEqual(getDesktopImageParameterSchema("nanobanana2", "en").map((field) => field.id), ["size", "resolution", "referenceImages"]);
   assert.deepEqual(getDesktopImageParameterSchema("seedream-v5-text-to-image", "en").map((field) => field.id), ["size"]);
   assert.deepEqual(getDesktopImageParameterSchema("seedream-v5-image-to-image", "en").map((field) => field.id), ["size", "inputImageUrl"]);
+  assert.deepEqual(getDesktopImageParameterSchema("qwen-image-3.0-pro-edit", "en").map((field) => field.id), ["size", "negativePrompt", "candidateCount", "referenceImages"]);
+  assert.deepEqual(getDesktopImageParameterSchema("qwen-image-2.7", "en").map((field) => field.id), ["size", "referenceImages"]);
 });
 
 test("model switching drops stale fields and applies model defaults", () => {

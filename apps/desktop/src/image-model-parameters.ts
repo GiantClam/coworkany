@@ -1,5 +1,6 @@
 export type DesktopImageModelKind =
   | "gpt-image-2"
+  | "bailian-qwen"
   | "nanobanana-2"
   | "seedream-text-to-image"
   | "seedream-image-to-image"
@@ -28,6 +29,7 @@ function normalizedModel(model: string) {
 export function resolveDesktopImageModelKind(model: string): DesktopImageModelKind {
   const value = normalizedModel(model);
   if (value.includes("gpt-image-2")) return "gpt-image-2";
+  if (value.includes("qwen-image")) return "bailian-qwen";
   if (value.includes("nanobanana-2") || value.includes("nanobanana2") || value.includes("gemini-2.5-flash-image")) return "nanobanana-2";
   if (value.includes("seedream") && /image-to-image|img2img|image2image/iu.test(value)) return "seedream-image-to-image";
   if (value.includes("seedream")) return "seedream-text-to-image";
@@ -51,6 +53,19 @@ export function getDesktopImageParameterSchema(model: string, locale: "zh" | "en
       select("moderation", labels ? "内容审核" : "Moderation", ["auto", "low"], "auto"),
       select("responseFormat", labels ? "响应格式" : "Response format", ["url", "b64_json"], "url"),
       { id: "candidateCount", type: "number", label: labels ? "生成数量" : "Candidates", defaultValue: "1", min: 1, max: 9 },
+      { id: "referenceImages", type: "text", label: labels ? "参考图片" : "Reference images", placeholder: labels ? "本地产物路径或 URL，多个用逗号分隔" : "Local artifact paths or URLs, comma-separated" },
+    ];
+  }
+  if (kind === "bailian-qwen") {
+    const normalized = normalizedModel(model);
+    const editModel = /(?:-edit|image-to-image|img2img)/iu.test(normalized);
+    const qwen27Model = normalized.includes("2.7");
+    const supportsAdvanced = !editModel && !qwen27Model;
+    return [
+      select("size", labels ? "尺寸" : "Size", qwen27Model || editModel ? ["auto", "1024*1024", "2048*2048"] : ["auto", "1024*1024", "1536*1024", "1024*1536", "2048*2048"], editModel ? "auto" : "1024*1024"),
+      ...(supportsAdvanced || editModel ? [{ id: "negativePrompt", type: "text" as const, label: labels ? "反向提示词" : "Negative prompt" }] : []),
+      ...(supportsAdvanced || editModel ? [{ id: "candidateCount", type: "number" as const, label: labels ? "生成数量" : "Candidates", defaultValue: "1", min: 1, max: 6 }] : []),
+      ...(supportsAdvanced ? [select("promptExtend", labels ? "提示词扩写" : "Prompt extension", ["true", "false"], "true"), select("watermark", labels ? "水印" : "Watermark", ["false", "true"], "false"), { id: "seed", type: "number" as const, label: labels ? "随机种子" : "Seed", defaultValue: "0", min: 0, max: 2147483647 }] : []),
       { id: "referenceImages", type: "text", label: labels ? "参考图片" : "Reference images", placeholder: labels ? "本地产物路径或 URL，多个用逗号分隔" : "Local artifact paths or URLs, comma-separated" },
     ];
   }
@@ -107,6 +122,9 @@ export function buildDesktopImageRunInput(model: string, settings: Readonly<Reco
     if (typeof input.outputCompression === "number") { input.output_compression = input.outputCompression; delete input.outputCompression; }
     if (typeof input.candidateCount === "number") { input.n = input.candidateCount; delete input.candidateCount; }
     if (input.output_format === "png") delete input.output_compression;
+  } else if (kind === "bailian-qwen" && typeof input.candidateCount === "number") {
+    input.n = input.candidateCount;
+    delete input.candidateCount;
   } else if (kind === "generic" && typeof input.count === "number") {
     input.n = input.count;
     delete input.count;

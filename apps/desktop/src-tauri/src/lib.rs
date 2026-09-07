@@ -87,22 +87,32 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let opencode = opencode_path.is_some();
     let python_path = host::python_executable(&app)?.map(PathBuf::from).and_then(canonical_path);
     let python = python_path.is_some();
-    let development = std::env::current_dir().unwrap_or_default().join("apps").join("desktop").join("dist-runtime");
+    let development = development_runtime_directory().unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("apps").join("desktop").join("dist-runtime"));
     let configured_host = configured_runtime_path(&data, "hostPath");
-    let host_path = [resource.join("dist-runtime").join("host.mjs"), resource.join("_up_").join("dist-runtime").join("host.mjs")]
+    let host_path = {
+        let mut candidates = Vec::new();
+        if cfg!(debug_assertions) { candidates.push(development.join("host.mjs")); }
+        candidates.extend([resource.join("dist-runtime").join("host.mjs"), resource.join("_up_").join("dist-runtime").join("host.mjs")]);
+        if let Some(path) = configured_host { candidates.push(path); }
+        if !cfg!(debug_assertions) { candidates.push(development.join("host.mjs")); }
+        candidates
         .into_iter()
-        .chain(configured_host)
-        .chain([development.join("host.mjs")])
         .find(|path| path.is_file())
-        .and_then(canonical_path);
+        .and_then(canonical_path)
+    };
     let host = host_path.is_some();
     let configured_knowledge = configured_runtime_path(&data, "knowledgePath");
-    let knowledge_path = [resource.join("dist-runtime").join("knowledge.mjs"), resource.join("_up_").join("dist-runtime").join("knowledge.mjs")]
+    let knowledge_path = {
+        let mut candidates = Vec::new();
+        if cfg!(debug_assertions) { candidates.push(development.join("knowledge.mjs")); }
+        candidates.extend([resource.join("dist-runtime").join("knowledge.mjs"), resource.join("_up_").join("dist-runtime").join("knowledge.mjs")]);
+        if let Some(path) = configured_knowledge { candidates.push(path); }
+        if !cfg!(debug_assertions) { candidates.push(development.join("knowledge.mjs")); }
+        candidates
         .into_iter()
-        .chain(configured_knowledge)
-        .chain([development.join("knowledge.mjs")])
         .find(|path| path.is_file())
-        .and_then(canonical_path);
+        .and_then(canonical_path)
+    };
     let knowledge = knowledge_path.is_some();
     let skill_path = host::skills_directory(&app)?.and_then(canonical_path);
     let skills = skill_path.is_some();
@@ -153,6 +163,12 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 
 const RUNTIME_PROBE_CACHE_FILE: &str = ".runtime-probe-cache.json";
 
+fn development_runtime_directory() -> Option<PathBuf> {
+    let manifest_runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("dist-runtime");
+    let current_runtime = std::env::current_dir().ok()?.join("apps").join("desktop").join("dist-runtime");
+    [manifest_runtime, current_runtime].into_iter().find(|path| path.is_dir())
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct RuntimeProbeCache {
     fingerprint: String,
@@ -160,9 +176,18 @@ struct RuntimeProbeCache {
 }
 
 fn runtime_probe_fingerprint(data: &Path, resource: &Path) -> String {
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("dist-runtime");
     [
-        ("native-runtime-v2", resource.join("dist-runtime/skill-catalog.json")),
+        ("development-host", development.join("host.mjs")),
+        ("development-knowledge", development.join("knowledge.mjs")),
+        ("development-skill-catalog", development.join("skill-catalog.json")),
+        ("development-skills", development.join("skills")),
+        ("native-runtime-v3", resource.join("dist-runtime/skill-catalog.json")),
         ("up-skill-catalog", resource.join("_up_/dist-runtime/skill-catalog.json")),
+        ("native-host", resource.join("dist-runtime/host.mjs")),
+        ("up-host", resource.join("_up_/dist-runtime/host.mjs")),
+        ("native-knowledge", resource.join("dist-runtime/knowledge.mjs")),
+        ("up-knowledge", resource.join("_up_/dist-runtime/knowledge.mjs")),
         ("private-runtime-manifest", data.join("runtime/runtime-manifest.json")),
         ("config", data.join("config.json")),
         ("database", data.join("app.db")),
@@ -217,13 +242,16 @@ fn read_local_skill_catalog(candidates: impl IntoIterator<Item = PathBuf>) -> Re
 fn list_local_skill_catalog(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
     let data = data_dir(&app)?;
-    let development = std::env::current_dir().unwrap_or_default().join("apps").join("desktop").join("dist-runtime");
+    let development = development_runtime_directory().unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("apps").join("desktop").join("dist-runtime"));
     let configured_catalog = configured_runtime_path(&data, "skillsPath").and_then(|path| path.parent().map(|parent| parent.join("skill-catalog.json")));
-    read_local_skill_catalog([
+    let mut candidates = Vec::new();
+    if cfg!(debug_assertions) { candidates.push(development.join("skill-catalog.json")); }
+    candidates.extend([
         resource.join("dist-runtime").join("skill-catalog.json"),
         resource.join("_up_").join("dist-runtime").join("skill-catalog.json"),
-        development.join("skill-catalog.json"),
-    ].into_iter().chain(configured_catalog))
+    ]);
+    if !cfg!(debug_assertions) { candidates.push(development.join("skill-catalog.json")); }
+    read_local_skill_catalog(candidates.into_iter().chain(configured_catalog))
 }
 
 fn executable_works(path: &std::path::Path, args: &[&str]) -> bool {

@@ -75,6 +75,9 @@ test("desktop host emits terminal media attempt events for recovery idempotency"
   assert.match(app, /record_run_checkpoint/);
   assert.match(app, /const localizedFeatures = useMemo\(\(\) => mediaFeatureCatalog/);
   assert.match(app, /applyConfiguredMediaModels\(feature, models, model\)/);
+  assert.match(app, /model: activeMediaModel/);
+  assert.match(app, /const requestedModel = typeof resolvedMediaInputs\?\.model === "string"/);
+  assert.match(app, /configuredModels\.includes\(requestedModel\)/);
   assert.match(app, /const isStandaloneMediaTask = Boolean\(mediaFeatureId && mediaFeatureId !== "image_generate"\)/);
   assert.match(app, /const routeConversationId = conversationIdFromPath\(launchPath\)/);
   assert.match(app, /const conversationId = isStandaloneMediaTask/);

@@ -73,12 +73,17 @@ test("workflow canvas keeps compact parameters when no editor is supplied", () =
   assert.match(inputCard, /文本: hello/u);
 });
 
-test("workflow canvas does not expose destructive actions for fixed input and output nodes", () => {
-  const markup = renderCanvas();
+test("workflow canvas keeps only the default input fixed so multiple result previews are editable", () => {
+  const markup = renderCanvas([
+    ...baseNodes,
+    { nodeKey: "output-second", type: "output", nodeVersion: 1, title: "Output 2", positionX: 816, positionY: 420, config: {} },
+  ]);
   const inputCard = markup.match(/data-agent-node="input"[\s\S]*?<\/article>/u)?.[0] ?? "";
   const outputCard = markup.match(/data-agent-node="output"[\s\S]*?<\/article>/u)?.[0] ?? "";
   assert.doesNotMatch(inputCard, /删除节点|复制节点/u);
-  assert.doesNotMatch(outputCard, /删除节点|复制节点/u);
+  assert.match(outputCard, /删除节点/u);
+  assert.match(outputCard, /复制节点/u);
+  assert.match(markup, /data-agent-node="output-second"[\s\S]*?删除节点/u);
   assert.match(markup, /data-agent-node="writer"[\s\S]*?删除节点/u);
 });
 
@@ -170,5 +175,7 @@ test("workflow canvas uses pointer capture and a desktop-safe palette drag bridg
   assert.match(source, /WORKFLOW_PALETTE_DROP_EVENT/u);
   assert.match(source, /window\.addEventListener\("pointerup", handlePaletteDragEnd\)/u);
   assert.match(source, /event\.currentTarget\.setPointerCapture\?\.\(event\.pointerId\)/u);
+  assert.match(source, /startClientX/u);
+  assert.match(source, /if \(!active\.moved\) return/u);
   assert.doesNotMatch(source, /dataTransfer\.getData\("application\/x-workflow-node-type"\)/u);
 });

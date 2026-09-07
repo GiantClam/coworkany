@@ -220,8 +220,8 @@ test("new desktop workflow nodes initialize the online parameter contract", () =
 
   assert.equal(imageConfig.selectedProviderId, "openai");
   assert.equal(imageConfig.selectedModelId, "gpt-5");
-  assert.equal(imageConfig.imageQuality, "auto");
-  assert.equal(imageConfig.imageOutputFormat, "png");
+  assert.equal("imageQuality" in imageConfig, false);
+  assert.equal("imageOutputFormat" in imageConfig, false);
   assert.equal(pptConfig.previewRuntime, "frontend-slides-agent");
   assert.equal(pptConfig.pageCount, 8);
   assert.deepEqual(validateWorkflowDefinition(image), []);

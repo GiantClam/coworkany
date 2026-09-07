@@ -24,6 +24,10 @@ function secondUrl(value: unknown) {
   return value.slice(1).find((item): item is string => typeof item === "string" && item.trim().length > 0)?.trim();
 }
 
+function isLocalPath(value: unknown): value is string {
+  return typeof value === "string" && /^(?:[a-zA-Z]:[\\/]|\\\\|\/)/u.test(value.trim());
+}
+
 export type MediaAssetReference = {
   readonly url?: string;
   readonly localPath?: string;
@@ -38,7 +42,8 @@ function collectMediaReferences(value: unknown, references: MediaAssetReference[
     return references;
   }
   if (typeof value === "string" && value.trim()) {
-    references.push({ url: value.trim() });
+    const normalized = value.trim();
+    references.push(isLocalPath(normalized) ? { localPath: normalized } : { url: normalized });
     return references;
   }
   if (!value || typeof value !== "object") return references;
@@ -76,6 +81,18 @@ function uniqueReferences(references: readonly MediaAssetReference[]) {
   });
 }
 
+function preferredMediaReferences(...values: unknown[]) {
+  for (const value of values) {
+    const references = uniqueReferences(collectMediaReferences(value));
+    if (references.length) return references;
+  }
+  return [];
+}
+
+function hasMediaReferences(...values: unknown[]) {
+  return values.some((value) => collectMediaReferences(value).length > 0);
+}
+
 function urlsFor(value: unknown) {
   return uniqueReferences(collectMediaReferences(value)).flatMap((reference) => reference.url ? [reference.url] : []);
 }
@@ -93,7 +110,30 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
   // A generated upstream artifact may contain both a local cache path and a
   // provider URL. Only path-only references represent user-selected local
   // attachments that still need provider-specific handling.
-  const localAttachments = [...new Set(uniqueReferences(collectMediaReferences(inputs)).flatMap((reference) => reference.localPath && !reference.url ? [reference.localPath] : []))];
+  const hasInputImage = hasMediaReferences(inputs.inputImageUrl);
+  const hasInputFirstFrame = hasMediaReferences(inputs["image.first_frame"], inputs.firstFrame, inputs.images, inputs.image);
+  const hasInputLastFrame = hasMediaReferences(inputs["image.last_frame"], inputs.lastFrame, inputs.images);
+  const configMediaSources = [
+    config.referenceImages, config.referenceImageUrls, config.imageUrls,
+    config.sourceVideoUrl, config.videos, config.video,
+    config.referenceVideoUrls, config.referenceVideos, config.videoUrls,
+    config.referenceAudioUrls, config.referenceAudios, config.audioUrls, config.audioUrl,
+  ];
+  const localAttachmentSource = {
+    ...inputs,
+    inputImageUrl: hasInputImage ? undefined : config.inputImageUrl,
+    firstFrameUrl: hasInputFirstFrame ? undefined : config.firstFrameUrl,
+    lastFrameUrl: hasInputLastFrame ? undefined : config.lastFrameUrl,
+  };
+  const localAttachments = [...new Set([
+    ...uniqueReferences(collectMediaReferences(localAttachmentSource)).flatMap((reference) => reference.localPath && !reference.url ? [reference.localPath] : []),
+    ...configMediaSources.flatMap((value) => uniqueReferences(collectMediaReferences(value)).flatMap((reference) => reference.localPath && !reference.url ? [reference.localPath] : [])),
+    ...[
+      hasInputImage ? undefined : config.inputImageUrl,
+      hasInputFirstFrame ? undefined : config.firstFrameUrl,
+      hasInputLastFrame ? undefined : config.lastFrameUrl,
+    ].filter(isLocalPath).map((value) => value.trim()),
+  ])];
   const safeConfig = omitLocalPaths(config) as Record<string, unknown>;
   const safeInputs = omitLocalPaths(inputs) as Record<string, unknown>;
   const request = Object.fromEntries(Object.entries({ ...safeConfig, ...safeInputs }).filter(([key]) => !TRANSPORT_CONFIG_KEYS.has(key))) as Record<string, unknown>;
@@ -108,6 +148,7 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     const inputImageUrl = firstNonEmptyString(config.inputImageUrl, inputs.inputImageUrl);
     const referenceImageUrls = [...new Set([
       ...urlsFor(referenceInput),
+      ...references.flatMap((reference) => !reference.url && reference.localPath ? [reference.localPath] : []),
       ...(inputImageUrl ? [inputImageUrl] : []),
     ])];
     delete request.referenceImages;
@@ -119,11 +160,23 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     const outputFormat = firstNonEmptyString(config.output_format, config.imageOutputFormat);
     const moderation = firstNonEmptyString(config.moderation, config.imageModeration);
     const compression = config.output_compression ?? config.imageOutputCompression;
+    const negativePrompt = firstNonEmptyString(config.negativePrompt, config.imageNegativePrompt);
+    const promptExtend = config.promptExtend ?? config.imagePromptExtend;
+    const watermark = config.watermark ?? config.imageWatermark;
+    const seed = config.seed ?? config.imageSeed;
+    const count = config.n ?? config.imageCandidateCount;
+    const style = firstNonEmptyString(config.style, config.imageStyle);
     if (size) request.size = size;
     if (quality) request.quality = quality;
     if (background) request.background = background;
     if (outputFormat) request.output_format = outputFormat;
     if (moderation) request.moderation = moderation;
+    if (negativePrompt) request.negativePrompt = negativePrompt;
+    if (promptExtend !== undefined && promptExtend !== "") request.promptExtend = promptExtend;
+    if (watermark !== undefined && watermark !== "") request.watermark = watermark;
+    if (seed !== undefined && seed !== "") request.seed = seed;
+    if (count !== undefined && count !== "") request.n = count;
+    if (style) request.style = style;
     // OpenAI-compatible image APIs only accept output_compression for encoded
     // JPEG/WebP output. The workflow node keeps a UI default for those formats,
     // so never let that stale default leak into a PNG request.
@@ -136,29 +189,43 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     // Older workflow definitions used images[] for first/last frames. Keep
     // that convention readable while preferring the role-specific ports.
     const legacyImages = Array.isArray(inputs.images) ? inputs.images : undefined;
-    const firstFrame = uniqueReferences(collectMediaReferences(legacyImages ? legacyImages.slice(0, 1) : inputs.images ?? inputs.image));
-    const lastFrame = uniqueReferences(collectMediaReferences(inputs["image.last_frame"] ?? (legacyImages ? legacyImages.slice(1, 2) : undefined)));
-    const referenceImages = uniqueReferences(collectMediaReferences(inputs.referenceImages));
-    const sourceVideo = uniqueReferences(collectMediaReferences(inputs.videos ?? inputs.video));
-    const referenceVideos = uniqueReferences(collectMediaReferences(inputs.referenceVideos));
-    const referenceAudios = uniqueReferences(collectMediaReferences(inputs.referenceAudios));
+    const firstFrame = preferredMediaReferences(
+      inputs["image.first_frame"],
+      inputs.firstFrame,
+      legacyImages ? legacyImages.slice(0, 1) : inputs.images,
+      inputs.image,
+    );
+    const lastFrame = preferredMediaReferences(
+      inputs["image.last_frame"],
+      inputs.lastFrame,
+      legacyImages ? legacyImages.slice(1, 2) : undefined,
+    );
+    const referenceMode = config.mode === "reference-to-video";
+    const referenceImages = preferredMediaReferences(inputs["image.reference"], inputs.referenceImages, config.referenceImageUrls, config.referenceImages, ...(referenceMode ? [config.imageUrls] : []));
+    const sourceVideo = preferredMediaReferences(inputs["video.source"], inputs.videos, inputs.video, ...(referenceMode ? [] : [config.sourceVideoUrl, config.videos, config.video]));
+    const referenceVideos = preferredMediaReferences(inputs["video.reference"], inputs.referenceVideos, config.referenceVideoUrls, config.referenceVideos, config.videoUrls, ...(referenceMode ? [config.sourceVideoUrl] : []));
+    const referenceAudios = preferredMediaReferences(inputs["audio.reference"], inputs.referenceAudios, config.referenceAudioUrls, config.referenceAudios, config.audioUrls, config.audioUrl);
     assertMaximum("image.first_frame", firstFrame, 1);
     assertMaximum("image.last_frame", lastFrame, 1);
-    assertMaximum("image.reference", referenceImages, 9);
+    // Keep the shared input normalizer at the largest supported direct-provider
+    // contract. The host applies the selected provider/model capability after
+    // normalization (for example RunningHub H3 is stricter at 9/3/3, while
+    // Wan 3 accepts 10 reference images and 5 reference videos/audio files).
+    assertMaximum("image.reference", referenceImages, 10);
     assertMaximum("video.source", sourceVideo, 1);
-    assertMaximum("video.reference", referenceVideos, 3);
-    assertMaximum("audio.reference", referenceAudios, 3);
+    assertMaximum("video.reference", referenceVideos, 5);
+    assertMaximum("audio.reference", referenceAudios, 5);
     const mode = firstNonEmptyString(config.mode) ?? "auto";
     if (mode === "first-last-frame" && (!firstFrame.length || !lastFrame.length)) throw new Error("workflow_media_role_required:first-last-frame");
     if (mode === "video-edit" && !sourceVideo.length) throw new Error("workflow_media_role_required:video.source");
-    const firstFrameUrl = firstNonEmptyString(config.firstFrameUrl, firstFrame[0]?.url, firstUrl(inputs.images), firstUrl(inputs.image));
-    const lastFrameUrl = firstNonEmptyString(config.lastFrameUrl, lastFrame[0]?.url, secondUrl(inputs.images));
+    const firstFrameUrl = firstNonEmptyString(firstFrame[0]?.url, firstFrame[0]?.localPath, firstUrl(inputs.images), firstUrl(inputs.image), config.firstFrameUrl);
+    const lastFrameUrl = firstNonEmptyString(lastFrame[0]?.url, lastFrame[0]?.localPath, secondUrl(inputs.images), config.lastFrameUrl);
     if (firstFrameUrl) request.firstFrameUrl = firstFrameUrl;
     if (lastFrameUrl) request.lastFrameUrl = lastFrameUrl;
-    const referenceImageUrls = referenceImages.flatMap((reference) => reference.url ? [reference.url] : []);
-    const sourceVideoUrl = sourceVideo[0]?.url;
-    const referenceVideoUrls = referenceVideos.flatMap((reference) => reference.url ? [reference.url] : []);
-    const referenceAudioUrls = referenceAudios.flatMap((reference) => reference.url ? [reference.url] : []);
+    const referenceImageUrls = referenceImages.flatMap((reference) => reference.url ? [reference.url] : reference.localPath ? [reference.localPath] : []);
+    const sourceVideoUrl = firstNonEmptyString(sourceVideo[0]?.url, sourceVideo[0]?.localPath);
+    const referenceVideoUrls = referenceVideos.flatMap((reference) => reference.url ? [reference.url] : reference.localPath ? [reference.localPath] : []);
+    const referenceAudioUrls = referenceAudios.flatMap((reference) => reference.url ? [reference.url] : reference.localPath ? [reference.localPath] : []);
     if (referenceImageUrls.length) request.referenceImageUrls = referenceImageUrls;
     if (sourceVideoUrl) request.sourceVideoUrl = sourceVideoUrl;
     if (referenceVideoUrls.length) request.referenceVideoUrls = referenceVideoUrls;

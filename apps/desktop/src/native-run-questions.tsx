@@ -9,7 +9,6 @@ export function NativeRunQuestions({ client, runId, locale }: {
   locale: "zh" | "en";
 }) {
   const [sessions, setSessions] = useState<string[]>([]);
-  const [error, setError] = useState<string>();
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
@@ -27,11 +26,15 @@ export function NativeRunQuestions({ client, runId, locale }: {
           if (event) receive(event);
         } catch { /* malformed historical frames cannot create a question */ }
       }
-    })().catch((reason: unknown) => { if (!disposed) setError(reason instanceof Error ? reason.message : String(reason)); });
+    })().catch(() => {
+      // A run may have no persisted question events (for example, an older
+      // run that has already completed). That is an empty recovery result,
+      // not content that belongs at the bottom of the workflow canvas.
+      if (!disposed) setSessions([]);
+    });
     return () => { disposed = true; unlisten?.(); };
   }, [client, runId]);
   return <div className="native-question-stack">
-    {error ? <p role="alert" className="native-question-error">{locale === "zh" ? "无法恢复工作流问答" : "Unable to restore workflow questions"}: {error}</p> : null}
     {sessions.map((sessionId) => <NativeQuestions key={sessionId} client={client.questions} sessionId={sessionId} runId={runId} locale={locale} />)}
   </div>;
 }

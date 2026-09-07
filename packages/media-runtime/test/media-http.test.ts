@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createBailianVideoAdapter, createHttpMediaAdapter, downloadMediaOutputs, ProviderConfigurationRequiredError, type MediaProviderId } from "../src/index";
-import { mkdtemp, open, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -213,7 +213,21 @@ test("reuses an existing content-addressed media artifact on retry", async () =>
   assert.deepEqual(await readdir(root), [first[0]?.relativePath]);
 });
 
-test("does not replace a locked existing content-addressed artifact on retry", async () => {
+test("overwrites the same-name media artifact when a retry refreshes it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "coworkany-media-overwrite-"));
+  const task = { providerTaskId: "task-concurrent", status: "succeeded" as const, outputs: [{ url: "https://files.invalid/clip.mp4" }] };
+  const fetchImpl: typeof fetch = async () => new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "content-type": "video/mp4" } });
+  const first = await downloadMediaOutputs(task, root, { fetchImpl, filenamePrefix: "clip" });
+  const relativePath = first[0]?.relativePath;
+  assert.ok(relativePath);
+  await writeFile(join(root, relativePath), "stale-output");
+  const second = await downloadMediaOutputs(task, root, { fetchImpl, filenamePrefix: "clip" });
+  assert.equal(second[0]?.relativePath, relativePath);
+  assert.deepEqual(await readdir(root), [relativePath]);
+  assert.deepEqual([...await readFile(join(root, relativePath))], [1, 2, 3]);
+});
+
+test("overwrites an existing content-addressed artifact while it is readable", async () => {
   const root = await mkdtemp(join(tmpdir(), "coworkany-media-lock-"));
   const task = { providerTaskId: "task-lock", status: "succeeded" as const, outputs: [{ url: "https://files.invalid/clip.mp4" }] };
   const fetchImpl: typeof fetch = async () => new Response(new Uint8Array([9, 8, 7]), { status: 200, headers: { "content-type": "video/mp4" } });

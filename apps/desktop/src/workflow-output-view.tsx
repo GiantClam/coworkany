@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { WorkflowCanvasExecutionSnapshot, WorkflowCanvasNode } from "@coworkany/workbench-ui";
 import { isTauriBridgeAvailable, tauriBridge } from "./tauri";
 import type { WorkflowOutputItem } from "./workflow-output";
@@ -62,7 +62,7 @@ export function WorkflowOutputPreview({ node, snapshot, locale }: { node: Workfl
       <span>{message}</span>
     </div>;
   }
-  if (node.nodeKey !== "output" || snapshot.status !== "succeeded") return null;
+  if (node.type !== "output" || snapshot.status !== "succeeded") return null;
   const items = normalizeWorkflowOutput(snapshot.outputPayload);
   if (!items.length) return <div className="workflow-output-empty">{locale === "zh" ? "没有可展示的输出" : "No output to display"}</div>;
   const download = (item: WorkflowOutputItem) => {

@@ -32,6 +32,65 @@ export type WorkbenchMediaFeature = {
   fields: WorkbenchMediaField[];
 };
 
+const IMAGE_RATIO_OPTIONS = ["1:1", "4:5", "3:4", "4:3", "16:9", "9:16"];
+const IMAGE_SIZE_OPTIONS = ["auto", "1024x1024", "1536x1024", "1024x1536", "2048x2048"];
+const BAILIAN_IMAGE_SIZE_OPTIONS = ["auto", "1024*1024", "1536*1024", "1024*1536", "2048*2048"];
+
+function imageField(id: string, label: string, type: WorkbenchMediaField["type"], extra: Partial<WorkbenchMediaField> = {}): WorkbenchMediaField {
+  return { id, label, type, ...extra };
+}
+
+/**
+ * Resolve the image node's provider-specific controls from the same model
+ * contract used by the media workspace. Inputs remain role-based ports; this
+ * function only describes scalar generation parameters.
+ */
+export function resolveWorkbenchImageParameterFields(selectedModel?: string | null, selectedProvider?: string | null): readonly WorkbenchMediaField[] {
+  const model = (selectedModel || "").trim().toLowerCase();
+  const provider = (selectedProvider || "").trim().toLowerCase();
+  const source = `${provider}/${model}`;
+  const qwenImage = model.includes("qwen-image");
+  const qwenImageEdit = qwenImage && /(?:-edit|image-to-image|img2img)/iu.test(model);
+  const qwenImage27 = qwenImage && model.includes("2.7");
+  if (qwenImage || (source.includes("bailian") && !model)) {
+    const supportsAdvanced = !qwenImageEdit && !qwenImage27;
+    return [
+      imageField("imageSize", "尺寸", "select", { defaultValue: qwenImageEdit ? "auto" : "1024*1024", options: (qwenImage27 || qwenImageEdit ? ["auto", "1024*1024", "2048*2048"] : BAILIAN_IMAGE_SIZE_OPTIONS).map((value) => ({ value, label: value })) }),
+      ...(supportsAdvanced || qwenImageEdit ? [imageField("imageNegativePrompt", "反向提示词", "textarea")] : []),
+      ...(supportsAdvanced || qwenImageEdit ? [imageField("imageCandidateCount", "生成数量", "number", { defaultValue: "1", min: 1, max: 6 })] : []),
+      ...(supportsAdvanced ? [imageField("imagePromptExtend", "提示词扩写", "select", { defaultValue: "true", options: [{ value: "true", label: "开启" }, { value: "false", label: "关闭" }] }), imageField("imageWatermark", "水印", "select", { defaultValue: "false", options: [{ value: "false", label: "关闭" }, { value: "true", label: "开启" }] }), imageField("imageSeed", "随机种子", "number", { defaultValue: "0", min: 0, max: 2147483647 })] : []),
+    ];
+  }
+  if (source.includes("google") || source.includes("gemini") || model.includes("nanobanana") || model.includes("gemini-2.5-flash-image")) {
+    return [
+      imageField("imageSize", "画面比例", "select", { defaultValue: "1:1", options: IMAGE_RATIO_OPTIONS.map((value) => ({ value, label: value })) }),
+      imageField("imageResolution", "分辨率", "select", { defaultValue: "2K", options: ["1K", "2K", "4K"].map((value) => ({ value, label: value })) }),
+    ];
+  }
+  if (source.includes("runninghub") || model.includes("seedream")) {
+    return [
+      imageField("imageSize", "尺寸", "select", { defaultValue: "1024x1024", options: ["1024x1024", "1536x1024"].map((value) => ({ value, label: value })) }),
+      ...(model.includes("image-to-image") || model.includes("img2img") ? [imageField("inputImageUrl", "输入图片地址", "url", { required: true })] : []),
+    ];
+  }
+  if (source.includes("openai") || source.includes("pptoken") || model.includes("gpt-image")) {
+    return [
+      imageField("imageSize", "尺寸", "select", { defaultValue: "1024x1024", options: IMAGE_SIZE_OPTIONS.map((value) => ({ value, label: value })) }),
+      imageField("imageQuality", "质量", "select", { defaultValue: "auto", options: ["auto", "low", "medium", "high"].map((value) => ({ value, label: value })) }),
+      imageField("imageBackground", "背景", "select", { defaultValue: "auto", options: ["auto", "transparent", "opaque"].map((value) => ({ value, label: value })) }),
+      imageField("imageOutputFormat", "输出格式", "select", { defaultValue: "png", options: ["png", "jpeg", "webp"].map((value) => ({ value, label: value })) }),
+      imageField("imageOutputCompression", "输出压缩", "number", { defaultValue: "80", min: 0, max: 100 }),
+      imageField("imageModeration", "内容审核", "select", { defaultValue: "auto", options: ["auto", "low"].map((value) => ({ value, label: value })) }),
+      imageField("imageCandidateCount", "生成数量", "number", { defaultValue: "1", min: 1, max: 9 }),
+    ];
+  }
+  return [
+    imageField("imageQuality", "质量", "select", { defaultValue: "standard", options: ["standard", "hd"].map((value) => ({ value, label: value })) }),
+    imageField("imageSize", "尺寸", "select", { defaultValue: "1024x1024", options: IMAGE_SIZE_OPTIONS.filter((value) => value !== "auto").map((value) => ({ value, label: value })) }),
+    imageField("imageCandidateCount", "生成数量", "number", { defaultValue: "1", min: 1, max: 4 }),
+  ];
+}
+
 /** Shared feature/field contract for the cloud media workspace and Tauri adapter. */
 export const WORKBENCH_MEDIA_FEATURES: readonly WorkbenchMediaFeature[] = [
   { id: "ai-music", group: "audio", title: "AI音乐", summary: "生成歌曲与配乐，支持手填歌词或 AI 自动写词。", submitLabel: "生成音频", fields: [
@@ -77,7 +136,7 @@ export const WORKBENCH_MEDIA_FEATURES: readonly WorkbenchMediaFeature[] = [
 const videoFeatureIds = new Set<WorkbenchMediaFeatureId>(["text-to-video", "image-to-video", "reference-to-video", "video-edit"]);
 
 const boolOptions = [{ value: "true", label: "开启" }, { value: "false", label: "关闭" }];
-const ratioOptions = ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"].map((value) => ({ value, label: value }));
+const ratioOptions = ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "9:21"].map((value) => ({ value, label: value }));
 const resolutionOptions = [{ value: "720P", label: "720P" }, { value: "1080P", label: "1080P" }];
 
 function field(id: string, label: string, type: WorkbenchMediaField["type"], extra: Partial<WorkbenchMediaField> = {}): WorkbenchMediaField {
@@ -89,11 +148,13 @@ function field(id: string, label: string, type: WorkbenchMediaField["type"], ext
  * model's parameter schema. Keep the desktop surface on the same contract;
  * provider-specific fields are intentionally derived at render time.
  */
-export function resolveWorkbenchMediaFeature(feature: WorkbenchMediaFeature, selectedModel?: string | null): WorkbenchMediaFeature {
+export function resolveWorkbenchMediaFeature(feature: WorkbenchMediaFeature, selectedModel?: string | null, selectedProvider?: string | null): WorkbenchMediaFeature {
   if (feature.group !== "video" || !videoFeatureIds.has(feature.id)) return feature;
   const modelField = feature.fields.find((item) => item.id === "model");
   if (!modelField) return feature;
   const model = (selectedModel || modelField.defaultValue || "").toLowerCase();
+  const provider = (selectedProvider || "").toLowerCase();
+  const providerModel = `${provider}/${model}`;
   const imageToVideo = feature.id === "image-to-video";
   const referenceToVideo = feature.id === "reference-to-video";
   const edit = feature.id === "video-edit";
@@ -130,9 +191,9 @@ export function resolveWorkbenchMediaFeature(feature: WorkbenchMediaFeature, sel
       field("duration", "时长", "select", { defaultValue: "5", options: ["5", "6", "8", "10", "12", "15"].map((value) => ({ value, label: `${value}秒` })) }),
       field("ratio", "画面比例", "select", { defaultValue: "adaptive", options: ratioOptions }),
     ];
-  } else if (model.includes("minimax") || model.includes("video-01")) {
+  } else if ((model.includes("minimax") || model.includes("video-01")) && !referenceToVideo && !edit) {
     runtimeFields = [
-      ...(imageToVideo ? [field("firstFrameUrl", "首帧图片地址", "url", { required: true }), field("lastFrameUrl", "尾帧图片地址", "url")] : []),
+      ...(imageToVideo ? [field("firstFrameUrl", "首帧图片地址", "url", { required: true })] : []),
       ...(referenceToVideo ? [field("referenceImageUrls", "参考图片地址", "textarea", { required: true })] : []),
       ...(edit ? [field("sourceVideoUrl", "源视频地址", "url", { required: true }), field("referenceImageUrls", "参考图片地址", "textarea")] : []),
       field("prompt", edit ? "编辑指令" : "视频提示词", "textarea", { required: !imageToVideo || referenceToVideo || edit }),
@@ -142,7 +203,7 @@ export function resolveWorkbenchMediaFeature(feature: WorkbenchMediaFeature, sel
       ...(referenceToVideo ? [field("ratio", "画面比例", "select", { defaultValue: "adaptive", options: ratioOptions })] : []),
       ...(edit ? [field("seed", "Seed", "number", { defaultValue: "0", min: 0 })] : []),
     ];
-  } else if (model.includes("happyhorse") || model.includes("bailian:video")) {
+  } else if (model.includes("happyhorse") || model.includes("bailian:video") || providerModel.includes("bailian")) {
     const editFields = edit ? [
       field("sourceVideoUrl", "源视频地址", "url", { required: true }),
       field("referenceImageUrls", "参考图片地址", "textarea"),
