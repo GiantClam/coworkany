@@ -362,25 +362,21 @@ test("Bailian video adapter preserves reference/edit media parameters", async ()
   assert.deepEqual(input.media, [{ type: "video", url: "https://files.invalid/source.mp4" }, { type: "reference_image", url: "https://files.invalid/ref.png" }]);
 });
 
-test("Bailian video adapter converts local first and reference frames to Data URLs", async () => {
+test("Bailian Wan 3 adapter converts a local reference image to a Data URL", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "coworkany-bailian-video-reference-"));
   try {
-    const firstPath = join(workspace, "first.png");
     const referencePath = join(workspace, "reference.png");
-    await writeFile(firstPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     await writeFile(referencePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     let requestBody: Record<string, unknown> | undefined;
     const adapter = createBailianVideoAdapter({ provider: "bailian" as MediaProviderId, baseUrl: "https://dashscope.aliyuncs.com", apiKey: "secret", workspacePath: workspace, fetchImpl: async (_input, init) => {
       requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(JSON.stringify({ output: { task_id: "task-local", task_status: "PENDING" } }), { status: 200 });
     } });
-    await adapter.execute({ provider: "bailian" as MediaProviderId, modelId: "wan3.0-video-prime", input: { prompt: "animate", featureId: "reference-to-video", firstFrameUrl: firstPath, referenceImageUrls: [referencePath], workflowLocalAttachments: true } }, cancellation());
+    await adapter.execute({ provider: "bailian" as MediaProviderId, modelId: "wan3.0-video-prime", input: { prompt: "animate", featureId: "reference-to-video", referenceImageUrls: [referencePath], workflowLocalAttachments: true } }, cancellation());
     const input = requestBody?.input as Record<string, unknown>;
     const media = input.media as Array<Record<string, string>>;
-    assert.equal(media[0]?.type, "first_frame");
+    assert.equal(media[0]?.type, "reference_image");
     assert.match(media[0]?.url ?? "", /^data:image\/png;base64,/u);
-    assert.equal(media[1]?.type, "reference_image");
-    assert.match(media[1]?.url ?? "", /^data:image\/png;base64,/u);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

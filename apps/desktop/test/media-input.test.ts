@@ -179,9 +179,9 @@ test("keeps the shared media normalizer within the broadest supported reference 
     referenceVideoUrls: Array.from({ length: 5 }, (_, index) => `https://example.test/ref-${index}.mp4`),
     referenceAudioUrls: Array.from({ length: 5 }, (_, index) => `https://example.test/ref-${index}.mp3`),
   }, {});
-  assert.equal(input.referenceImageUrls?.length, 10);
-  assert.equal(input.referenceVideoUrls?.length, 5);
-  assert.equal(input.referenceAudioUrls?.length, 5);
+  assert.equal((input.referenceImageUrls as string[] | undefined)?.length, 10);
+  assert.equal((input.referenceVideoUrls as string[] | undefined)?.length, 5);
+  assert.equal((input.referenceAudioUrls as string[] | undefined)?.length, 5);
 });
 
 test("requires the role-specific inputs selected by video mode", () => {
