@@ -54,6 +54,7 @@ class RuntimeArchiveTests(unittest.TestCase):
             values = runtime.prepare("https://example.com/runtime.tar.gz", hashlib.sha256(data).hexdigest(), Path(root) / "output")
             self.assertEqual(len(values), 4)
             self.assertEqual(run.call_count, 6)
+            self.assertEqual(run.call_args_list[0].args[0][1:], [str(Path(root) / "output" / "node/node"), "-verify_arch", "arm64"])
             self.assertTrue(Path(values["COWORKANY_MAC_FONT_PATH"]).is_file())
 
 

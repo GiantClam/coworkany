@@ -40,7 +40,11 @@ def prepare(url, expected_hash, destination):
             raise ValueError(f"macos_runtime_file_missing:{relative}")
     for relative in ["node/node", "opencode/opencode", "python/python3"]:
         binary = destination / relative
-        subprocess.run(["lipo", "-verify_arch", "arm64", str(binary)], check=True)
+        # macOS lipo takes the input file before the verification action:
+        # `lipo <binary> -verify_arch arm64`. Passing the action first makes
+        # lipo interpret the binary path as an architecture name and always
+        # fail with "unknown architecture specification".
+        subprocess.run(["lipo", str(binary), "-verify_arch", "arm64"], check=True)
         subprocess.run([str(binary), "--version"], check=True, timeout=60,
                        env={**os.environ, "OPENCODE_DISABLE_MODELS_FETCH": "true", "OPENCODE_DISABLE_AUTOUPDATE": "true"})
     return {key: str((destination / relative).resolve()) for key, relative in required.items()}
