@@ -131,7 +131,10 @@ async function acquireGitSkill({ id, repo, commit, branch, skillPath, stagingNam
   await rm(staging, { recursive: true, force: true });
   await mkdir(dirname(staging), { recursive: true });
   try {
-    await execFileAsync("git", ["clone", "--depth", "1", "--branch", branch, `https://github.com/${repo}.git`, staging], { windowsHide: true, timeout: 180000, maxBuffer: 64 * 1024 });
+    // Git for Windows may apply core.autocrlf during checkout, which changes
+    // the pinned tree bytes and makes the lock digest fail. Disable conversion
+    // so every platform verifies the same upstream content.
+    await execFileAsync("git", ["-c", "core.autocrlf=false", "clone", "--depth", "1", "--branch", branch, `https://github.com/${repo}.git`, staging], { windowsHide: true, timeout: 180000, maxBuffer: 64 * 1024 });
     await execFileAsync("git", ["-C", staging, "checkout", "--detach", commit], { windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 });
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
