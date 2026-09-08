@@ -4,6 +4,16 @@
 
 macOS profile 为 `macOS 12+`、Apple Silicon（arm64）、官网分发的签名并公证 DMG 和便携 ZIP。不包含 Intel Mac、Mac App Store、自动更新或本轮新增的 Windows Authenticode 签名。Windows 保留现有安装器、ZIP 和独立 Runtime 策略。
 
+## 内部测试便携版
+
+没有 Developer ID 时可以生成内部测试 ZIP。它包含完整 `.app`、独立 `CoworkAny Data` 目录和 `portable.flag`，但不签名、不公证，只用于开发者或受控测试机：
+
+```bash
+pnpm desktop:macos:internal
+```
+
+输出为 `.artifacts/desktop-release/CoworkAny-macOS-arm64-internal-portable.zip`。首次在另一台 Mac 打开时，使用右键 **Open**；若仍被拦截，在“系统设置 → 隐私与安全性”选择 **Open Anyway**。该 ZIP 不应作为公开下载版本，也不能替代 Developer ID 发布包。
+
 ## 发布流程
 
 1. 在准备发布的 commit 上同步五处版本号：`package.json`、`apps/desktop/package.json`、`apps/desktop/src-tauri/tauri.conf.json`、`apps/desktop/src-tauri/Cargo.toml` 和 `apps/desktop/src-tauri/Cargo.lock`。

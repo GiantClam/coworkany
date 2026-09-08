@@ -26,7 +26,8 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "tauri:build:macos": "tauri build --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin",
-    "package:macos:portable": "node ../../scripts/package-macos-portable.mjs"
+    "package:macos:portable": "node ../../scripts/package-macos-portable.mjs",
+    "package:macos:internal": "COWORKANY_MAC_PORTABLE_MODE=internal node ../../scripts/package-macos-portable.mjs"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.82",
