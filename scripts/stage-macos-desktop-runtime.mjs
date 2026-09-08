@@ -1,4 +1,4 @@
-import { access, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
@@ -13,6 +13,20 @@ const source = {
   python: process.env.COWORKANY_MAC_PYTHON_RUNTIME_DIR,
   font: process.env.COWORKANY_MAC_FONT_PATH,
 };
+
+async function removeOutput(path) {
+  let lastError;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
 
 async function requiredPath(name, value) {
   if (!value) throw new Error(`macos_runtime_${name}_path_required`);
@@ -29,15 +43,45 @@ async function copyRuntimeDirectory(name, destination, executable) {
   await access(join(destination, executable), constants.X_OK).catch(() => { throw new Error(`macos_runtime_${name}_executable_missing:${join(destination, executable)}`); });
 }
 
+async function makeWritableTree(path) {
+  const details = await stat(path);
+  await chmod(path, details.mode | (details.isDirectory() ? 0o700 : 0o600));
+  if (!details.isDirectory()) return;
+  for (const entry of await readdir(path)) await makeWritableTree(join(path, entry));
+}
+
 async function resolvePackage(name) {
   const desktopModules = join(root, "apps/desktop/node_modules");
   let entry;
   try {
-    entry = require.resolve(`${name}/package.json`, { paths: [desktopModules] });
+    // Some packages intentionally hide package.json through `exports`; resolve
+    // their public entrypoint and walk back to the package root instead.
+    entry = require.resolve(name, { paths: [desktopModules] });
   } catch {
+    // pnpm can keep an optional native package in its virtual store without
+    // linking it on a prior install performed for another platform.
+    const store = join(root, "node_modules/.pnpm");
+    const encoded = name.replace("/", "+");
+    const entries = await readdir(store).catch(() => []);
+    for (const entry of entries.filter(item => item.startsWith(`${encoded}@`)).sort().reverse()) {
+      const candidate = join(store, entry, "node_modules", ...name.split("/"));
+      try {
+        await access(join(candidate, "package.json"), constants.F_OK);
+        return candidate;
+      } catch { /* keep searching other pnpm versions */ }
+    }
     throw new Error(`macos_runtime_package_missing:${name}; run pnpm install on an Apple Silicon Mac`);
   }
-  return dirname(entry);
+  let directory = dirname(entry);
+  while (directory !== dirname(directory)) {
+    try {
+      await access(join(directory, "package.json"), constants.F_OK);
+      return directory;
+    } catch {
+      directory = dirname(directory);
+    }
+  }
+  throw new Error(`macos_runtime_package_manifest_missing:${name}`);
 }
 
 async function copyLanceDb() {
@@ -75,7 +119,7 @@ if (process.platform !== "darwin" || process.arch !== "arm64") {
   throw new Error(`macos_runtime_stage_requires_darwin_arm64:${process.platform}-${process.arch}`);
 }
 
-await rm(output, { recursive: true, force: true });
+await removeOutput(output);
 await mkdir(output, { recursive: true });
 await copyRuntimeDirectory("node", join(output, "node"), "node");
 await copyRuntimeDirectory("opencode", join(output, "opencode"), "opencode");
@@ -89,6 +133,10 @@ await writeFile(join(output, "embedding/local-hash-384-v1.json"), `${JSON.string
 if (process.env.COWORKANY_MAC_RUNTIME_LICENSES_PATH) {
   await cp(await requiredPath("licenses", process.env.COWORKANY_MAC_RUNTIME_LICENSES_PATH), join(output, "LICENSES.txt"));
 }
+// Tauri strips quarantine/provenance attributes while assembling the app. Some
+// Python framework files are read-only in the source archive, which makes that
+// cleanup fail with EPERM on macOS. Normalize owner write bits before bundling.
+await makeWritableTree(output);
 
 const manifest = {
   schemaVersion: 1,
