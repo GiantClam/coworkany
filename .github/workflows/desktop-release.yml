@@ -88,6 +88,7 @@ jobs:
           TAURI_CONFIG: '{"bundle":{"resources":[]}}'
         run: |
           pnpm desktop:typecheck
+          pnpm --filter @coworkany/desktop build:host
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm --filter @coworkany/desktop test:release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -164,6 +165,7 @@ jobs:
           TAURI_CONFIG: '{"bundle":{"resources":[],"icon":["icons/coworkany-icon.png"]}}'
         run: |
           pnpm desktop:typecheck
+          pnpm --filter @coworkany/desktop build:host
           pnpm --filter @coworkany/desktop test:release
           cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
       - name: Fetch approved relocatable runtimes and verify SHA-256
