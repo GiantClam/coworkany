@@ -358,26 +358,39 @@ test("workflow-host runs a mixed text, image, video, audio and PPT workflow with
 test("workflow-host creates a stable session mapping through RPC", async () => {
   const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const tsxCli = resolve(desktopRoot, "..", "..", "node_modules", "tsx", "dist", "cli.mjs");
-  const child = spawn(process.execPath, [tsxCli, join(desktopRoot, "runtime", "host.ts")], { cwd: desktopRoot, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
-  const response = await new Promise<Record<string, unknown>>((resolveResponse, reject) => {
-    let buffer = new Uint8Array(0);
-    const onData = (chunk: Buffer) => {
-      const next = new Uint8Array(buffer.length + chunk.length); next.set(buffer); next.set(chunk, buffer.length); buffer = next;
-      const separator = buffer.indexOf(58); if (separator < 1) return;
-      const size = Number.parseInt(Buffer.from(buffer.subarray(0, separator)).toString("ascii"), 10); const end = separator + 1 + size;
-      if (end > buffer.length) return;
-      child.stdout.off("data", onData); resolveResponse(JSON.parse(Buffer.from(buffer.subarray(separator + 1, end)).toString("utf8")) as Record<string, unknown>);
-    };
-    child.stdout.on("data", onData); child.once("error", reject);
-    child.stdin.write(encodeRpcMessage({ version: 1, requestId: randomUUID(), type: "session.create", payload: { conversationId: "conversation-1", workspacePath: desktopRoot } }));
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-session-mapping-"));
+  const fixture = join(desktopRoot, "test", "fixtures", "fake-opencode-serve.mjs");
+  const child = spawn(process.execPath, [tsxCli, join(desktopRoot, "runtime", "host.ts")], {
+    cwd: desktopRoot,
+    env: { ...process.env, COWORKANY_OPENCODE_PATH: fixture, OPENCODE_RUNTIME_DIR: workspace },
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
   });
-  child.stdin.end();
-  child.kill();
-  assert.equal(response.ok, true);
-  assert.equal((response.data as Record<string, unknown>).conversationId, "conversation-1");
-  assert.equal(typeof (response.data as Record<string, unknown>).sessionId, "string");
-  assert.equal((response.data as Record<string, unknown>).transport, "opencode-serve");
-  assert.equal((response.data as Record<string, unknown>).fullAccess, true);
+  try {
+    const response = await new Promise<Record<string, unknown>>((resolveResponse, reject) => {
+      let buffer = new Uint8Array(0);
+      const onData = (chunk: Buffer) => {
+        const next = new Uint8Array(buffer.length + chunk.length); next.set(buffer); next.set(chunk, buffer.length); buffer = next;
+        const separator = buffer.indexOf(58); if (separator < 1) return;
+        const size = Number.parseInt(Buffer.from(buffer.subarray(0, separator)).toString("ascii"), 10); const end = separator + 1 + size;
+        if (end > buffer.length) return;
+        child.stdout.off("data", onData); resolveResponse(JSON.parse(Buffer.from(buffer.subarray(separator + 1, end)).toString("utf8")) as Record<string, unknown>);
+      };
+      child.stdout.on("data", onData); child.once("error", reject);
+      child.stdin.write(encodeRpcMessage({ version: 1, requestId: randomUUID(), type: "session.create", payload: { conversationId: "conversation-1", workspacePath: desktopRoot } }));
+    });
+    assert.equal(response.ok, true);
+    assert.equal((response.data as Record<string, unknown>).conversationId, "conversation-1");
+    assert.equal(typeof (response.data as Record<string, unknown>).sessionId, "string");
+    assert.equal((response.data as Record<string, unknown>).transport, "opencode-serve");
+    assert.equal((response.data as Record<string, unknown>).fullAccess, true);
+  } finally {
+    child.stdin.end();
+    if (child.exitCode === null) child.kill();
+    child.stdout.destroy();
+    child.stderr.destroy();
+    await rm(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 });
 
 test("workflow-host reports the configured model when OpenCode usage omits the model", async () => {
