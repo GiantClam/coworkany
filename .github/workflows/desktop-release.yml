@@ -90,7 +90,7 @@ jobs:
           pnpm desktop:typecheck
           pnpm --filter @coworkany/desktop build:host
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node -e "const fs=require('node:fs'); fs.mkdirSync('apps/desktop/dist-runtime/skills',{recursive:true})"
+          node -e "const fs=require('node:fs'); const path=require('node:path'); const root='apps/desktop/dist-runtime/skills'; for (const id of ['ppt-master','dashi-ppt']) { fs.mkdirSync(path.join(root,id),{recursive:true}); fs.writeFileSync(path.join(root,id,'SKILL.md'),'# '+id+'\\n'); fs.writeFileSync(path.join(root,id+'.manifest.json'),'{}\\n'); }"
           pnpm --filter @coworkany/desktop build:agents
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm --filter @coworkany/desktop test:release
@@ -169,7 +169,7 @@ jobs:
         run: |
           pnpm desktop:typecheck
           pnpm --filter @coworkany/desktop build:host
-          node -e "const fs=require('node:fs'); fs.mkdirSync('apps/desktop/dist-runtime/skills',{recursive:true})"
+          node -e "const fs=require('node:fs'); const path=require('node:path'); const root='apps/desktop/dist-runtime/skills'; for (const id of ['ppt-master','dashi-ppt']) { fs.mkdirSync(path.join(root,id),{recursive:true}); fs.writeFileSync(path.join(root,id,'SKILL.md'),'# '+id+'\\n'); fs.writeFileSync(path.join(root,id+'.manifest.json'),'{}\\n'); }"
           pnpm --filter @coworkany/desktop build:agents
           pnpm --filter @coworkany/desktop test:release
           cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
