@@ -8,7 +8,7 @@
 
 ## macOS 产物
 
-正式 macOS DMG 和便携 ZIP 必须来自 GitHub Actions 的正式 Release，使用 Developer ID Application 签名并完成 Apple 公证。没有 Developer ID 的内部测试 ZIP 只用于受控测试，不属于公开 Release，也不构成对外分发授权。
+正式 macOS DMG 和便携 ZIP 必须来自 GitHub Actions 的正式 Release，使用 Developer ID Application 签名并完成 Apple 公证。没有 Developer ID 的内部测试 ZIP 可以挂在明确标注的内测 Draft/Prerelease 页面上，只用于受控测试，不构成对外分发授权。
 
 ## 随包 Runtime 与第三方内容
 
@@ -22,4 +22,3 @@ macOS 产物包含离线 Runtime。Runtime 内的 Node.js、Python、OpenCode、
 2. `SHA256SUMS` 校验通过，且产物来自本次构建。
 3. Runtime 的 `LICENSES.txt` 已随包提供，且 Runtime 来源允许再分发。
 4. 任何额外的商业、品牌、内容或第三方授权已单独取得并留档。
-

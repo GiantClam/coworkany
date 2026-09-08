@@ -9,6 +9,14 @@ on:
         description: "Existing version tag, for example v0.1.3 (must match all version files)"
         required: true
         type: string
+      macos_mode:
+        description: "macOS artifact mode"
+        required: true
+        default: internal
+        type: choice
+        options:
+          - internal
+          - release
 
 permissions:
   contents: read
@@ -25,6 +33,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
       commit: ${{ steps.commit.outputs.sha }}
+      macos_mode: ${{ steps.mode.outputs.macos_mode }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,6 +51,10 @@ jobs:
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
       - id: commit
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: mode
+        env:
+          MACOS_MODE_INPUT: ${{ inputs.macos_mode }}
+        run: echo "macos_mode=${MACOS_MODE_INPUT:-release}" >> "$GITHUB_OUTPUT"
       - name: Test release metadata and asset gates
         run: node --test scripts/desktop-release.test.mjs scripts/release-macos.test.mjs
 
@@ -97,6 +110,7 @@ jobs:
           ref: ${{ needs.version.outputs.commit }}
       - name: Check release configuration before building
         env:
+          MACOS_MODE: ${{ needs.version.outputs.macos_mode }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -107,13 +121,18 @@ jobs:
           COWORKANY_MAC_RUNTIME_SHA256: ${{ vars.COWORKANY_MAC_RUNTIME_SHA256 }}
         run: |
           test "$(uname -m)" = arm64
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID COWORKANY_MAC_RUNTIME_URL COWORKANY_MAC_RUNTIME_SHA256; do
+          for name in COWORKANY_MAC_RUNTIME_URL COWORKANY_MAC_RUNTIME_SHA256; do
             if [ -z "${!name}" ]; then echo "::error::Missing release configuration: $name"; exit 1; fi
           done
-          case "$APPLE_SIGNING_IDENTITY" in
-            "Developer ID Application:"*) ;;
-            *) echo "::error::APPLE_SIGNING_IDENTITY must be a Developer ID Application identity"; exit 1 ;;
-          esac
+          if [ "$MACOS_MODE" = release ]; then
+            for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              if [ -z "${!name}" ]; then echo "::error::Missing release configuration: $name"; exit 1; fi
+            done
+            case "$APPLE_SIGNING_IDENTITY" in
+              "Developer ID Application:"*) ;;
+              *) echo "::error::APPLE_SIGNING_IDENTITY must be a Developer ID Application identity"; exit 1 ;;
+            esac
+          fi
       - uses: pnpm/action-setup@v4
         with:
           version: 9.15.4
@@ -141,7 +160,14 @@ jobs:
           COWORKANY_MAC_RUNTIME_SHA256: ${{ vars.COWORKANY_MAC_RUNTIME_SHA256 }}
         run: python scripts/prepare-macos-release-runtime.py
       - name: Build app with all offline resources before signing
-        run: pnpm --filter @coworkany/desktop exec tauri build --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin --bundles app
+        env:
+          MACOS_MODE: ${{ needs.version.outputs.macos_mode }}
+        run: |
+          if [ "$MACOS_MODE" = internal ]; then
+            pnpm --filter @coworkany/desktop exec tauri build --no-sign --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin --bundles app
+          else
+            pnpm --filter @coworkany/desktop exec tauri build --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin --bundles app
+          fi
       - name: Sign, notarize and package macOS release
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -153,7 +179,13 @@ jobs:
           COWORKANY_RELEASE_VERSION: ${{ needs.version.outputs.version }}
           COWORKANY_MAC_APP_PATH: ${{ github.workspace }}/apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/CoworkAny.app
           COWORKANY_MAC_PORTABLE_OUTPUT: ${{ github.workspace }}/.artifacts/desktop-release
-        run: bash scripts/release-macos.sh
+          MACOS_MODE: ${{ needs.version.outputs.macos_mode }}
+        run: |
+          if [ "$MACOS_MODE" = internal ]; then
+            pnpm --filter @coworkany/desktop package:macos:internal
+          else
+            bash scripts/release-macos.sh
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-macos
@@ -183,13 +215,15 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
           RELEASE_COMMIT: ${{ needs.version.outputs.commit }}
-        run: node scripts/desktop-release-assets.mjs release-input release-output "$RELEASE_TAG" "$RELEASE_COMMIT"
+          RELEASE_MACOS_MODE: ${{ needs.version.outputs.macos_mode }}
+        run: node scripts/desktop-release-assets.mjs release-input release-output "$RELEASE_TAG" "$RELEASE_COMMIT" "$RELEASE_MACOS_MODE"
       - name: Create or resume a draft (never overwrite a published release)
         uses: actions/github-script@v7
         env:
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
           RELEASE_COMMIT: ${{ needs.version.outputs.commit }}
           RELEASE_PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          RELEASE_MACOS_MODE: ${{ needs.version.outputs.macos_mode }}
         with:
           script: |
             const tag = process.env.RELEASE_TAG;
@@ -203,7 +237,7 @@ jobs:
               release = (await github.rest.repos.createRelease({
                 ...context.repo, tag_name: tag, target_commitish: process.env.RELEASE_COMMIT,
                 name: `CoworkAny ${tag}`, draft: true, prerelease: process.env.RELEASE_PRERELEASE === 'true',
-                body: `${notes.data.body}\n\n## Desktop downloads\n- Windows x64: installer, normal ZIP, portable ZIP. Existing Windows signing/runtime policy applies; ZIP users also need the separate [Windows Runtime](https://github.com/GiantClam/coworkany/releases/tag/v0.1.0).\n- macOS Apple Silicon: signed and notarized DMG / portable ZIP, including offline runtimes. Intel Macs are not supported by these artifacts.\n- Verify downloads with SHA256SUMS; release-manifest.json records the exact source commit.\n\n## 授权说明\n- 当前仓库未声明公开开源许可证；下载此 Release 不自动授予修改、再分发、再许可或商业使用权，具体权限以项目所有者的明确书面授权为准。\n- macOS 正式产物使用 Developer ID Application 签名并完成 Apple 公证；内部测试 ZIP 不属于公开 Release。\n- macOS 离线 Runtime 的第三方许可证和版权信息随包内 LICENSES.txt 提供，使用者还需遵守所调用 Provider、模型、字体和技能的上游条款。\n- 完整说明见 [Release 授权说明](https://github.com/GiantClam/coworkany/blob/${tag}/docs/desktop/release-authorization.zh-CN.md)。\n\nBefore publishing this draft, complete the clean-machine checks in docs/desktop/macos-arm64-release.zh-CN.md.\n`
+                body: `${notes.data.body}\n\n## Desktop downloads\n- Windows x64: installer, normal ZIP, portable ZIP. Existing Windows signing/runtime policy applies; ZIP users also need the separate [Windows Runtime](https://github.com/GiantClam/coworkany/releases/tag/v0.1.0).\n- macOS Apple Silicon: ${process.env.RELEASE_MACOS_MODE === 'internal' ? 'internal-test portable ZIP (unsigned and not notarized)' : 'signed and notarized DMG / portable ZIP'}, including offline runtimes. Intel Macs are not supported by these artifacts.\n- Verify downloads with SHA256SUMS; release-manifest.json records the exact source commit and macOS mode.\n\n## 授权说明\n- 当前仓库未声明公开开源许可证；下载此 Release 不自动授予修改、再分发、再许可或商业使用权，具体权限以项目所有者的明确书面授权为准。\n- ${process.env.RELEASE_MACOS_MODE === 'internal' ? '本次 macOS 产物为内部测试 ZIP，不签名、不公证，不属于正式公开分发包。' : 'macOS 正式产物使用 Developer ID Application 签名并完成 Apple 公证。'}\n- macOS 离线 Runtime 的第三方许可证和版权信息随包内 LICENSES.txt 提供，使用者还需遵守所调用 Provider、模型、字体和技能的上游条款。\n- 完整说明见 [Release 授权说明](https://github.com/GiantClam/coworkany/blob/${tag}/docs/desktop/release-authorization.zh-CN.md)。\n\nBefore publishing this draft, complete the clean-machine checks in docs/desktop/macos-arm64-release.zh-CN.md.\n`
               })).data;
             }
             core.summary.addLink('Review release draft', release.html_url);

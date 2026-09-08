@@ -33,9 +33,9 @@ pnpm desktop:macos:internal
    git push --atomic origin main v0.1.3
    ```
 
-   首次启用发布机制时，必须先把包含 workflow 和脚本的 commit 合入默认分支，再推送版本 tag。预发布版本可使用 `v0.1.3-beta.1` 等 SemVer tag；Windows NSIS 的版本约束仍以 CI 实际结果为准。
+   首次启用发布机制时，必须先把包含 workflow 和脚本的 commit 合入默认分支，再推送版本 tag。预发布版本可使用 `v0.1.3-beta.1` 等 SemVer tag；Windows NSIS 的版本约束仍以 CI 实际结果为准。暂时没有 Apple Developer ID 时，可在 GitHub Actions 手动运行 `Desktop Release`，填写已有 tag（如 `v0.1.3`）并选择 `macos_mode=internal`；该模式只发布 macOS Apple Silicon 内测便携 ZIP，Runtime URL 和 SHA-256 仍必须配置。
 4. `version` job 验证不可变 tag 指向当前 commit、五处版本一致，并运行发布元数据与产物门禁。Windows job 运行桌面类型检查、release tests、Rust tests、Tauri 构建及普通/便携 ZIP 打包。
-5. macOS job 只在 arm64 runner 上运行：下载固定 URL 和 SHA-256 的批准版离线 Runtime，校验后把完整 Runtime 放入 `.app`，再签名、公证、staple 并生成 DMG 与便携 ZIP。
+5. macOS job 只在 arm64 runner 上运行：下载固定 URL 和 SHA-256 的批准版离线 Runtime，校验后把完整 Runtime 放入 `.app`。`macos_mode=release` 会签名、公证、staple 并生成 DMG 与便携 ZIP；`macos_mode=internal` 只生成不签名的内测便携 ZIP。
 6. `release` job 只有在两端成功后才整理产物、生成 `SHA256SUMS` 和 `release-manifest.json`，并上传到 Draft Release。维护者必须在干净 macOS 和 Windows 机器完成人工验证，再在 GitHub 中发布草稿。
 
 发布后不能复用同一个已公开 tag 或覆盖已公开 Release；修复必须递增版本并创建新 tag。
@@ -74,20 +74,21 @@ Runtime 必须允许随产品再分发、兼容 macOS 12+ 和 arm64，不能包�
 
 ## 产物与人工发布门禁
 
-Draft Release 应包含以下五个桌面产物，以及两个校验文件：
+正式模式 Draft Release 应包含以下五个桌面产物，以及两个校验文件；内测模式将 macOS 两个正式产物替换为一个内部便携 ZIP：
 
 ```text
 CoworkAny_<version>_x64-setup.exe
 CoworkAny-Windows-x64-normal.zip
 CoworkAny-Windows-x64-portable.zip
-CoworkAny-<version>-macOS-arm64.dmg
-CoworkAny-macOS-arm64-portable.zip
+CoworkAny-<version>-macOS-arm64.dmg                 # release 模式
+CoworkAny-macOS-arm64-portable.zip                  # release 模式
+CoworkAny-macOS-arm64-internal-portable.zip         # internal 模式
 SHA256SUMS
 release-manifest.json
 ```
 
 发布者在 Draft Release 页面下载并检查两平台产物：Windows 安装器/ZIP 能启动并完成基本功能；macOS 在干净 Apple Silicon 机器上通过 Gatekeeper、首次启动、离线 Runtime、首页、工作流、知识库、退出后子进程清理和便携目录验证。确认 `SHA256SUMS` 后再点击 Publish release。
 
-发布时必须在 Release Notes 保留[授权说明](release-authorization.zh-CN.md)：明确 CoworkAny 当前未声明公开开源许可证、正式 macOS 产物需要 Developer ID 与公证、内部测试 ZIP 不属于公开授权，以及随包 Runtime 的 `LICENSES.txt` 和第三方条款要求。
+发布时必须在 Release Notes 保留[授权说明](release-authorization.zh-CN.md)：明确 CoworkAny 当前未声明公开开源许可证、正式 macOS 产物需要 Developer ID 与公证、内部测试 ZIP 仅限受控测试，以及随包 Runtime 的 `LICENSES.txt` 和第三方条款要求。
 
 macOS 签名和公证流程参考 [Apple TN2206](https://developer.apple.com/library/archive/technotes/tn2206/_index.html) 与 [notarytool 文档](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)，GitHub Actions 运行机制参考 [GitHub Actions 文档](https://docs.github.com/en/actions)。本机制目前没有自动更新和 Intel 版本。

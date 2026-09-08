@@ -63,3 +63,14 @@ test("duplicate assets and non-commit refs cannot masquerade as a complete relea
   await assert.rejects(collectReleaseAssets(join(directory, "input"), join(directory, "output"), "v0.1.3", commit), /expected_once:.*:2/);
   await assert.rejects(collectReleaseAssets(join(directory, "input"), join(directory, "output"), "v0.1.3", "main"), /full_sha/);
 });
+
+test("internal macOS mode requires only the internal portable archive", async t => {
+  const directory = await fixture(t);
+  const input = join(directory, "input"), output = join(directory, "output");
+  await mkdir(input);
+  for (const name of [names[0], names[1], names[2], "CoworkAny-macOS-arm64-internal-portable.zip"]) await writeFile(join(input, name), name);
+  const manifest = await collectReleaseAssets(input, output, "v0.1.3", commit, "internal");
+  assert.equal(manifest.macosMode, "internal");
+  assert.equal(manifest.assets.length, 4);
+  assert.ok(manifest.assets.some(asset => asset.name.endsWith("internal-portable.zip")));
+});
