@@ -110,6 +110,10 @@ jobs:
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID COWORKANY_MAC_RUNTIME_URL COWORKANY_MAC_RUNTIME_SHA256; do
             if [ -z "${!name}" ]; then echo "::error::Missing release configuration: $name"; exit 1; fi
           done
+          case "$APPLE_SIGNING_IDENTITY" in
+            "Developer ID Application:"*) ;;
+            *) echo "::error::APPLE_SIGNING_IDENTITY must be a Developer ID Application identity"; exit 1 ;;
+          esac
       - uses: pnpm/action-setup@v4
         with:
           version: 9.15.4
