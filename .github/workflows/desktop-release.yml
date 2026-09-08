@@ -90,8 +90,7 @@ jobs:
           pnpm desktop:typecheck
           pnpm --filter @coworkany/desktop build:host
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          pnpm --filter @coworkany/desktop build:skills
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node -e "const fs=require('node:fs'); fs.mkdirSync('apps/desktop/dist-runtime/skills',{recursive:true})"
           pnpm --filter @coworkany/desktop build:agents
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm --filter @coworkany/desktop test:release
@@ -170,7 +169,7 @@ jobs:
         run: |
           pnpm desktop:typecheck
           pnpm --filter @coworkany/desktop build:host
-          pnpm --filter @coworkany/desktop build:skills
+          node -e "const fs=require('node:fs'); fs.mkdirSync('apps/desktop/dist-runtime/skills',{recursive:true})"
           pnpm --filter @coworkany/desktop build:agents
           pnpm --filter @coworkany/desktop test:release
           cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
