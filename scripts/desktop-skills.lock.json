@@ -5,12 +5,12 @@
     {
       "id": "ppt-master",
       "repo": "hugohe3/ppt-master",
-      "version": "6.3.0",
-      "commit": "d3d81fe3cf4cc642de225159586308bbe98eeb4d",
-      "branch": "v6.3.0",
+      "version": "main-2026-09-07",
+      "commit": "44d32733ff4180a32ab0c6a2fd062954168d8721",
+      "branch": "main",
       "skillPath": "skills/ppt-master",
       "stagingName": "ppt-master-acquire",
-      "directoryDigest": "69fd653c661804542d0af139e53033f597dbe89ecae4ac5baf5a0cd3532b7247"
+      "directoryDigest": "f6333101d6c0715c915542bc04a1f2b7f83eb6975fab93f7e9a3a8433c4211b2"
     },
     {
       "id": "dashi-ppt",
@@ -20,7 +20,7 @@
       "branch": "main",
       "skillPath": "skills/dashi-ppt",
       "stagingName": "dashi-ppt-acquire",
-      "directoryDigest": "b4b762f440f0dd90029157b551ae4d1b1997ed2cab8e25ea2eb6a8385f0c17f4"
+      "directoryDigest": "6ed05190a86a18c72a04eb83d35e458a04e4f5c093e9341fc9dab07e3c87de58"
     }
   ]
 }

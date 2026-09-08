@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { embeddingDescriptorPath, fontsAssetPath, isRuntimeReady, MANDATORY_RUNTIME_COMPONENTS, type BootstrapManifest } from "../runtime/bootstrap";
+import { desktopPlatform } from "../runtime/platform";
+import { shouldRepairRuntime } from "../runtime/runtime-gate";
 
 test("runtime readiness requires every mandatory component", () => {
   const base: BootstrapManifest = { schemaVersion: 1, source: "system", checkedAt: new Date(0).toISOString(), probes: [
@@ -37,8 +39,9 @@ test("runtime repair requires standard Python script semantics without generatin
 });
 
 test("runtime probes resolve the concrete font and embedding assets", () => {
-  assert.equal(fontsAssetPath("C:/CoworkAny/runtime/fonts"), join("C:/CoworkAny/runtime/fonts", "msyh.ttc"));
-  assert.equal(fontsAssetPath("C:/CoworkAny/runtime/fonts/msyh.ttc"), "C:/CoworkAny/runtime/fonts/msyh.ttc");
+  const fontAsset = desktopPlatform().fontAsset;
+  assert.equal(fontsAssetPath("C:/CoworkAny/runtime/fonts"), join("C:/CoworkAny/runtime/fonts", fontAsset));
+  assert.equal(fontsAssetPath(join("C:/CoworkAny/runtime/fonts", fontAsset)), join("C:/CoworkAny/runtime/fonts", fontAsset));
   assert.equal(embeddingDescriptorPath("C:/CoworkAny/runtime/embedding"), join("C:/CoworkAny/runtime/embedding", "local-hash-384-v1.json"));
   assert.equal(embeddingDescriptorPath("C:/CoworkAny/runtime/embedding/custom.json"), "C:/CoworkAny/runtime/embedding/custom.json");
 });
@@ -48,4 +51,10 @@ test("browser preview opens the desktop shell without a Tauri bootstrap", () => 
 
   assert.match(source, /if \(!isTauriBridgeAvailable\(\)\) \{[\s\S]*setRuntimeStatus\(locale === "zh" \? "浏览器预览模式 · Tauri 未连接"/);
   assert.match(source, /setRuntimeReady\(true\);[\s\S]*setShellReady\(true\);[\s\S]*return;/);
+});
+
+test("development runtime does not enter the signed macOS repair gate", () => {
+  assert.equal(shouldRepairRuntime({ ready: false, development: true }), false);
+  assert.equal(shouldRepairRuntime({ ready: false, development: false }), true);
+  assert.equal(shouldRepairRuntime({ ready: true, development: false }), false);
 });

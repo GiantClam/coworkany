@@ -41,6 +41,7 @@ import { NativeRunQuestions } from "./native-run-questions";
 import { isWorkbenchQuestionToolEvent } from "@coworkany/workbench-client";
 import { questionConversationForRoute, questionSessionIdForRoute } from "./question-session-route";
 import { isCurrentWorkflowRestore, type WorkflowRestoreToken } from "./workflow-restore-guard";
+import { shouldRepairRuntime } from "../runtime/runtime-gate";
 
 function escapeWriterHtml(value: string) {
   return value.replace(/[&<>\"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character] ?? character).replace(/\r?\n/g, "<br />");
@@ -4061,7 +4062,7 @@ export function App() {
          if (!state.integrity) { setRuntimePhase("error"); setRuntimeStatus("本地数据库需要修复"); return; }
          setRuntimePhase("runtime");
          setRuntimeStatus(locale === "zh" ? "正在检查运行时清单与本地组件…" : "Checking the runtime manifest and local components…");
-         const runtime = await tauriBridge.invoke<{ ready: boolean; paths?: { node?: string; opencode?: string; python?: string; host?: string; skills?: string; fonts?: string; lancedb?: string; embedding?: string } }>("runtime_probe");
+         const runtime = await tauriBridge.invoke<{ ready: boolean; development?: boolean; paths?: { node?: string; opencode?: string; python?: string; host?: string; skills?: string; fonts?: string; lancedb?: string; embedding?: string } }>("runtime_probe");
          setRuntimeStatus(locale === "zh" ? "正在验证 Node、OpenCode、Python 与本地索引依赖…" : "Verifying Node, OpenCode, Python, and local index dependencies…");
          if (migratedStored) {
            const selectedRuntime = { ...migratedStored.runtime, ...(runtime.paths?.node ? { nodePath: runtime.paths.node } : {}), ...(runtime.paths?.opencode ? { opencodePath: runtime.paths.opencode } : {}), ...(runtime.paths?.python ? { pythonPath: runtime.paths.python } : {}), ...(runtime.paths?.host ? { hostPath: runtime.paths.host } : {}), ...(runtime.paths?.skills ? { skillsPath: runtime.paths.skills } : {}), ...(runtime.paths?.fonts ? { fontsPath: runtime.paths.fonts } : {}), ...(runtime.paths?.lancedb ? { lancedbPath: runtime.paths.lancedb } : {}), ...(runtime.paths?.embedding ? { embeddingPath: runtime.paths.embedding } : {}) };
@@ -4073,7 +4074,7 @@ export function App() {
              void tauriBridge.invoke("write_config", { value: activeConfig }).catch(() => undefined);
            }
          }
-        if (!runtime.ready) {
+        if (shouldRepairRuntime(runtime)) {
           setRuntimePhase("repair");
           setRuntimeStatus(locale === "zh" ? "检测到运行环境缺失，正在准备运行环境…" : "Required runtime is missing; preparing the local runtime…");
           let repairPromise = runtimeRepairInFlightRef.current;
@@ -4089,6 +4090,9 @@ export function App() {
           await repairPromise;
           const repaired = await tauriBridge.invoke<{ ready: boolean }>("runtime_probe");
           if (!repaired.ready) throw new Error("runtime_repair_incomplete");
+        }
+        if (!runtime.ready && runtime.development) {
+          setRuntimeStatus(locale === "zh" ? "开发运行环境就绪（使用本机组件）" : "Development runtime ready (using local components)");
         }
         setRuntimeStatus(health.status === "ok" ? "运行环境就绪" : "运行环境需要修复");
         setRuntimePhase("ready");
