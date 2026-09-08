@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type SetStateAction } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type SetStateAction } from "react";
 import { Copy as CopyIcon, Eye, FileText, ImagePlus, Maximize2, Trash2 } from "lucide-react";
 import { AudioPlayer, Image, MessageResponse, Queue, Suggestion, Suggestions, buildOnlineAgentGroups, formatWorkbenchModelLabel, getWorkbenchTaskStatusLabel, isWorkbenchTaskActive, isWorkbenchTaskRetryable, normalizeWorkbenchTaskStatus, resolveWorkbenchMediaFeature, workbenchSessionScope, WORKBENCH_HOME_COPY, WORKBENCH_HOME_GROUPS, WORKBENCH_MEDIA_FEATURES, WORKBENCH_MESSAGE_FRAME, WORKBENCH_ROUTE_MANIFEST, WORKBENCH_THEME, WORKBENCH_WRITER_CONTENT_TYPES, WORKBENCH_WRITER_LANGUAGES, WORKBENCH_WRITER_MODES, WORKBENCH_WRITER_PLATFORMS, WORKBENCH_WRITER_QUICK_PROMPTS, WORKFLOW_PALETTE_DRAG_EVENT, WORKFLOW_PALETTE_DROP_EVENT, WorkbenchAgentDirectory, WorkbenchCapabilityCenter, WorkbenchMessageSurface, WorkbenchPromptInput, WorkbenchRouteIcon, WorkbenchShell, WorkbenchTask, WorkbenchWorkflowCanvas, WorkbenchWorkflowDirectory, WorkbenchWorkflowParameterFields, type WorkbenchAgentDirectoryGroup, type WorkbenchCapabilityCenterGroup, type WorkbenchMediaFeatureId, type WorkbenchWorkflowDirectoryAction, type WorkbenchWorkflowDirectoryRun, type WorkbenchWorkflowDirectoryTemplate, type WorkbenchWorkflowDirectoryWorkflow } from "@coworkany/workbench-ui";
 import { MessageAction } from "@coworkany/workbench-ui";
@@ -175,8 +175,8 @@ const workbenchThemeStyle = {
   "--wb-sidebar-highlight": WORKBENCH_THEME.light.sidebarPrimary,
   "--wb-grid-line": WORKBENCH_THEME.light.gridLine,
   "--wb-dashboard-grid-line": WORKBENCH_THEME.light.dashboardGridLine,
-  "--wb-body-font": WORKBENCH_THEME.typography.body,
-  "--wb-display-font": WORKBENCH_THEME.typography.display,
+  "--wb-body-font": `var(--desktop-body-font, ${WORKBENCH_THEME.typography.body})`,
+  "--wb-display-font": `var(--desktop-display-font, ${WORKBENCH_THEME.typography.display})`,
   "--wb-message-max-width": WORKBENCH_MESSAGE_FRAME.maxWidth,
   "--wb-message-padding": WORKBENCH_MESSAGE_FRAME.rowPadding,
   "--wb-message-gap": WORKBENCH_MESSAGE_FRAME.gap,
@@ -3095,6 +3095,7 @@ function DesktopSettingsPanel({
 }
 
 export function App() {
+  const workspaceRef = useRef<HTMLElement>(null);
   const [activePath, setActivePath] = useState(() => window.location.pathname === "/" ? "/dashboard" : `${window.location.pathname}${window.location.search}`);
   const activePathRef = useRef(activePath);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -3194,6 +3195,11 @@ export function App() {
   const menuAgentIdsRef = useRef<string[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  useLayoutEffect(() => {
+    // The shell survives navigation; a new page must not inherit its scroll offset.
+    const scrollContainer = workspaceRef.current?.parentElement;
+    if (scrollContainer) scrollContainer.scrollTop = 0;
+  }, [activePath, settingsOpen, shellReady]);
   const [config, setConfig] = useState<DesktopConfig>({ schemaVersion: 1, locale: "auto", workspacePath: "", provider: { id: "local", source: "local", model: "", baseUrl: "http://127.0.0.1:11434/v1" }, runtime: { source: "system" } });
   const setSkillId = (value: SkillId) => {
     setSkillIdState(value);
@@ -5417,7 +5423,7 @@ export function App() {
       {showTopTip ? <DesktopTopTip message={topTipMessage} locale={locale} onDismiss={() => setDismissedTopTip(topTipMessage)} /> : null}
       <DesktopMediaHistoryContext.Provider value={mediaHistory}>
       <WorkbenchShell navItems={sidebarRoutes.map((item) => ({ ...item, icon: <RouteIcon name={item.iconKey} /> }))} activePath={activePath} onNavigate={workbenchClient.navigation.go} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((current) => !current)} locale={locale} onLocaleChange={(nextLocale) => { if (nextLocale !== locale) setLocalePreference(nextLocale); }} onLocaleToggle={toggleLocale} localLabel={copy.localWorkspace} status={<div className="wb-runtime-status" data-runtime-status={runtimeStatus} title={localizeRuntimeStatus(runtimeStatus, locale)}><span className="wb-runtime-status-icon"><WorkbenchRouteIcon name="runtime" size={15} /></span><span className="wb-runtime-status-copy"><span className="wb-runtime-status-label">{localizeRuntimeStatus(runtimeStatus, locale)}</span><span className="muted">{locale === "zh" ? "本地运行环境" : "Local runtime"}</span></span></div>} sessions={conversations.map((conversation) => ({ path: conversationRoute(conversation), title: conversation.title, updatedAt: formatDateTime(conversation.updated_at, locale), agentId: conversation.agent_id ?? undefined, status: runs.some((run) => run.conversation_id === conversation.id && run.status === "running") ? "running" as const : undefined }))} sessionsLabel={conversationScope === "entry:writer" ? (locale === "zh" ? "写作会话" : "Writing sessions") : conversationScope === "entry:image-assistant" ? (locale === "zh" ? "图片助手会话" : "Image assistant sessions") : locale === "zh" ? "最近会话" : "Recent chats"} activeSessionAgentId={conversationScope} activeSessionAgentLabel={activeAgentCard?.title ?? activeChatRoute.label} newSessionLabel={locale === "zh" ? "新建会话" : "New chat"} onNewSession={() => void startNewConversation()}>
-      <section className={`workspace ${selected.path === "/dashboard" ? "workspace-home" : ""} ${immersivePage ? "workspace-immersive" : ""}`.trim()}>
+      <section ref={workspaceRef} className={`workspace ${selected.path === "/dashboard" ? "workspace-home" : ""} ${immersivePage ? "workspace-immersive" : ""}`.trim()}>
         {settingsOpen && <DesktopSettingsPanel config={config} locale={locale} localePreference={localePreference} copy={copy} onConfigChange={(nextConfig) => { void persistSettingsConfig(nextConfig); }} onDiscoverModels={discoverProviderModels} onLocalePreferenceChange={updateSettingsLocalePreference} onClose={() => { void persistSettingsConfig({ ...configRef.current, locale: localePreference }, true); if (selected.path === "/dashboard/settings") workbenchClient.navigation.go("/dashboard"); setSettingsOpen(false); }} onSave={() => void saveSettings()} onRebuildVault={() => void rebuildVaultIndex()} onPickDirectory={(kind) => void pickDirectory(kind)} onRepairRuntime={() => { setRunStatus(locale === "zh" ? "正在导入离线运行时…" : "Importing offline runtime…"); void tauriBridge.invoke("repair_runtime", { options: config.offlineRuntimeZipPath ? { offlineZip: config.offlineRuntimeZipPath } : undefined }).then(() => setRunStatus(locale === "zh" ? "已导入离线运行时并完成复检" : "Offline runtime imported and rechecked")).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "离线运行时导入失败" : "Offline runtime import failed"))); }} onExportDiagnostics={() => { setRunStatus(locale === "zh" ? "正在导出诊断包…" : "Exporting diagnostics…"); void tauriBridge.invoke<{ path: string }>("export_diagnostics").then((result) => setRunStatus(locale === "zh" ? `诊断包已导出：${result.path}` : `Diagnostics exported: ${result.path}`)).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "诊断包导出失败" : "Diagnostics export failed"))); }} status={runStatus} />}
            {isHomeRoute ? <>
           <div className="home-shell"><div className="home-page-shell"><header className="home-topbar"><div className="home-topbar-status"><span className="public-signal" aria-hidden="true" /><span>{homeCopy.workspaceReady}</span></div><button type="button" className="home-credits-link" onClick={() => workbenchClient.navigation.go("/dashboard/tasks")}><span className="home-credits-icon"><WorkbenchRouteIcon name="sparkles" size={14} /></span><span>{homeCopy.viewUsage}</span><WorkbenchRouteIcon name="arrowUpRight" size={15} /></button></header><main className="home-main"><section className="home-welcome"><div className="home-welcome-kicker">COWORKANY WORKSPACE</div><h1>{homeCopy.welcomePrefix}{homeCopy.welcomeDefaultName}<span className="home-welcome-mark" aria-hidden="true">✦</span></h1><p>{homeCopy.welcomeSubtitle}</p></section>
