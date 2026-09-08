@@ -17,6 +17,14 @@ on:
         options:
           - internal
           - release
+      runtime_url:
+        description: "Optional fixed macOS arm64 Runtime tar.gz URL; overrides repository variable"
+        required: false
+        type: string
+      runtime_sha256:
+        description: "SHA-256 for runtime_url"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -119,7 +127,11 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           COWORKANY_MAC_RUNTIME_URL: ${{ vars.COWORKANY_MAC_RUNTIME_URL }}
           COWORKANY_MAC_RUNTIME_SHA256: ${{ vars.COWORKANY_MAC_RUNTIME_SHA256 }}
+          RUNTIME_URL_INPUT: ${{ inputs.runtime_url }}
+          RUNTIME_SHA256_INPUT: ${{ inputs.runtime_sha256 }}
         run: |
+          COWORKANY_MAC_RUNTIME_URL="${RUNTIME_URL_INPUT:-$COWORKANY_MAC_RUNTIME_URL}"
+          COWORKANY_MAC_RUNTIME_SHA256="${RUNTIME_SHA256_INPUT:-$COWORKANY_MAC_RUNTIME_SHA256}"
           test "$(uname -m)" = arm64
           for name in COWORKANY_MAC_RUNTIME_URL COWORKANY_MAC_RUNTIME_SHA256; do
             if [ -z "${!name}" ]; then echo "::error::Missing release configuration: $name"; exit 1; fi
@@ -156,8 +168,8 @@ jobs:
           cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
       - name: Fetch approved relocatable runtimes and verify SHA-256
         env:
-          COWORKANY_MAC_RUNTIME_URL: ${{ vars.COWORKANY_MAC_RUNTIME_URL }}
-          COWORKANY_MAC_RUNTIME_SHA256: ${{ vars.COWORKANY_MAC_RUNTIME_SHA256 }}
+          COWORKANY_MAC_RUNTIME_URL: ${{ inputs.runtime_url || vars.COWORKANY_MAC_RUNTIME_URL }}
+          COWORKANY_MAC_RUNTIME_SHA256: ${{ inputs.runtime_sha256 || vars.COWORKANY_MAC_RUNTIME_SHA256 }}
         run: python scripts/prepare-macos-release-runtime.py
       - name: Build app with all offline resources before signing
         env:

@@ -33,7 +33,7 @@ pnpm desktop:macos:internal
    git push --atomic origin main v0.1.3
    ```
 
-   首次启用发布机制时，必须先把包含 workflow 和脚本的 commit 合入默认分支，再推送版本 tag。预发布版本可使用 `v0.1.3-beta.1` 等 SemVer tag；Windows NSIS 的版本约束仍以 CI 实际结果为准。暂时没有 Apple Developer ID 时，可在 GitHub Actions 手动运行 `Desktop Release`，填写已有 tag（如 `v0.1.3`）并选择 `macos_mode=internal`；该模式只发布 macOS Apple Silicon 内测便携 ZIP，Runtime URL 和 SHA-256 仍必须配置。
+   首次启用发布机制时，必须先把包含 workflow 和脚本的 commit 合入默认分支，再推送版本 tag。预发布版本可使用 `v0.1.3-beta.1` 等 SemVer tag；Windows NSIS 的版本约束仍以 CI 实际结果为准。暂时没有 Apple Developer ID 时，可在 GitHub Actions 手动运行 `Desktop Release`，填写已有 tag（如 `v0.1.3`）并选择 `macos_mode=internal`；可同时填写 `runtime_url` 与 `runtime_sha256` 作为一次性 Runtime 来源，覆盖仓库变量。
 4. `version` job 验证不可变 tag 指向当前 commit、五处版本一致，并运行发布元数据与产物门禁。Windows job 运行桌面类型检查、release tests、Rust tests、Tauri 构建及普通/便携 ZIP 打包。
 5. macOS job 只在 arm64 runner 上运行：下载固定 URL 和 SHA-256 的批准版离线 Runtime，校验后把完整 Runtime 放入 `.app`。`macos_mode=release` 会签名、公证、staple 并生成 DMG 与便携 ZIP；`macos_mode=internal` 只生成不签名的内测便携 ZIP。
 6. `release` job 只有在两端成功后才整理产物、生成 `SHA256SUMS` 和 `release-manifest.json`，并上传到 Draft Release。维护者必须在干净 macOS 和 Windows 机器完成人工验证，再在 GitHub 中发布草稿。
