@@ -4,16 +4,27 @@ on:
   pull_request:
     paths:
       - "apps/desktop/**"
+      - "packages/**"
+      - "content/**"
+      - "package.json"
+      - "scripts/desktop-release*.mjs"
+      - "scripts/release-macos*"
+      - "scripts/macos-release.entitlements.plist"
+      - "scripts/prepare-macos-release-runtime*"
       - "scripts/generate-macos-icon.mjs"
       - "scripts/package-macos-portable.mjs"
       - "scripts/stage-macos-desktop-runtime.mjs"
       - ".github/workflows/desktop-macos.yml"
+      - ".github/workflows/desktop-release.yml"
       - "pnpm-lock.yaml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   validate:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +46,8 @@ jobs:
           pnpm desktop:test
 
       - name: Validate macOS Rust target
+        env:
+          TAURI_CONFIG: '{"bundle":{"resources":[],"icon":["icons/coworkany-icon.png"]}}'
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 
       - name: Parse macOS release scripts
@@ -42,3 +55,6 @@ jobs:
           node --check scripts/generate-macos-icon.mjs
           node --check scripts/stage-macos-desktop-runtime.mjs
           node --check scripts/package-macos-portable.mjs
+          bash -n scripts/release-macos.sh
+          node --test scripts/desktop-release.test.mjs scripts/release-macos.test.mjs
+          python3 scripts/prepare-macos-release-runtime.test.py

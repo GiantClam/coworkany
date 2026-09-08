@@ -1,66 +1,81 @@
-# macOS Apple Silicon 发布说明
+# 桌面端 Release 发布机制
 
-本文档定义 CoworkAny 桌面端的首个 macOS 发布 profile：`macOS 12+`、`Apple Silicon（arm64）`、官网分发的签名 DMG 和便携 ZIP。不包含 Intel Mac、Mac App Store 和自动更新。
+桌面端通过 [.github/workflows/desktop-release.yml](../../.github/workflows/desktop-release.yml) 发布。推送 `vX.Y.Z` tag 后，GitHub Actions 会并行构建 Windows x64（`windows-2022`）和 macOS Apple Silicon（`macos-15`、arm64），两端成功后创建或恢复 GitHub Draft Release。也可以用 `workflow_dispatch` 输入一个已有 tag 重试；已公开的 Release 不会被覆盖。
 
-## 一套代码、两套平台资源
+macOS profile 为 `macOS 12+`、Apple Silicon（arm64）、官网分发的签名并公证 DMG 和便携 ZIP。不包含 Intel Mac、Mac App Store、自动更新或本轮新增的 Windows Authenticode 签名。Windows 保留现有安装器、ZIP 和独立 Runtime 策略。
 
-桌面 UI、配置、工作流和本地 Host 继续复用同一套 TypeScript/Rust 代码。平台差异集中在 `runtime/platform.ts` 和 `src-tauri/src/platform.rs`：Windows 使用 `.exe` 与 `%LOCALAPPDATA%`，macOS 使用 Unix 可执行文件与 `~/Library/Application Support/CoworkAny`。
+## 发布流程
 
-macOS 的运行时必须在签名之前放进 `CoworkAny.app` 资源目录；应用运行时不会下载或替换其可执行文件。这样签名、Gatekeeper 和公证的完整性边界不会被破坏。
+1. 在准备发布的 commit 上同步五处版本号：`package.json`、`apps/desktop/package.json`、`apps/desktop/src-tauri/tauri.conf.json`、`apps/desktop/src-tauri/Cargo.toml` 和 `apps/desktop/src-tauri/Cargo.lock`。
+2. 用版本脚本更新并检查版本。`--set` 接受不带 `v` 的 SemVer；`--check` 接受带 `v` 的 tag：
 
-## 构建前提
+   ```bash
+   pnpm desktop:release:version --set 0.1.3
+   pnpm desktop:release:version --check v0.1.3
+   ```
 
-在 Apple Silicon Mac 上安装 Xcode Command Line Tools、Rust、Node.js 和 pnpm，然后执行：
+3. 提交版本变更，再创建并推送 tag：
 
-```bash
-pnpm install --frozen-lockfile
-export COWORKANY_MAC_NODE_RUNTIME_DIR="/path/to/prepared/node-runtime"
-export COWORKANY_MAC_OPENCODE_RUNTIME_DIR="/path/to/prepared/opencode-runtime"
-export COWORKANY_MAC_PYTHON_RUNTIME_DIR="/path/to/prepared/python-runtime"
-export COWORKANY_MAC_FONT_PATH="/path/to/NotoSansCJKsc-Regular.otf"
-pnpm desktop:macos:build
-```
+   ```bash
+   git add package.json apps/desktop/package.json apps/desktop/src-tauri/tauri.conf.json apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock
+   git commit -m "Prepare CoworkAny 0.1.3 release"
+   git tag -a v0.1.3 -m "CoworkAny 0.1.3"
+   git push --atomic origin main v0.1.3
+   ```
 
-`build:runtime:macos` 会拒绝在非 Darwin arm64 主机执行，并验证 LanceDB 的 `@lancedb/lancedb-darwin-arm64` 原生模块。三个 runtime 目录必须分别直接包含 `node`、`opencode` 和 `python3`，且包含它们所需的动态库、标准库与资源；不能只复制系统上的单个可执行文件。请只提供已获许可、可随产品再分发且已通过 macOS 签名校验的资源。
+   首次启用发布机制时，必须先把包含 workflow 和脚本的 commit 合入默认分支，再推送版本 tag。预发布版本可使用 `v0.1.3-beta.1` 等 SemVer tag；Windows NSIS 的版本约束仍以 CI 实际结果为准。
+4. `version` job 验证不可变 tag 指向当前 commit、五处版本一致，并运行发布元数据与产物门禁。Windows job 运行桌面类型检查、release tests、Rust tests、Tauri 构建及普通/便携 ZIP 打包。
+5. macOS job 只在 arm64 runner 上运行：下载固定 URL 和 SHA-256 的批准版离线 Runtime，校验后把完整 Runtime 放入 `.app`，再签名、公证、staple 并生成 DMG 与便携 ZIP。
+6. `release` job 只有在两端成功后才整理产物、生成 `SHA256SUMS` 和 `release-manifest.json`，并上传到 Draft Release。维护者必须在干净 macOS 和 Windows 机器完成人工验证，再在 GitHub 中发布草稿。
 
-## 签名、公证与发布
+发布后不能复用同一个已公开 tag 或覆盖已公开 Release；修复必须递增版本并创建新 tag。
 
-构建命令产出 `.app` 和 `.dmg`。发布前在干净的 Apple Silicon 测试机完成以下步骤：
+## macOS CI 配置
 
-1. 使用 Developer ID Application 证书签名 `.app` 内所有嵌套可执行文件、Framework 与主应用；不允许事后写入 app bundle。
-2. 用 `codesign --verify --deep --strict --verbose=2 CoworkAny.app` 验证签名。
-3. 提交 DMG 或 ZIP 到 Apple notarization，等待成功后 stapler 装订票据。
-4. 在无开发环境的新用户帐户中验证首次启动、工作流、知识库、退出后子进程清理与 Gatekeeper。
+在仓库 Settings → Secrets and variables → Actions 中配置以下一次性 secrets。CI 不从仓库文件读取证书或凭据：
 
-证书标识、notary 凭据和任何 API Key 只能从 CI 密钥管理或本机钥匙串读取，不能写入仓库或应用配置。
+| 类型 | 名称 | 内容 |
+| --- | --- | --- |
+| Secret | `APPLE_CERTIFICATE` | Developer ID Application `.p12` 的 base64 内容 |
+| Secret | `APPLE_CERTIFICATE_PASSWORD` | `.p12` 密码 |
+| Secret | `APPLE_SIGNING_IDENTITY` | Developer ID Application 证书身份 |
+| Secret | `APPLE_ID` | Apple notarization 账号 |
+| Secret | `APPLE_PASSWORD` | Apple app-specific password |
+| Secret | `APPLE_TEAM_ID` | Apple Team ID |
 
-## 便携 ZIP
+同时配置以下 repository variables。Runtime 地址必须是 HTTPS 的固定 tar.gz 地址，SHA-256 必须是对应归档的固定 digest：
 
-在签名和公证完成的 `.app` 上运行：
+| 类型 | 名称 | 内容 |
+| --- | --- | --- |
+| Variable | `COWORKANY_MAC_RUNTIME_URL` | 批准版 macOS arm64 Runtime tar.gz 地址 |
+| Variable | `COWORKANY_MAC_RUNTIME_SHA256` | 64 位十六进制 SHA-256 |
 
-```bash
-pnpm desktop:macos:portable
-```
-
-产物结构如下，`CoworkAny Data` 位于 `.app` 外部，因此用户数据变动不会使签名失效：
+Runtime 归档根目录必须包含以下文件，并在 `node`、`opencode`、`python` 目录中带齐所需 dylib、标准库和资源：
 
 ```text
-CoworkAny-macOS-arm64-portable/
-├── CoworkAny.app
-├── CoworkAny Data/
-└── portable.flag
+node/node
+opencode/opencode
+python/python3
+fonts/NotoSansCJKsc-Regular.otf
+LICENSES.txt
 ```
 
-便携版移动文件夹后会恢复包内默认工作区；用户显式选择的外部工作区不会被改写。首次运行仍可能受到 Gatekeeper 隔离属性影响，应从已公证的 DMG/ZIP 分发，不应指导用户绕过系统安全提示。
+Runtime 必须允许随产品再分发、兼容 macOS 12+ 和 arm64，不能包含 API key。CI 固定使用 URL 与 digest 指向的批准版 Runtime，避免下载 `latest` 造成不可复现构建；不能只提供系统单文件可执行程序。
 
-## 本地验证命令
+## 产物与人工发布门禁
 
-```bash
-pnpm desktop:typecheck
-pnpm desktop:test
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
-pnpm desktop:macos:build
-pnpm desktop:macos:portable
+Draft Release 应包含以下五个桌面产物，以及两个校验文件：
+
+```text
+CoworkAny_<version>_x64-setup.exe
+CoworkAny-Windows-x64-normal.zip
+CoworkAny-Windows-x64-portable.zip
+CoworkAny-<version>-macOS-arm64.dmg
+CoworkAny-macOS-arm64-portable.zip
+SHA256SUMS
+release-manifest.json
 ```
 
-Windows 发布仍使用原有 `pnpm tauri:build` 和 PowerShell 打包脚本；两条发布链路共享功能代码，但各自打入并校验对应平台的二进制资源。
+发布者在 Draft Release 页面下载并检查两平台产物：Windows 安装器/ZIP 能启动并完成基本功能；macOS 在干净 Apple Silicon 机器上通过 Gatekeeper、首次启动、离线 Runtime、首页、工作流、知识库、退出后子进程清理和便携目录验证。确认 `SHA256SUMS` 后再点击 Publish release。
+
+macOS 签名和公证流程参考 [Apple TN2206](https://developer.apple.com/library/archive/technotes/tn2206/_index.html) 与 [notarytool 文档](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)，GitHub Actions 运行机制参考 [GitHub Actions 文档](https://docs.github.com/en/actions)。本机制目前没有自动更新和 Intel 版本。

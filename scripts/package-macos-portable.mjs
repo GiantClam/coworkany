@@ -1,4 +1,4 @@
-import { access, cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { execFile } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -17,7 +17,9 @@ await access(app, constants.F_OK).catch(() => { throw new Error(`macos_app_bundl
 await rm(stage, { recursive: true, force: true });
 await rm(archive, { force: true });
 await mkdir(stage, { recursive: true });
-await cp(app, join(stage, "CoworkAny.app"), { recursive: true, dereference: true });
+// Preserve signed bundle symlinks and extended attributes, including notarization data.
+await promisify(execFile)("ditto", [app, join(stage, "CoworkAny.app")]);
+await promisify(execFile)("codesign", ["--verify", "--deep", "--strict", join(stage, "CoworkAny.app")]);
 await mkdir(join(stage, "CoworkAny Data"), { recursive: true });
 await writeFile(join(stage, "portable.flag"), "", "utf8");
 await writeFile(join(stage, "README.txt"), "Keep CoworkAny.app, CoworkAny Data, and portable.flag together. Do not store CoworkAny Data inside CoworkAny.app.\n", "utf8");

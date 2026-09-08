@@ -1320,7 +1320,7 @@ fn adjacent_instance_lock_path(data_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_runtime_executable, is_default_portable_text_config, is_usable_desktop_config, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_runtime_executable, is_default_portable_text_config, is_usable_desktop_config, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -1343,9 +1343,10 @@ mod tests {
     fn portable_config_migrates_a_misplaced_root_config_only_over_the_first_run_default() {
         let root = std::env::temp_dir().join(format!("coworkany-portable-config-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("data")).unwrap();
+        let portable_data = platform::portable_data_directory();
+        fs::create_dir_all(root.join(portable_data)).unwrap();
         fs::write(root.join("portable.flag"), b"").unwrap();
-        let mut portable_default = config::default_config(&root.join("data"));
+        let mut portable_default = config::default_config(&root.join(portable_data));
         portable_default["providers"] = serde_json::json!({
             "image-main": {
                 "id": "image-main",
@@ -1354,7 +1355,7 @@ mod tests {
                 "model": "seedream-5"
             }
         });
-        config::write(&root.join("data/config.json"), &portable_default).unwrap();
+        config::write(&root.join(portable_data).join("config.json"), &portable_default).unwrap();
         let mut imported = config::default_config(&root);
         imported["provider"]["id"] = serde_json::json!("text-main");
         imported["provider"]["model"] = serde_json::json!("deepseek-v4-flash");
@@ -1371,10 +1372,10 @@ mod tests {
         imported["defaults"] = serde_json::json!({ "text": "text-main" });
         config::write(&root.join("config.json"), &imported).unwrap();
 
-        assert!(is_default_portable_text_config(&config::read(&root.join("data/config.json"), &root.join("data")).unwrap()));
+        assert!(is_default_portable_text_config(&config::read(&root.join(portable_data).join("config.json"), &root.join(portable_data)).unwrap()));
         assert!(is_usable_desktop_config(&imported));
         assert!(migrate_portable_root_config(&root).unwrap());
-        let migrated = config::read(&root.join("data/config.json"), &root.join("data")).unwrap();
+        let migrated = config::read(&root.join(portable_data).join("config.json"), &root.join(portable_data)).unwrap();
         assert_eq!(migrated["provider"]["model"], "deepseek-v4-flash");
         assert_eq!(migrated["provider"]["models"][1], "deepseek-chat");
         assert!(migrated["providers"]["image-main"].is_object());
@@ -1384,22 +1385,24 @@ mod tests {
 
         let mut existing = migrated.clone();
         existing["provider"]["model"] = serde_json::json!("keep-this-model");
-        config::write(&root.join("data/config.json"), &existing).unwrap();
+        config::write(&root.join(portable_data).join("config.json"), &existing).unwrap();
         assert!(!migrate_portable_root_config(&root).unwrap());
-        assert_eq!(config::read(&root.join("data/config.json"), &root.join("data")).unwrap()["provider"]["model"], "keep-this-model");
+        assert_eq!(config::read(&root.join(portable_data).join("config.json"), &root.join(portable_data)).unwrap()["provider"]["model"], "keep-this-model");
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn portable_default_workspace_moves_with_the_current_package() {
         let base = std::env::temp_dir().join(format!("coworkany-portable-workspace-{}", std::process::id()));
-        let root = base.join("desktop-release-gray-20260826").join("CoworkAny-Windows-x64-portable");
-        let stale = base.join("desktop-release-gray-20260824").join("CoworkAny-Windows-x64-portable").join("CoworkAny-Windows-x64-portable").join("data").join("projects");
+        let package_name = if cfg!(target_os = "windows") { "CoworkAny-Windows-x64-portable" } else { "CoworkAny-macOS-arm64-portable" };
+        let data_name = platform::portable_data_directory();
+        let root = base.join("desktop-release-gray-20260826").join(package_name);
+        let stale = base.join("desktop-release-gray-20260824").join(package_name).join(package_name).join(data_name).join("projects");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("portable.flag"), b"").unwrap();
-        assert_eq!(portable_default_workspace_path(&root, &stale), Some(root.join("data").join("projects")));
-        assert_eq!(portable_default_workspace_path(&root, &root.join("data").join("projects")), None);
+        assert_eq!(portable_default_workspace_path(&root, &stale), Some(root.join(data_name).join("projects")));
+        assert_eq!(portable_default_workspace_path(&root, &root.join(data_name).join("projects")), None);
         assert_eq!(portable_default_workspace_path(&root, Path::new(r"D:\work\marketing")), None);
         let _ = fs::remove_dir_all(base);
     }
@@ -1494,8 +1497,12 @@ mod tests {
         let executable = bin.join("opencode.exe");
         fs::write(&executable, b"fixture").unwrap();
         let candidates = resolve_windows_command_shim(root.join("opencode.cmd"));
-        assert!(candidates.iter().any(|candidate| candidate == &executable));
-        assert_eq!(candidates.iter().find(|candidate| candidate.is_file()), Some(&executable));
+        if cfg!(windows) {
+            assert!(candidates.iter().any(|candidate| candidate == &executable));
+            assert_eq!(candidates.iter().find(|candidate| candidate.is_file()), Some(&executable));
+        } else {
+            assert_eq!(candidates, vec![root.join("opencode.cmd")]);
+        }
         let _ = fs::remove_dir_all(root);
     }
 

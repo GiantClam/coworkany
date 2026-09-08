@@ -1,0 +1,213 @@
+name: Desktop Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing version tag, for example v0.1.3 (must match all version files)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      commit: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate immutable tag and matching versions
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          node scripts/desktop-release-version.mjs --check "$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+      - id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Test release metadata and asset gates
+        run: node --test scripts/desktop-release.test.mjs scripts/release-macos.test.mjs
+
+  windows:
+    needs: version
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Validate Windows application
+        env:
+          TAURI_CONFIG: '{"bundle":{"resources":[]}}'
+        run: |
+          pnpm desktop:typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter @coworkany/desktop test:release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build Windows installer
+        run: pnpm tauri:build
+      - name: Package Windows normal and portable archives
+        run: |
+          & scripts/package-desktop-zip.ps1
+          & scripts/package-desktop-zip.ps1 -Portable
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+            .artifacts/desktop-release/CoworkAny-Windows-x64-*.zip
+
+  macos:
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+      - name: Check release configuration before building
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          COWORKANY_MAC_RUNTIME_URL: ${{ vars.COWORKANY_MAC_RUNTIME_URL }}
+          COWORKANY_MAC_RUNTIME_SHA256: ${{ vars.COWORKANY_MAC_RUNTIME_SHA256 }}
+        run: |
+          test "$(uname -m)" = arm64
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID COWORKANY_MAC_RUNTIME_URL COWORKANY_MAC_RUNTIME_SHA256; do
+            if [ -z "${!name}" ]; then echo "::error::Missing release configuration: $name"; exit 1; fi
+          done
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies and Rust target
+        run: |
+          pnpm install --frozen-lockfile
+          rustup target add aarch64-apple-darwin
+      - name: Validate macOS application
+        env:
+          TAURI_CONFIG: '{"bundle":{"resources":[],"icon":["icons/coworkany-icon.png"]}}'
+        run: |
+          pnpm desktop:typecheck
+          pnpm --filter @coworkany/desktop test:release
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Fetch approved relocatable runtimes and verify SHA-256
+        env:
+          COWORKANY_MAC_RUNTIME_URL: ${{ vars.COWORKANY_MAC_RUNTIME_URL }}
+          COWORKANY_MAC_RUNTIME_SHA256: ${{ vars.COWORKANY_MAC_RUNTIME_SHA256 }}
+        run: python scripts/prepare-macos-release-runtime.py
+      - name: Build app with all offline resources before signing
+        run: pnpm --filter @coworkany/desktop exec tauri build --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin --bundles app
+      - name: Sign, notarize and package macOS release
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          COWORKANY_RELEASE_VERSION: ${{ needs.version.outputs.version }}
+          COWORKANY_MAC_APP_PATH: ${{ github.workspace }}/apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/CoworkAny.app
+          COWORKANY_MAC_PORTABLE_OUTPUT: ${{ github.workspace }}/.artifacts/desktop-release
+        run: bash scripts/release-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            .artifacts/desktop-release/*.dmg
+            .artifacts/desktop-release/*.zip
+
+  release:
+    needs: [version, windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: release-input
+      - name: Require both platforms and generate checksums
+        env:
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.version.outputs.commit }}
+        run: node scripts/desktop-release-assets.mjs release-input release-output "$RELEASE_TAG" "$RELEASE_COMMIT"
+      - name: Create or resume a draft (never overwrite a published release)
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.version.outputs.commit }}
+          RELEASE_PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({...context.repo, tag})).data;
+              if (!release.draft) throw new Error('Release is already public; publish a new version instead.');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              const notes = await github.rest.repos.generateReleaseNotes({...context.repo, tag_name: tag, target_commitish: process.env.RELEASE_COMMIT});
+              release = (await github.rest.repos.createRelease({
+                ...context.repo, tag_name: tag, target_commitish: process.env.RELEASE_COMMIT,
+                name: `CoworkAny ${tag}`, draft: true, prerelease: process.env.RELEASE_PRERELEASE === 'true',
+                body: `${notes.data.body}\n\n## Desktop downloads\n- Windows x64: installer, normal ZIP, portable ZIP. Existing Windows signing/runtime policy applies; ZIP users also need the separate [Windows Runtime](https://github.com/GiantClam/coworkany/releases/tag/v0.1.0).\n- macOS Apple Silicon: signed and notarized DMG / portable ZIP, including offline runtimes. Intel Macs are not supported by these artifacts.\n- Verify downloads with SHA256SUMS; release-manifest.json records the exact source commit.\n\nBefore publishing this draft, complete the clean-machine checks in docs/desktop/macos-arm64-release.zh-CN.md.\n`
+              })).data;
+            }
+            core.summary.addLink('Review release draft', release.html_url);
+            await core.summary.write();
+      - name: Upload complete release assets to draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          gh release upload "$RELEASE_TAG" release-output/* --clobber

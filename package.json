@@ -20,6 +20,8 @@
     "desktop:macos:build": "pnpm --filter @coworkany/desktop tauri:build:macos",
     "desktop:macos:portable": "pnpm --filter @coworkany/desktop package:macos:portable",
     "desktop:release:regression": "node scripts/desktop-release-entry-regression.mjs",
+    "desktop:release:version": "node scripts/desktop-release-version.mjs",
+    "test:desktop-release": "node --test scripts/desktop-release.test.mjs scripts/release-macos.test.mjs",
     "tauri:dev": "pnpm --filter @coworkany/desktop tauri:dev",
     "tauri:build": "pnpm --filter @coworkany/desktop tauri:build",
     "desktop:verify-bundle": "node scripts/verify-desktop-bundle-boundaries.mjs",

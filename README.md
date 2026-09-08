@@ -10,7 +10,7 @@
 - 写作与多平台协作：使用 Markdown 正文渲染，并支持文章预览、复制和 artifact 展示。
 - PPT 与媒体任务：通过已配置的 Provider 执行生成任务，并在消息中展示结果 artifact。
 - 工作流：支持节点配置、运行状态、错误信息和任务结果的持久化。
-- 桌面端：基于 Tauri 的 Windows 应用，支持本地运行时和绿色便携模式。
+- 桌面端：基于 Tauri 的 Windows 与 macOS Apple Silicon 应用，支持本地运行时和绿色便携模式。
 
 ## 快速开始
 
@@ -75,6 +75,10 @@ pnpm desktop:verify-portable-copy
 pnpm desktop:verify-path-matrix
 pnpm desktop:release-audit
 ```
+
+## 发布桌面版本
+
+桌面 Release 由 [GitHub Actions 发布工作流](.github/workflows/desktop-release.yml) 统一构建 Windows x64 和 macOS Apple Silicon 产物。发布步骤、版本一致性门禁、macOS 签名公证、固定 Runtime 配置和干净机器验收见 [macOS Apple Silicon 发布机制](docs/desktop/macos-arm64-release.zh-CN.md)。推送 `vX.Y.Z` tag 会创建包含两平台产物的 Draft Release；完成人工验收后再发布。
 
 如果只需要验证工作台 UI：
 

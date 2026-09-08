@@ -84,6 +84,11 @@ const font = await requiredPath("font", source.font);
 await mkdir(join(output, "fonts"), { recursive: true });
 await cp(font, join(output, "fonts/NotoSansCJKsc-Regular.otf"), { dereference: true });
 const lancedbPackages = await copyLanceDb();
+await mkdir(join(output, "embedding"), { recursive: true });
+await writeFile(join(output, "embedding/local-hash-384-v1.json"), `${JSON.stringify({ schemaVersion: 1, id: "local-hash-384-v1", type: "builtin-feature-hash", dimension: 384, network: false })}\n`);
+if (process.env.COWORKANY_MAC_RUNTIME_LICENSES_PATH) {
+  await cp(await requiredPath("licenses", process.env.COWORKANY_MAC_RUNTIME_LICENSES_PATH), join(output, "LICENSES.txt"));
+}
 
 const manifest = {
   schemaVersion: 1,
@@ -97,6 +102,7 @@ const manifest = {
     python: "runtime/python/python3",
     font: "runtime/fonts/NotoSansCJKsc-Regular.otf",
     lancedb: "runtime/lancedb/node_modules/@lancedb/lancedb/dist/index.js",
+    embedding: "runtime/embedding/local-hash-384-v1.json",
   },
   distribution: "bundled-signed-only",
 };

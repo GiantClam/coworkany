@@ -10,7 +10,7 @@ An enterprise AI workspace for AI chat, agent conversations, writing, image gene
 - Writing and cross-platform collaboration with Markdown rendering, article previews, copy actions, and artifact display.
 - Presentation and media tasks executed through configured providers, with generated artifacts attached to messages.
 - Persistent workflows with node configuration, run status, error details, and task results.
-- A Tauri-based Windows desktop application with a local runtime and portable mode.
+- Tauri-based Windows and Apple Silicon macOS desktop applications with local runtime and portable mode.
 
 ## Quick start
 
@@ -75,6 +75,10 @@ pnpm desktop:verify-portable-copy
 pnpm desktop:verify-path-matrix
 pnpm desktop:release-audit
 ```
+
+## Release desktop builds
+
+The [GitHub Actions desktop release workflow](.github/workflows/desktop-release.yml) builds Windows x64 and Apple Silicon macOS artifacts together. The [desktop release guide](docs/desktop/macos-arm64-release.zh-CN.md) documents version consistency gates, macOS signing and notarization, the pinned Runtime configuration, and clean-machine acceptance. Pushing a `vX.Y.Z` tag creates a Draft Release with both platforms; publish it after manual acceptance.
 
 For workbench UI-only verification:
 
