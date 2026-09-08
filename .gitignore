@@ -128,6 +128,7 @@ docs/desktop/*
 !docs/desktop/windows-v1-feasibility-results.zh-CN.md
 !docs/desktop/windows-v1-package-validation.zh-CN.md
 !docs/desktop/macos-arm64-release.zh-CN.md
+!docs/desktop/release-authorization.zh-CN.md
 !docs/upstream/
 !docs/upstream/infinite-canvas-import-manifest.md
 !docs/performance/

@@ -88,4 +88,6 @@ release-manifest.json
 
 发布者在 Draft Release 页面下载并检查两平台产物：Windows 安装器/ZIP 能启动并完成基本功能；macOS 在干净 Apple Silicon 机器上通过 Gatekeeper、首次启动、离线 Runtime、首页、工作流、知识库、退出后子进程清理和便携目录验证。确认 `SHA256SUMS` 后再点击 Publish release。
 
+发布时必须在 Release Notes 保留[授权说明](release-authorization.zh-CN.md)：明确 CoworkAny 当前未声明公开开源许可证、正式 macOS 产物需要 Developer ID 与公证、内部测试 ZIP 不属于公开授权，以及随包 Runtime 的 `LICENSES.txt` 和第三方条款要求。
+
 macOS 签名和公证流程参考 [Apple TN2206](https://developer.apple.com/library/archive/technotes/tn2206/_index.html) 与 [notarytool 文档](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)，GitHub Actions 运行机制参考 [GitHub Actions 文档](https://docs.github.com/en/actions)。本机制目前没有自动更新和 Intel 版本。
