@@ -5,6 +5,32 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
+test("macOS release rejects development certificates before touching the app", async () => {
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn("bash", ["scripts/release-macos.sh"], {
+      env: {
+        ...process.env,
+        OSTYPE: "darwin23",
+        COWORKANY_MAC_APP_PATH: "/tmp/CoworkAny.app",
+        COWORKANY_RELEASE_VERSION: "0.1.3",
+        APPLE_CERTIFICATE: "Y2VydA==",
+        APPLE_CERTIFICATE_PASSWORD: "fixture",
+        APPLE_SIGNING_IDENTITY: "Apple Development: Test",
+        APPLE_ID: "test@example.com",
+        APPLE_PASSWORD: "fixture",
+        APPLE_TEAM_ID: "TEAM",
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", code => resolve({ code, stderr }));
+  });
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /macos_release_identity_requires_developer_id_application/);
+});
+
 for (const rejection of ["none", "app", "dmg"]) {
   test(`macOS signing pipeline: ${rejection === "none" ? "accepted" : `reject ${rejection}`} notarization`, async t => {
     const root = await mkdtemp(join(tmpdir(), "coworkany-sign-test-"));

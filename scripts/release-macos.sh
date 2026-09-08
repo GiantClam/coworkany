@@ -6,6 +6,10 @@ required=(COWORKANY_MAC_APP_PATH APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD AP
 for name in "${required[@]}"; do
   [[ -n "${!name:-}" ]] || { echo "macos_release_env_required:${name}" >&2; exit 1; }
 done
+[[ "$APPLE_SIGNING_IDENTITY" == "Developer ID Application:"* ]] || {
+  echo "macos_release_identity_requires_developer_id_application" >&2
+  exit 1
+}
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 app_path="$(cd "$(dirname "$COWORKANY_MAC_APP_PATH")" && pwd)/$(basename "$COWORKANY_MAC_APP_PATH")"
