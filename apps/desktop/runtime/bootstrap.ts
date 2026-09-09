@@ -109,7 +109,14 @@ async function probePython(candidate: string): Promise<RuntimeProbe> {
   const version = await probeExecutable("python", candidate);
   if (!version.ok) return version;
   try {
-    await execFileAsync(candidate, ["-c", "import pptx, xlsxwriter, pathops, uharfbuzz, fitz, mammoth, markdownify, ebooklib, nbconvert, openpyxl, PIL, numpy, requests, bs4, curl_cffi, edge_tts, flask, google.genai"], { windowsHide: true, timeout: 5000, maxBuffer: 32 * 1024 });
+    let env = process.env;
+    if (process.platform === "darwin") {
+      try {
+        await access(join(dirname(candidate), "lib"));
+        env = { ...process.env, PYTHONHOME: dirname(candidate), PYTHONNOUSERSITE: "1" };
+      } catch { /* system Python keeps its own prefix */ }
+    }
+    await execFileAsync(candidate, ["-c", "import pptx, xlsxwriter, pathops, uharfbuzz, fitz, mammoth, markdownify, ebooklib, nbconvert, openpyxl, PIL, numpy, requests, bs4, curl_cffi, edge_tts, flask, google.genai"], { windowsHide: true, timeout: 5000, maxBuffer: 32 * 1024, env });
     return { ...version, detail: "ppt-master Python requirements ready" };
   } catch (error) {
     return { ...version, ok: false, detail: `python-pptx unavailable: ${error instanceof Error ? error.message.slice(0, 120) : "probe failed"}` };

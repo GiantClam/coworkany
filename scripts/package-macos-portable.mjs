@@ -20,7 +20,10 @@ async function validateBundledPython(appPath) {
   if (stdout.includes("/Library/Frameworks/Python.framework/") || !stdout.includes("@loader_path/Python")) {
     throw new Error("macos_bundled_python_not_relocatable");
   }
-  await promisify(execFile)(python, ["-c", "import sys,venv,pip; print(sys.version.split()[0])"], { timeout: 60_000 });
+  await promisify(execFile)(python, ["-c", "import os,sys,venv; assert os.path.realpath(sys.prefix) == os.path.realpath(os.environ['PYTHONHOME']); print(sys.version.split()[0])"], {
+    timeout: 60_000,
+    env: { ...process.env, PYTHONHOME: dirname(python), PYTHONNOUSERSITE: "1" },
+  });
 }
 
 if (process.platform !== "darwin") throw new Error(`macos_portable_package_requires_darwin:${process.platform}`);

@@ -19,8 +19,10 @@ mod bootstrap;
 mod instance_lock;
 
 pub(crate) const PPT_PYTHON_PROBE: &str = r#"
-import sys, venv, pip
+import os, sys, venv
 assert not sys.flags.isolated and not sys.flags.safe_path, "python_script_path_isolated"
+if os.environ.get("PYTHONHOME"):
+    assert os.path.realpath(sys.prefix) == os.path.realpath(os.environ["PYTHONHOME"]), "python_home_not_applied"
 "#;
 
 /// Resolve Windows command shims to the executable they dispatch before a

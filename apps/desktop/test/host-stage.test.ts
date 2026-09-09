@@ -9,11 +9,12 @@ import test, { type TestContext } from "node:test";
 import { createRpcReader, encodeRpcMessage } from "../runtime/rpc";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-type CapturedEnvironment = { config: string; home: string; data: string; revision: string; path: string; pid: number };
+type CapturedEnvironment = { config: string; home: string; data: string; revision: string; path: string; pythonHome?: string; pythonNoUserSite?: string; pid: number };
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "coworkany-host-stage-"));
   const stops: Array<() => Promise<void>> = [];
+  await mkdir(join(root, "python", "lib"), { recursive: true });
   t.after(async () => {
     for (const stop of stops) await stop();
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
@@ -34,7 +35,8 @@ async function fixture(t: TestContext) {
 writeFileSync(process.env.HOST_STAGE_CAPTURE, JSON.stringify({
   config: process.env.OPENCODE_CONFIG_DIR, home: process.env.HOME,
   data: process.env.XDG_DATA_HOME, revision: process.env.COWORKANY_SKILL_CATALOG_REVISION,
-  path: process.env.PATH, pid: process.pid
+  path: process.env.PATH, pythonHome: process.env.PYTHONHOME,
+  pythonNoUserSite: process.env.PYTHONNOUSERSITE, pid: process.pid
 }), 'utf8');
 await import(${JSON.stringify(pathToFileURL(join(desktopRoot, "test", "fixtures", "fake-opencode-serve.mjs")).href)});
 `);
@@ -119,4 +121,8 @@ test("catalog changes are applied after host restart, without replacing a live s
   assert.equal(await readFile(script, "utf8"), "version two");
   await assert.rejects(readFile(oldAsset), /ENOENT/);
   assert.ok(updated.path.startsWith(`${join(f.root, "python")}${process.platform === "win32" ? ";" : ":"}${join(f.root, "python", "Scripts")}`));
+  if (process.platform === "darwin") {
+    assert.equal(updated.pythonHome, join(f.root, "python"));
+    assert.equal(updated.pythonNoUserSite, "1");
+  }
 });

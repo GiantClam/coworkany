@@ -523,7 +523,12 @@ function withPrivatePython(environment: NodeJS.ProcessEnv) {
   const separator = process.platform === "win32" ? ";" : ":";
   const pathKey = Object.keys(environment).find(key => key.toUpperCase() === "PATH") ?? "PATH";
   const entries = Object.entries(environment).filter(([key]) => key.toUpperCase() !== "PATH");
-  return { ...Object.fromEntries(entries), PATH: `${dirname(executable)}${separator}${join(dirname(executable), "Scripts")}${separator}${environment[pathKey] ?? ""}` };
+  const privateEnvironment: NodeJS.ProcessEnv = { ...Object.fromEntries(entries), PATH: `${dirname(executable)}${separator}${join(dirname(executable), "Scripts")}${separator}${environment[pathKey] ?? ""}` };
+  if (process.platform === "darwin" && existsSync(join(dirname(executable), "lib"))) {
+    privateEnvironment.PYTHONHOME = dirname(executable);
+    privateEnvironment.PYTHONNOUSERSITE = "1";
+  }
+  return privateEnvironment;
 }
 
 function selectedModel(provider: ProviderConfig | undefined, modelHint: string | undefined) {

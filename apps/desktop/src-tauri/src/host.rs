@@ -289,7 +289,20 @@ fn select_skills_directory(candidates: impl IntoIterator<Item = PathBuf>) -> Opt
 fn python_capable(path: &std::path::Path) -> bool {
     let mut command = Command::new(path);
     crate::platform::configure_child_command(&mut command);
+    configure_python_environment(&mut command, path);
     command.args(["-c", crate::PPT_PYTHON_PROBE]).output().map(|output| output.status.success()).unwrap_or(false)
+}
+
+fn configure_python_environment(command: &mut Command, executable: &std::path::Path) {
+    #[cfg(target_os = "macos")]
+    if let Some(root) = executable.parent() {
+        // Only bundled runtimes have the relocatable `lib/python3.*` tree
+        // beside the executable. Leave system Python discovery untouched.
+        if root.join("lib").is_dir() {
+            command.env("PYTHONHOME", root);
+            command.env("PYTHONNOUSERSITE", "1");
+        }
+    }
 }
 
 fn lancedb_runtime_directory(app: &AppHandle) -> Result<Option<String>, String> {
@@ -471,9 +484,12 @@ pub fn host_start(app: AppHandle, state: State<'_, HostState>) -> Result<u64, St
         .envs(skills.as_ref().map(|path| [("COWORKANY_SKILLS_DIR", path.to_string_lossy().to_string())]).into_iter().flatten())
         .envs(agents.as_ref().map(|path| [("COWORKANY_AGENTS_DIR", path.to_string_lossy().to_string())]).into_iter().flatten())
         .envs(opencode_executable(&app)?.map(|path| [("COWORKANY_OPENCODE_PATH", path)]).into_iter().flatten())
-        .envs(python.map(|path| [("COWORKANY_PYTHON_PATH", path)]).into_iter().flatten())
         .envs(lancedb_runtime_directory(&app)?.map(|path| [("COWORKANY_LANCEDB_DIR", path)]).into_iter().flatten())
         .env("OPENCODE_RUNTIME_DIR", opencode_runtime);
+    if let Some(path) = python.as_deref() {
+        command.env("COWORKANY_PYTHON_PATH", path);
+        configure_python_environment(&mut command, std::path::Path::new(path));
+    }
     crate::platform::configure_child_command(&mut command);
     let mut child = command.spawn()
         .map_err(|error| format!("workflow_host_spawn_failed: {error}"))?;
