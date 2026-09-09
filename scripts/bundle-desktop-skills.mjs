@@ -135,6 +135,10 @@ async function acquireGitSkill({ id, repo, commit, branch, skillPath, stagingNam
     // the pinned tree bytes and makes the lock digest fail. Disable conversion
     // so every platform verifies the same upstream content.
     await execFileAsync("git", ["-c", "core.autocrlf=false", "clone", "--depth", "1", "--branch", branch, `https://github.com/${repo}.git`, staging], { windowsHide: true, timeout: 180000, maxBuffer: 64 * 1024 });
+    // The locked commit may no longer be the branch tip. Fetch it explicitly
+    // after the shallow branch clone so release runners can reproduce older,
+    // approved skill revisions instead of failing with "unable to read tree".
+    await execFileAsync("git", ["-C", staging, "fetch", "--depth", "1", "origin", commit], { windowsHide: true, timeout: 180000, maxBuffer: 64 * 1024 });
     await execFileAsync("git", ["-C", staging, "checkout", "--detach", commit], { windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 });
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
