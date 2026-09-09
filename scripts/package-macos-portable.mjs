@@ -13,6 +13,16 @@ const name = internal ? "CoworkAny-macOS-arm64-internal-portable" : "CoworkAny-m
 const stage = join(output, name);
 const archive = join(output, `${name}.zip`);
 
+async function validateBundledPython(appPath) {
+  const python = join(appPath, "Contents/Resources/_up_/dist-runtime/runtime/python/python3");
+  await access(python, constants.X_OK).catch(() => { throw new Error(`macos_bundled_python_missing:${python}`); });
+  const { stdout } = await promisify(execFile)("/usr/bin/otool", ["-L", python], { encoding: "utf8" });
+  if (stdout.includes("/Library/Frameworks/Python.framework/") || !stdout.includes("@loader_path/Python")) {
+    throw new Error("macos_bundled_python_not_relocatable");
+  }
+  await promisify(execFile)(python, ["-c", "import sys,venv,pip; print(sys.version.split()[0])"], { timeout: 60_000 });
+}
+
 if (process.platform !== "darwin") throw new Error(`macos_portable_package_requires_darwin:${process.platform}`);
 await access(app, constants.F_OK).catch(() => { throw new Error(`macos_app_bundle_missing:${app}`); });
 await rm(stage, { recursive: true, force: true });
@@ -21,6 +31,7 @@ await mkdir(stage, { recursive: true });
 // Preserve bundle symlinks and extended attributes, including notarization data
 // when the release path has a signed app.
 await promisify(execFile)("ditto", [app, join(stage, "CoworkAny.app")]);
+await validateBundledPython(join(stage, "CoworkAny.app"));
 if (!internal) await promisify(execFile)("codesign", ["--verify", "--deep", "--strict", join(stage, "CoworkAny.app")]);
 if (internal) await writeFile(join(stage, "CoworkAny.app", "Contents", "Resources", "internal-portable.flag"), "", "utf8");
 await mkdir(join(stage, "CoworkAny Data"), { recursive: true });
