@@ -138,8 +138,8 @@ async function acquireGitSkill({ id, repo, commit, branch, skillPath, stagingNam
     // The locked commit may no longer be the branch tip. Fetch it explicitly
     // after the shallow branch clone so release runners can reproduce older,
     // approved skill revisions instead of failing with "unable to read tree".
-    await execFileAsync("git", ["-C", staging, "fetch", "--depth", "1", "origin", commit], { windowsHide: true, timeout: 180000, maxBuffer: 64 * 1024 });
-    await execFileAsync("git", ["-C", staging, "checkout", "--detach", commit], { windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 });
+    await execFileAsync("git", ["-c", "core.autocrlf=false", "-C", staging, "fetch", "--depth", "1", "origin", commit], { windowsHide: true, timeout: 180000, maxBuffer: 64 * 1024 });
+    await execFileAsync("git", ["-c", "core.autocrlf=false", "-C", staging, "checkout", "--detach", commit], { windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 });
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
     throw new Error(`Unable to acquire ${repo} ${commit}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
