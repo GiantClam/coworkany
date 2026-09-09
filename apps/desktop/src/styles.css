@@ -28,6 +28,7 @@ body { margin: 0; min-width: 1080px; min-height: 720px; background-color: var(--
 .bootstrap-status-label { max-width: 520px; margin: 20px 0 0; color: var(--wb-muted-foreground, #777); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .bootstrap-status { max-width: 520px; margin: 4px 0 0; color: var(--wb-foreground, #111); line-height: 1.7; }
 .bootstrap-hint { display: block; max-width: 520px; margin-top: 4px; color: var(--wb-muted-foreground, #777); font-size: 12px; line-height: 1.6; }
+.bootstrap-diagnostics-button { margin-top: 18px; }
 @keyframes bootstrap-spin { to { transform: rotate(360deg); } }
 button, textarea { font: inherit; }
 button { cursor: pointer; }

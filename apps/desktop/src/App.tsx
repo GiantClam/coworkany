@@ -478,7 +478,7 @@ function localizeRuntimeProgress(message: string, locale: "zh" | "en") {
 
 type DesktopBootstrapPhase = "bridge" | "state" | "runtime" | "repair" | "ready" | "error";
 
-function DesktopBootstrapScreen({ locale, status, phase, style }: { locale: "zh" | "en"; status: string; phase: DesktopBootstrapPhase; style: CSSProperties }) {
+function DesktopBootstrapScreen({ locale, status, phase, style, onExportDiagnostics }: { locale: "zh" | "en"; status: string; phase: DesktopBootstrapPhase; style: CSSProperties; onExportDiagnostics?: () => void }) {
   const stages = locale === "zh"
     ? [{ id: "bridge" as const, label: "连接桌面运行桥接" }, { id: "state" as const, label: "读取本地状态与会话" }, { id: "runtime" as const, label: "检查运行时组件" }, { id: "repair" as const, label: "修复缺失组件" }]
     : [{ id: "bridge" as const, label: "Connect desktop bridge" }, { id: "state" as const, label: "Read local state and sessions" }, { id: "runtime" as const, label: "Check runtime components" }, { id: "repair" as const, label: "Repair missing components" }];
@@ -492,6 +492,7 @@ function DesktopBootstrapScreen({ locale, status, phase, style }: { locale: "zh"
       <p className="bootstrap-status-label">{locale === "zh" ? "当前子步骤" : "Current sub-step"}</p>
       <p className="bootstrap-status">{localizeRuntimeStatus(status, locale)}</p>
        <small className="bootstrap-hint">{locale === "zh" ? "首次启动可能需要准备离线运行时和本地索引。下载、解压或校验期间界面可能保持不变，请保持窗口打开。" : "The first launch may prepare the offline runtime and local indexes. The screen may remain unchanged while downloading, extracting, or validating; keep it open."}</small>
+       {failed && onExportDiagnostics ? <button type="button" className="ghost bootstrap-diagnostics-button" onClick={onExportDiagnostics}>{locale === "zh" ? "导出启动诊断包" : "Export startup diagnostics"}</button> : null}
      </section>
    </main>;
 }
@@ -4094,8 +4095,11 @@ export function App() {
             });
           }
           await repairPromise;
-          const repaired = await tauriBridge.invoke<{ ready: boolean }>("runtime_probe");
-          if (!repaired.ready) throw new Error("runtime_repair_incomplete");
+          const repaired = await tauriBridge.invoke<{ ready: boolean; node?: boolean; opencode?: boolean; python?: boolean; skills?: boolean; fonts?: boolean; migrations?: boolean; host?: boolean; knowledge?: boolean; lancedb?: boolean; embedding?: boolean }>("runtime_probe");
+          if (!repaired.ready) {
+            const missing = ["node", "opencode", "python", "skills", "fonts", "migrations", "host", "knowledge", "lancedb", "embedding"].filter((key) => repaired[key as keyof typeof repaired] === false);
+            throw new Error(`runtime_repair_incomplete${missing.length ? `: ${missing.join(",")}` : ""}`);
+          }
         }
         if (!runtime.ready && runtime.development) {
           setRuntimeStatus(locale === "zh" ? "开发运行环境就绪（使用本机组件）" : "Development runtime ready (using local components)");
@@ -5412,7 +5416,7 @@ export function App() {
     ];
     return [userMessage, { ...assistantMessage, parts: processParts, metadata: assistantMetadata }];
   }, [activeConversationId, activeModel, activePrompt, activePromptAt, activeProvider.id, activeRunId, artifactRows, assistantAt, assistantText, toolEvents]);
-  if (!shellReady) return <DesktopBootstrapScreen locale={locale} status={runtimeStatus} phase={runtimePhase} style={workbenchThemeStyle} />;
+  if (!shellReady) return <DesktopBootstrapScreen locale={locale} status={runtimeStatus} phase={runtimePhase} style={workbenchThemeStyle} onExportDiagnostics={() => { void tauriBridge.invoke<{ path: string }>("export_diagnostics").then(({ path }) => setRuntimeStatus(locale === "zh" ? `诊断包已导出：${path}` : `Startup diagnostics exported: ${path}`)).catch((error) => setRuntimeStatus(locale === "zh" ? `诊断包导出失败：${error instanceof Error ? error.message : String(error)}` : `Startup diagnostics export failed: ${error instanceof Error ? error.message : String(error)}`)); }} />;
   const localizedRunStatus = localizeDesktopStatus(runStatus, locale);
   const localizedWorkflowRunStatus = localizeDesktopStatus(workflowRunStatus, locale);
   const topTipMessage = [localizedRunStatus, localizedWorkflowRunStatus].find(isDesktopErrorStatus) ?? "";

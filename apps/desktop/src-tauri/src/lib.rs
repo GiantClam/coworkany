@@ -65,8 +65,12 @@ fn health() -> Health {
 fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
     let data = data_dir(&app)?;
+    logs::append(&data, "runtime-probe", &format!("probe_started resource={} data={}", resource.display(), data.display()));
     let cache_fingerprint = runtime_probe_fingerprint(&data, &resource);
-    if let Some(cached) = read_runtime_probe_cache(&data, &cache_fingerprint) { return Ok(cached); }
+    if let Some(cached) = read_runtime_probe_cache(&data, &cache_fingerprint) {
+        logs::append(&data, "runtime-probe", &format!("probe_cached {}", cached));
+        return Ok(cached);
+    }
     let database = data.join("app.db");
     let migrations = storage::migrations_ready_without_initialization(&database).unwrap_or(false);
     let configured_node = configured_runtime_executable(&data, "nodePath");
@@ -155,6 +159,7 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         ("lancedbPath", lancedb_path.as_ref()), ("embeddingPath", embedding_path.as_ref()),
     ])?;
     let result = serde_json::json!({ "ready": node && opencode && python && skills && fonts && migrations && host && knowledge && lancedb && embedding, "development": cfg!(debug_assertions), "node": node, "opencode": opencode, "python": python, "skills": skills, "fonts": fonts, "migrations": migrations, "host": host, "knowledge": knowledge, "lancedb": lancedb, "embedding": embedding, "semanticRag": lancedb, "paths": { "node": node_path, "opencode": opencode_path, "python": python_path, "host": host_path, "knowledge": knowledge_path, "skills": skill_path, "fonts": fonts_path, "lancedb": lancedb_path, "embedding": embedding_path } });
+    logs::append(&data, "runtime-probe", &format!("probe_result {}", result));
     if result.get("ready").and_then(serde_json::Value::as_bool) == Some(true) {
         write_runtime_probe_cache(&data, &runtime_probe_fingerprint(&data, &resource), &result);
     }
@@ -418,7 +423,9 @@ fn repair_runtime(app: tauri::AppHandle, options: Option<RuntimeRepairOptions>) 
 
 #[tauri::command]
 #[cfg(not(windows))]
-fn repair_runtime(_app: tauri::AppHandle, _options: Option<RuntimeRepairOptions>) -> Result<serde_json::Value, String> {
+fn repair_runtime(app: tauri::AppHandle, _options: Option<RuntimeRepairOptions>) -> Result<serde_json::Value, String> {
+    let data = data_dir(&app)?;
+    logs::append(&data, "runtime-repair", "repair_started");
     #[cfg(target_os = "macos")]
     {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -429,13 +436,16 @@ fn repair_runtime(_app: tauri::AppHandle, _options: Option<RuntimeRepairOptions>
                 .arg(app_bundle)
                 .status()
                 .map_err(|error| format!("macos_internal_quarantine_clear_failed: {error}"))?;
+            logs::append(&data, "runtime-repair", &format!("quarantine_clear status={}", status));
             if !status.success() { return Err("macos_internal_quarantine_clear_failed".to_string()); }
+            logs::append(&data, "runtime-repair", "repair_finished status=bundled");
             return Ok(serde_json::json!({ "status": "bundled", "mode": "internal" }));
         }
     }
     // macOS runtime executables are sealed inside the signed application bundle.
     // Downloading or replacing them after notarization would invalidate the
     // distribution security model, so repair is intentionally fail-closed.
+    logs::append(&data, "runtime-repair", "repair_rejected reason=requires_signed_macos_bundle");
     Err("runtime_repair_requires_signed_macos_bundle".to_string())
 }
 
