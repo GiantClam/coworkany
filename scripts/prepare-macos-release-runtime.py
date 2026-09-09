@@ -8,6 +8,42 @@ import tarfile
 import tempfile
 import urllib.request
 
+PYTHON_FRAMEWORK_PREFIX = "/Library/Frameworks/Python.framework/Versions/"
+
+
+def repair_python_relocation(destination):
+    """Make python.org framework binaries work without a host Python install.
+
+    The framework installer records an absolute `/Library/Frameworks/.../Python`
+    load path. That path works on the build machine and fails on a clean Mac,
+    even when the framework is bundled beside the executable.
+    """
+    python_root = Path(destination) / "python"
+    library = python_root / "Python"
+    if not library.is_file():
+        return
+    binaries = [library]
+    binaries.extend(path for path in (python_root / "bin").glob("python3*") if path.is_file() and not path.is_symlink())
+    for binary in binaries:
+        output = subprocess.run(["otool", "-L", str(binary)], check=True,
+                                capture_output=True, text=True).stdout
+        if not isinstance(output, str):
+            continue
+        dependencies = {
+            line.strip().split(" (", 1)[0]
+            for line in output.splitlines()[1:]
+            if line.strip().split(" (", 1)[0].startswith(PYTHON_FRAMEWORK_PREFIX)
+        }
+        for dependency in dependencies:
+            if binary == library:
+                subprocess.run(["install_name_tool", "-id", "@rpath/Python", str(library)], check=True)
+                subprocess.run(["codesign", "--force", "--sign", "-", str(library)], check=True)
+            else:
+                relative = os.path.relpath(library, binary.parent)
+                replacement = "@loader_path/" + relative
+                subprocess.run(["install_name_tool", "-change", dependency, replacement, str(binary)], check=True)
+                subprocess.run(["codesign", "--force", "--sign", "-", str(binary)], check=True)
+
 
 def prepare(url, expected_hash, destination):
     if not url.startswith("https://") or not re.fullmatch(r"[a-fA-F0-9]{64}", expected_hash):
@@ -28,6 +64,7 @@ def prepare(url, expected_hash, destination):
             raise ValueError("macos_runtime_checksum_mismatch")
         with tarfile.open(archive, "r:gz") as bundle:
             bundle.extractall(destination, filter="data")
+    repair_python_relocation(destination)
     required = {
         "COWORKANY_MAC_NODE_RUNTIME_DIR": "node",
         "COWORKANY_MAC_OPENCODE_RUNTIME_DIR": "opencode",

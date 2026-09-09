@@ -773,6 +773,8 @@ fn write_file_atomically(target: &std::path::Path, bytes: &[u8]) -> Result<(), S
 fn powershell_quote(value: &str) -> String { value.replace('\'', "''") }
 
 fn archive_diagnostics(staging: &std::path::Path, zip_path: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
     let source = powershell_quote(&staging.to_string_lossy());
     let destination = powershell_quote(&zip_path.to_string_lossy());
     let command = format!("Compress-Archive -Path '{}\\*' -DestinationPath '{}' -Force", source, destination);
@@ -782,6 +784,36 @@ fn archive_diagnostics(staging: &std::path::Path, zip_path: &std::path::Path) ->
         .map_err(|error| format!("diagnostics_archive_spawn_failed: {error}"))?;
     if !output.status.success() { return Err(format!("diagnostics_archive_failed: {}", String::from_utf8_lossy(&output.stderr).trim())); }
     Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("/usr/bin/ditto")
+            .args(["-c", "-k", "--sequesterRsrc", "--keepParent"])
+            .arg(staging)
+            .arg(zip_path)
+            .output()
+            .map_err(|error| format!("diagnostics_archive_spawn_failed: {error}"))?;
+        if !output.status.success() {
+            return Err(format!("diagnostics_archive_failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+        }
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let output = Command::new("/usr/bin/zip")
+            .args(["-q", "-r"])
+            .arg(zip_path)
+            .arg(".")
+            .current_dir(staging)
+            .output()
+            .map_err(|error| format!("diagnostics_archive_spawn_failed: {error}"))?;
+        if !output.status.success() {
+            return Err(format!("diagnostics_archive_failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+        }
+        return Ok(());
+    }
 }
 
 fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
@@ -1643,6 +1675,29 @@ mod tests {
         assert!(!archived.contains("archive-secret"));
         assert!(archived.contains("[REDACTED]"));
         assert!(archived.contains("中文"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn diagnostic_archive_uses_macos_archive_tool() {
+        let root = std::env::temp_dir().join(format!("coworkany-diagnostics-macos-{}", std::process::id()));
+        let staging = root.join("staging");
+        let archive = root.join("diagnostics.zip");
+        let extracted = root.join("extracted");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("runtime-probe.jsonl"), b"{\"python\":false}").unwrap();
+
+        archive_diagnostics(&staging, &archive).unwrap();
+        let output = std::process::Command::new("/usr/bin/ditto")
+            .args(["-x", "-k"])
+            .arg(&archive)
+            .arg(&extracted)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(fs::read_to_string(extracted.join("staging/runtime-probe.jsonl")).unwrap(), "{\"python\":false}");
         let _ = fs::remove_dir_all(root);
     }
 }
