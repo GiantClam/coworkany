@@ -22,6 +22,7 @@ await mkdir(stage, { recursive: true });
 // when the release path has a signed app.
 await promisify(execFile)("ditto", [app, join(stage, "CoworkAny.app")]);
 if (!internal) await promisify(execFile)("codesign", ["--verify", "--deep", "--strict", join(stage, "CoworkAny.app")]);
+if (internal) await writeFile(join(stage, "CoworkAny.app", "Contents", "Resources", "internal-portable.flag"), "", "utf8");
 await mkdir(join(stage, "CoworkAny Data"), { recursive: true });
 await writeFile(join(stage, "portable.flag"), "", "utf8");
 const instructions = internal

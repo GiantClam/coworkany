@@ -419,6 +419,20 @@ fn repair_runtime(app: tauri::AppHandle, options: Option<RuntimeRepairOptions>) 
 #[tauri::command]
 #[cfg(not(windows))]
 fn repair_runtime(_app: tauri::AppHandle, _options: Option<RuntimeRepairOptions>) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        if internal_portable_distribution_root(&executable).is_some() {
+            let app_bundle = executable.parent().and_then(Path::parent).and_then(Path::parent).ok_or_else(|| "macos_app_bundle_missing".to_string())?;
+            let status = Command::new("/usr/bin/xattr")
+                .args(["-dr", "com.apple.quarantine"])
+                .arg(app_bundle)
+                .status()
+                .map_err(|error| format!("macos_internal_quarantine_clear_failed: {error}"))?;
+            if !status.success() { return Err("macos_internal_quarantine_clear_failed".to_string()); }
+            return Ok(serde_json::json!({ "status": "bundled", "mode": "internal" }));
+        }
+    }
     // macOS runtime executables are sealed inside the signed application bundle.
     // Downloading or replacing them after notarization would invalidate the
     // distribution security model, so repair is intentionally fail-closed.
@@ -428,6 +442,15 @@ fn repair_runtime(_app: tauri::AppHandle, _options: Option<RuntimeRepairOptions>
 fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     Ok(storage::data_root(&platform::distribution_root(&executable), configured_local_app_data(&app)))
+}
+
+fn internal_portable_distribution_root(executable: &Path) -> Option<PathBuf> {
+    let root = platform::distribution_root(executable);
+    let package_name = root.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+    (package_name == "CoworkAny-macOS-arm64-internal-portable"
+        && (root.join("portable.flag").is_file()
+            || executable.parent()?.parent()?.parent()?.join("Contents/Resources/internal-portable.flag").is_file()))
+        .then_some(root)
 }
 
 /// Older green packages and user instructions sometimes placed `config.json`
@@ -1320,7 +1343,7 @@ fn adjacent_instance_lock_path(data_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_runtime_executable, is_default_portable_text_config, is_usable_desktop_config, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_runtime_executable, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -1337,6 +1360,22 @@ mod tests {
         let lock = adjacent_instance_lock_path(data_root);
         assert_eq!(lock, PathBuf::from("C:/Users/test/AppData/Local/CoworkAny.instance.lock"));
         assert_ne!(lock.parent(), Some(data_root));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn internal_portable_root_requires_the_portable_marker_next_to_the_app() {
+        let root = std::env::temp_dir().join(format!("coworkany-macos-portable-marker-{}", std::process::id()));
+        let executable = root.join("CoworkAny-macOS-arm64-internal-portable/CoworkAny.app/Contents/MacOS/coworkany");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        assert_eq!(internal_portable_distribution_root(&executable), None);
+        fs::write(root.join("CoworkAny-macOS-arm64-internal-portable/portable.flag"), b"").unwrap();
+        assert_eq!(internal_portable_distribution_root(&executable), Some(root.join("CoworkAny-macOS-arm64-internal-portable")));
+        fs::remove_file(root.join("CoworkAny-macOS-arm64-internal-portable/portable.flag")).unwrap();
+        fs::create_dir_all(root.join("CoworkAny-macOS-arm64-internal-portable/CoworkAny.app/Contents/Resources")).unwrap();
+        fs::write(root.join("CoworkAny-macOS-arm64-internal-portable/CoworkAny.app/Contents/Resources/internal-portable.flag"), b"").unwrap();
+        assert_eq!(internal_portable_distribution_root(&executable), Some(root.join("CoworkAny-macOS-arm64-internal-portable")));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
