@@ -1,11 +1,14 @@
 import { access, chmod, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
+const execFileAsync = promisify(execFile);
 const output = resolve(process.env.COWORKANY_MAC_RUNTIME_OUTPUT ?? join(root, "apps/desktop/dist-runtime/runtime"));
 const source = {
   node: process.env.COWORKANY_MAC_NODE_RUNTIME_DIR,
@@ -41,6 +44,16 @@ async function copyRuntimeDirectory(name, destination, executable) {
   if (!details.isDirectory()) throw new Error(`macos_runtime_${name}_directory_required:${path}`);
   await cp(path, destination, { recursive: true, dereference: true });
   await access(join(destination, executable), constants.X_OK).catch(() => { throw new Error(`macos_runtime_${name}_executable_missing:${join(destination, executable)}`); });
+}
+
+async function repairTopLevelPythonEntrypoint() {
+  const executable = join(output, "python", "python3");
+  const { stdout } = await execFileAsync("/usr/bin/otool", ["-L", executable], { encoding: "utf8" });
+  const dependencies = new Set(stdout.split("\n").map(line => line.trim().split(" (", 1)[0]));
+  const source = [...dependencies].find(value => value === "@loader_path/../Python");
+  if (!source) return;
+  await execFileAsync("/usr/bin/install_name_tool", ["-change", source, "@loader_path/Python", executable]);
+  await execFileAsync("/usr/bin/codesign", ["--force", "--sign", "-", executable]);
 }
 
 async function makeWritableTree(path) {
@@ -124,6 +137,7 @@ await mkdir(output, { recursive: true });
 await copyRuntimeDirectory("node", join(output, "node"), "node");
 await copyRuntimeDirectory("opencode", join(output, "opencode"), "opencode");
 await copyRuntimeDirectory("python", join(output, "python"), "python3");
+await repairTopLevelPythonEntrypoint();
 const font = await requiredPath("font", source.font);
 await mkdir(join(output, "fonts"), { recursive: true });
 await cp(font, join(output, "fonts/NotoSansCJKsc-Regular.otf"), { dereference: true });
