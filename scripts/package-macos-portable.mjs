@@ -31,13 +31,15 @@ await mkdir(stage, { recursive: true });
 // Preserve bundle symlinks and extended attributes, including notarization data
 // when the release path has a signed app.
 await promisify(execFile)("ditto", [app, join(stage, "CoworkAny.app")]);
-await validateBundledPython(join(stage, "CoworkAny.app"));
-if (!internal) await promisify(execFile)("codesign", ["--verify", "--deep", "--strict", join(stage, "CoworkAny.app")]);
+const packagedApp = join(stage, "CoworkAny.app");
+if (internal) await promisify(execFile)("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", packagedApp]);
+await validateBundledPython(packagedApp);
+if (!internal) await promisify(execFile)("codesign", ["--verify", "--deep", "--strict", packagedApp]);
 if (internal) await writeFile(join(stage, "CoworkAny.app", "Contents", "Resources", "internal-portable.flag"), "", "utf8");
 await mkdir(join(stage, "CoworkAny Data"), { recursive: true });
 await writeFile(join(stage, "portable.flag"), "", "utf8");
 const instructions = internal
-  ? "INTERNAL TEST BUILD - NOT SIGNED OR NOTARIZED. Keep CoworkAny.app, CoworkAny Data, and portable.flag together. On another Mac, first launch may require Control-click CoworkAny.app > Open, or Privacy & Security > Open Anyway. Do not store CoworkAny Data inside CoworkAny.app.\n"
+  ? "INTERNAL TEST BUILD - AD HOC SIGNED, NOT DEVELOPER ID SIGNED OR NOTARIZED. Keep CoworkAny.app, CoworkAny Data, and portable.flag together. On another Mac, first launch may require Control-click CoworkAny.app > Open, or Privacy & Security > Open Anyway. Do not store CoworkAny Data inside CoworkAny.app.\n"
   : "Keep CoworkAny.app, CoworkAny Data, and portable.flag together. Do not store CoworkAny Data inside CoworkAny.app.\n";
 await writeFile(join(stage, "README.txt"), instructions, "utf8");
 await promisify(execFile)("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", stage, archive]);
