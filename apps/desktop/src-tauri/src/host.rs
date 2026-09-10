@@ -248,12 +248,25 @@ pub(crate) fn python_executable(app: &AppHandle) -> Result<Option<String>, Strin
         resource.join("_up_").join("dist-runtime").join("runtime").join("python").join(crate::platform::runtime_executable("python")),
     ];
     let configured = configured_runtime_path(app, "pythonPath").into_iter();
-    if let Some(path) = crate::ordered_runtime_candidates(private, bundled, configured, std::iter::empty())
-        .into_iter()
-        .find(|path| path.is_file() && python_capable(path))
-        .and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path)) { return Ok(Some(path.to_string_lossy().into_owned())); }
-    let system = system_executable(crate::platform::runtime_executable("python")).filter(|path| python_capable(path));
-    Ok(system.map(|path| path.to_string_lossy().into_owned()))
+    for path in crate::ordered_runtime_candidates(private, bundled, configured, std::iter::empty()) {
+        if !path.is_file() { continue; }
+        match probe_python(&path) {
+            Ok(()) => {
+                if let Some(path) = std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path) {
+                    return Ok(Some(path.to_string_lossy().into_owned()));
+                }
+            }
+            Err(detail) => crate::logs::append(&data, "runtime-probe", &format!("python_candidate_failed path={} {}", path.display(), detail)),
+        }
+    }
+    let system = system_executable(crate::platform::runtime_executable("python"));
+    if let Some(path) = system {
+        match probe_python(&path) {
+            Ok(()) => return Ok(Some(path.to_string_lossy().into_owned())),
+            Err(detail) => crate::logs::append(&data, "runtime-probe", &format!("python_system_failed path={} {}", path.display(), detail)),
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) fn skills_directory(app: &AppHandle) -> Result<Option<PathBuf>, String> {
@@ -286,11 +299,15 @@ fn select_skills_directory(candidates: impl IntoIterator<Item = PathBuf>) -> Opt
         })
 }
 
-fn python_capable(path: &std::path::Path) -> bool {
+fn probe_python(path: &std::path::Path) -> Result<(), String> {
     let mut command = Command::new(path);
     crate::platform::configure_child_command(&mut command);
     configure_python_environment(&mut command, path);
-    command.args(["-c", crate::PPT_PYTHON_PROBE]).output().map(|output| output.status.success()).unwrap_or(false)
+    let output = command.args(["-c", crate::PPT_PYTHON_PROBE]).output().map_err(|error| format!("spawn_error={error}"))?;
+    if output.status.success() { return Ok(()); }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().chars().take(512).collect::<String>();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().chars().take(512).collect::<String>();
+    Err(format!("status={} stdout={:?} stderr={:?}", output.status, stdout, stderr))
 }
 
 fn configure_python_environment(command: &mut Command, executable: &std::path::Path) {
