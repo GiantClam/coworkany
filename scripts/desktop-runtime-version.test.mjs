@@ -12,7 +12,7 @@ const scripts = dirname(fileURLToPath(import.meta.url));
 test("desktop probing and launch share bundled-first OpenCode selection", async () => {
   const host = await readFile(join(scripts, "../apps/desktop/src-tauri/src/host.rs"), "utf8");
   const shell = await readFile(join(scripts, "../apps/desktop/src-tauri/src/lib.rs"), "utf8");
-  assert.match(host, /bundled\.into_iter\(\)\.chain\(configured\)/u);
+  assert.match(host, /ordered_runtime_candidates\(private, packaged, configured/u);
   assert.match(shell, /host::opencode_executable\(&app\)/u);
   assert.match(shell, /"up-dist-manifest"/u);
 });

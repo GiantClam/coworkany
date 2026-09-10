@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 
 const run = promisify(execFile);
 const shellPath = new URL("../apps/desktop/src-tauri/src/lib.rs", import.meta.url);
+const pythonCommand = process.env.COWORKANY_TEST_PYTHON ?? (process.platform === "win32" ? "python" : "python3");
 
 test("desktop Python probe rejects isolated mode, without inventing PPT output", async () => {
   const source = await readFile(shellPath, "utf8");
@@ -16,8 +17,8 @@ test("desktop Python probe rejects isolated mode, without inventing PPT output",
   // Check path semantics before importing optional skill requirements. An
   // isolated interpreter must not pass readiness even with all packages present.
   const compatibility = probe;
-  await assert.rejects(run("python", ["-I", "-c", compatibility], { windowsHide: true }), /python_script_path_isolated/u);
-  await run("python", ["-c", compatibility], { windowsHide: true });
+  await assert.rejects(run(pythonCommand, ["-I", "-c", compatibility], { windowsHide: true }), /python_script_path_isolated/u);
+  await run(pythonCommand, ["-c", compatibility], { windowsHide: true });
 });
 
 test("probe and launch share native runtime and packaged Skill resolution", async () => {
@@ -27,7 +28,7 @@ test("probe and launch share native runtime and packaged Skill resolution", asyn
   assert.match(source, /host::skills_directory\(&app\)/u);
   assert.match(host, /let skills = skills_directory\(&app\)/u);
   assert.doesNotMatch(source, /fn system_python\(/u);
-  assert.match(source, /"native-runtime-v2"/u, "invalidate previously successful isolated-runtime probe caches");
+  assert.match(source, /"native-runtime-v3"/u, "invalidate previously successful isolated-runtime probe caches");
 });
 
 test("packaged Python wins over a previously discovered configured interpreter", async () => {
