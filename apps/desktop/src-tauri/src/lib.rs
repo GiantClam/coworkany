@@ -20,7 +20,7 @@ mod instance_lock;
 
 pub(crate) const PPT_PYTHON_PROBE: &str = r#"
 import os, sys, venv
-assert not sys.flags.isolated and not sys.flags.safe_path, "python_script_path_isolated"
+assert not sys.flags.isolated and not getattr(sys.flags, "safe_path", False), "python_script_path_isolated"
 if os.environ.get("PYTHONHOME"):
     assert os.path.realpath(sys.prefix) == os.path.realpath(os.environ["PYTHONHOME"]), "python_home_not_applied"
 "#;

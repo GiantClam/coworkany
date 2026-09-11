@@ -15,9 +15,14 @@ const archive = join(output, `${name}.zip`);
 
 async function validateBundledPython(appPath) {
   const python = join(appPath, "Contents/Resources/_up_/dist-runtime/runtime/python/python3");
+  const innerPython = join(appPath, "Contents/Resources/_up_/dist-runtime/runtime/python/Resources/Python.app/Contents/MacOS/Python");
   await access(python, constants.X_OK).catch(() => { throw new Error(`macos_bundled_python_missing:${python}`); });
-  const { stdout } = await promisify(execFile)("/usr/bin/otool", ["-L", python], { encoding: "utf8" });
-  if (stdout.includes("/Library/Frameworks/Python.framework/") || !stdout.includes("@loader_path/Python")) {
+  await access(innerPython, constants.X_OK).catch(() => { throw new Error(`macos_bundled_python_inner_missing:${innerPython}`); });
+  const [{ stdout: topLevelLinks }, { stdout: innerLinks }] = await Promise.all([
+    promisify(execFile)("/usr/bin/otool", ["-L", python], { encoding: "utf8" }),
+    promisify(execFile)("/usr/bin/otool", ["-L", innerPython], { encoding: "utf8" }),
+  ]);
+  if (topLevelLinks.includes("/Library/Frameworks/Python.framework/") || !topLevelLinks.includes("@loader_path/Python") || innerLinks.includes("/Library/Frameworks/Python.framework/")) {
     throw new Error("macos_bundled_python_not_relocatable");
   }
   await promisify(execFile)(python, ["-c", "import os,sys,venv; assert os.path.realpath(sys.prefix) == os.path.realpath(os.environ['PYTHONHOME']); print(sys.version.split()[0])"], {

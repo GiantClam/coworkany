@@ -47,13 +47,25 @@ async function copyRuntimeDirectory(name, destination, executable) {
 }
 
 async function repairTopLevelPythonEntrypoint() {
-  const executable = join(output, "python", "python3");
-  const { stdout } = await execFileAsync("/usr/bin/otool", ["-L", executable], { encoding: "utf8" });
-  const dependencies = new Set(stdout.split("\n").map(line => line.trim().split(" (", 1)[0]));
-  const source = [...dependencies].find(value => value === "@loader_path/../Python");
-  if (!source) return;
-  await execFileAsync("/usr/bin/install_name_tool", ["-change", source, "@loader_path/Python", executable]);
-  await execFileAsync("/usr/bin/codesign", ["--force", "--sign", "-", executable]);
+  const pythonRoot = join(output, "python");
+  const topLevel = join(pythonRoot, "python3");
+  const innerApp = join(pythonRoot, "Resources/Python.app");
+  const innerExecutable = join(innerApp, "Contents/MacOS/Python");
+  const topLevelLinks = await execFileAsync("/usr/bin/otool", ["-L", topLevel], { encoding: "utf8" });
+  const topLevelDependencies = new Set(topLevelLinks.stdout.split("\n").map(line => line.trim().split(" (", 1)[0]));
+  if (topLevelDependencies.has("@loader_path/../Python")) {
+    await execFileAsync("/usr/bin/install_name_tool", ["-change", "@loader_path/../Python", "@loader_path/Python", topLevel]);
+    await execFileAsync("/usr/bin/codesign", ["--force", "--sign", "-", topLevel]);
+  }
+  const innerLinks = await execFileAsync("/usr/bin/otool", ["-L", innerExecutable], { encoding: "utf8" });
+  const absoluteFramework = "/Library/Frameworks/Python.framework/Versions/3.12/Python";
+  if (innerLinks.stdout.includes(absoluteFramework)) {
+    // The nested Python.app is signed by Python.org. install_name_tool
+    // invalidates that signature, so sign the nested app explicitly before
+    // signing the containing runtime directory.
+    await execFileAsync("/usr/bin/install_name_tool", ["-change", absoluteFramework, "@loader_path/../../../../Python", innerExecutable]);
+    await execFileAsync("/usr/bin/codesign", ["--force", "--sign", "-", innerApp]);
+  }
 }
 
 async function makeWritableTree(path) {

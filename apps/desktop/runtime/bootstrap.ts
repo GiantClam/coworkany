@@ -116,7 +116,7 @@ async function probePython(candidate: string): Promise<RuntimeProbe> {
         env = { ...process.env, PYTHONHOME: dirname(candidate), PYTHONNOUSERSITE: "1" };
       } catch { /* system Python keeps its own prefix */ }
     }
-    await execFileAsync(candidate, ["-c", "import pptx, xlsxwriter, pathops, uharfbuzz, fitz, mammoth, markdownify, ebooklib, nbconvert, openpyxl, PIL, numpy, requests, bs4, curl_cffi, edge_tts, flask, google.genai"], { windowsHide: true, timeout: 5000, maxBuffer: 32 * 1024, env });
+    await execFileAsync(candidate, ["-c", "import os,sys,venv; assert not sys.flags.isolated and not getattr(sys.flags, 'safe_path', False); import pptx, xlsxwriter, pathops, uharfbuzz, fitz, mammoth, markdownify, ebooklib, nbconvert, openpyxl, PIL, numpy, requests, bs4, curl_cffi, edge_tts, flask, google.genai"], { windowsHide: true, timeout: 5000, maxBuffer: 32 * 1024, env });
     return { ...version, detail: "ppt-master Python requirements ready" };
   } catch (error) {
     return { ...version, ok: false, detail: `python-pptx unavailable: ${error instanceof Error ? error.message.slice(0, 120) : "probe failed"}` };
