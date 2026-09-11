@@ -45,7 +45,7 @@ async function validateBundledPython(appPath) {
   }
   await promisify(execFile)(python, ["-c", "import os,sys,venv; assert os.path.realpath(sys.prefix) == os.path.realpath(os.environ['PYTHONHOME']); print(sys.version.split()[0])"], {
     timeout: 60_000,
-    env: { ...process.env, PYTHONHOME: dirname(python), PYTHONNOUSERSITE: "1" },
+    env: { ...process.env, PYTHONHOME: dirname(python), PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1" },
   });
 }
 
@@ -58,10 +58,10 @@ await mkdir(stage, { recursive: true });
 // when the release path has a signed app.
 await promisify(execFile)("ditto", [app, join(stage, "CoworkAny.app")]);
 const packagedApp = join(stage, "CoworkAny.app");
+if (internal) await writeFile(join(packagedApp, "Contents", "Resources", "internal-portable.flag"), "", "utf8");
 if (internal) await promisify(execFile)("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", packagedApp]);
 await validateBundledPython(packagedApp);
 if (!internal) await promisify(execFile)("codesign", ["--verify", "--deep", "--strict", packagedApp]);
-if (internal) await writeFile(join(stage, "CoworkAny.app", "Contents", "Resources", "internal-portable.flag"), "", "utf8");
 await mkdir(join(stage, "CoworkAny Data"), { recursive: true });
 await writeFile(join(stage, "portable.flag"), "", "utf8");
 const instructions = internal
