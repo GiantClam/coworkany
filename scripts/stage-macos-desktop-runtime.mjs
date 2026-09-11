@@ -58,8 +58,11 @@ async function repairTopLevelPythonEntrypoint() {
     await execFileAsync("/usr/bin/codesign", ["--force", "--sign", "-", topLevel]);
   }
   const innerLinks = await execFileAsync("/usr/bin/otool", ["-L", innerExecutable], { encoding: "utf8" });
-  const absoluteFramework = "/Library/Frameworks/Python.framework/Versions/3.12/Python";
-  if (innerLinks.stdout.includes(absoluteFramework)) {
+  const absoluteFramework = innerLinks.stdout
+    .split("\n")
+    .map(line => line.trim().split(" (", 1)[0])
+    .find(value => /^\/Library\/Frameworks\/Python\.framework\/Versions\/[^/]+\/Python$/u.test(value));
+  if (absoluteFramework) {
     // The nested Python.app is signed by Python.org. install_name_tool
     // invalidates that signature, so sign the nested app explicitly before
     // signing the containing runtime directory.
