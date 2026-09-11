@@ -1,4 +1,4 @@
-import { access, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { execFile } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -13,6 +13,21 @@ const name = internal ? "CoworkAny-macOS-arm64-internal-portable" : "CoworkAny-m
 const stage = join(output, name);
 const archive = join(output, `${name}.zip`);
 
+async function listPythonMachOFiles(rootPath) {
+  const files = [];
+  const visit = async path => {
+    const details = await stat(path);
+    if (details.isDirectory()) {
+      for (const entry of await readdir(path)) await visit(join(path, entry));
+      return;
+    }
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    if (name === "Python" || name === "python3" || name === "python3.12" || path.endsWith(".dylib") || path.endsWith(".so")) files.push(path);
+  };
+  await visit(rootPath);
+  return files;
+}
+
 async function validateBundledPython(appPath) {
   const python = join(appPath, "Contents/Resources/_up_/dist-runtime/runtime/python/python3");
   const innerPython = join(appPath, "Contents/Resources/_up_/dist-runtime/runtime/python/Resources/Python.app/Contents/MacOS/Python");
@@ -22,7 +37,10 @@ async function validateBundledPython(appPath) {
     promisify(execFile)("/usr/bin/otool", ["-L", python], { encoding: "utf8" }),
     promisify(execFile)("/usr/bin/otool", ["-L", innerPython], { encoding: "utf8" }),
   ]);
-  if (topLevelLinks.includes("/Library/Frameworks/Python.framework/") || !topLevelLinks.includes("@loader_path/Python") || innerLinks.includes("/Library/Frameworks/Python.framework/")) {
+  const pythonRoot = dirname(python);
+  const allFiles = await listPythonMachOFiles(pythonRoot);
+  const allLinks = await Promise.all(allFiles.map(async file => (await promisify(execFile)("/usr/bin/otool", ["-L", file], { encoding: "utf8" })).stdout));
+  if (topLevelLinks.includes("/Library/Frameworks/Python.framework/") || !topLevelLinks.includes("@loader_path/Python") || innerLinks.includes("/Library/Frameworks/Python.framework/") || allLinks.some(links => links.includes("/Library/Frameworks/Python.framework/"))) {
     throw new Error("macos_bundled_python_not_relocatable");
   }
   await promisify(execFile)(python, ["-c", "import os,sys,venv; assert os.path.realpath(sys.prefix) == os.path.realpath(os.environ['PYTHONHOME']); print(sys.version.split()[0])"], {
