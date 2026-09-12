@@ -79,7 +79,7 @@ try {
   if (-not (Test-Path -LiteralPath $distRuntime -PathType Container)) { throw "Tauri runtime resources missing: $distRuntime" }
   New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot "_up_") | Out-Null
   $packageRuntime = Join-Path $packageRoot "_up_\dist-runtime"
-  New-Item -ItemType Directory -Force -Path $packageRuntime, (Join-Path $packageRuntime "runtime") | Out-Null
+  New-Item -ItemType Directory -Force -Path $packageRuntime | Out-Null
   foreach ($name in @("host.mjs", "knowledge.mjs", "skill-catalog.json", "agency-agent-manifest.json", "install-desktop-runtime.ps1", "runtime-manifest-crypto.mjs")) {
     $source = Join-Path $distRuntime $name
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Tauri runtime control resource missing: $source" }
@@ -92,8 +92,18 @@ try {
   }
   $manifest = Join-Path $distRuntime "runtime\runtime-manifest.json"
   if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw "Tauri runtime manifest missing: $manifest" }
-  Copy-Item -LiteralPath $manifest -Destination (Join-Path $packageRuntime "runtime\runtime-manifest.json") -Force
-  if ($Portable) { Set-Content -LiteralPath (Join-Path $packageRoot "portable.flag") -Value "" -Encoding utf8 }
+  if ($Portable) {
+    # Keep the bundled runtime payload in the green package. The installer can
+    # still download missing Node/Python assets, but OpenCode, media tools,
+    # fonts, LanceDB, and the local embedding model must be available for the
+    # post-install runtime probe to pass on an offline or restricted machine.
+    $bundledRuntime = Join-Path $distRuntime "runtime"
+    Copy-Item -LiteralPath $bundledRuntime -Destination (Join-Path $packageRuntime "runtime") -Recurse -Force
+    Set-Content -LiteralPath (Join-Path $packageRoot "portable.flag") -Value "" -Encoding utf8
+  } else {
+    New-Item -ItemType Directory -Force -Path (Join-Path $packageRuntime "runtime") | Out-Null
+    Copy-Item -LiteralPath $manifest -Destination (Join-Path $packageRuntime "runtime\runtime-manifest.json") -Force
+  }
   Set-Content -LiteralPath (Join-Path $packageRoot "README.txt") -Encoding utf8 -Value @"
 CoworkAny Windows green package
 

@@ -13,6 +13,7 @@ test("desktop package verifier checks normal and portable archive contracts", as
   assert.match(script, /desktop_package_embeds_full_runtime/u);
   assert.match(script, /runtime\/python\//u);
   assert.match(script, /CoworkAny-Runtime-x64\.zip/u);
+  assert.match(script, /if\s+\(-not\s+\$ExpectPortable\)\s*\{[\s\S]*desktop_package_embeds_full_runtime/u);
   assert.match(script, /desktop_package_stale_entry/u);
   assert.match(script, /PackageDir = "\.artifacts"/u);
   assert.match(script, /desktop-release/u);
