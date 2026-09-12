@@ -68,6 +68,7 @@ test("desktop creates an entry-scoped session before the first message and retit
   assert.match(appSource, /const launchPath = activePathRef\.current/u);
   assert.match(appSource, /routeConversationId = conversationIdFromPath\(launchPath\)/u);
   assert.match(appSource, /onNewSession=\{\(\) => void startNewConversation\(\)\}/u);
+  assert.match(appSource, /hideSessionScopes=\{\["entry:image-assistant"\]\}/u);
   assert.doesNotMatch(appSource, /if \(!value\) onNewConversation\(\)/u);
 });
 
@@ -307,6 +308,7 @@ test("desktop sidebar owns its scroll area and shows recent assistant sessions",
   assert.match(appSource, /sessions=\{conversations\.map/u);
   assert.match(appSource, /activeSessionAgentId=\{conversationScope\}/u);
   assert.match(appSource, /onNewSession=/u);
+  assert.match(appSource, /hideSessionScopes=\{\["entry:image-assistant"\]\}/u);
   assert.match(appSource, /function conversationAwareRoute/u);
   assert.match(appSource, /conversationRoute\(conversation\)/u);
   assert.match(appSource, /DesktopTaskCenterSurface runs=\{runs\} conversations=\{conversations\}/u);
@@ -676,23 +678,66 @@ test("desktop image assistant keeps parameters left of results and renders model
   assert.match(appSource, /accept=\{isImage \? "image\/\*"/);
   assert.match(appSource, /appendImageReferencePaths/);
   assert.match(appSource, /savedAttachments.*relativePath/);
+  assert.match(appSource, /getDesktopImageParameterSchema\(model, locale\)\.filter\(\(field\) => field\.id !== "responseFormat"/);
   assert.match(appSource, /disabled=\{field\.id === "responseFormat"\}/);
   assert.doesNotMatch(appSource, /<option value="standard">\{locale === "en" \? "Standard"/);
   assert.match(appSource, /data-image-parameter="model"/);
   assert.doesNotMatch(appSource, /image-feature-summary/);
   assert.doesNotMatch(appSource, /当前参数已匹配/);
   const previewPanelIndex = appSource.indexOf('<section className="media-preview-panel">');
-  const imageTaskIndex = appSource.indexOf('<WorkbenchTask title={locale === "en" ? "Image generation"', previewPanelIndex);
   const imagePreviewIndex = appSource.indexOf('<DesktopImageArtifactPreview', previewPanelIndex);
-  assert.ok(previewPanelIndex >= 0 && imageTaskIndex > previewPanelIndex);
-  assert.ok(imagePreviewIndex > previewPanelIndex && imagePreviewIndex < imageTaskIndex);
+  assert.ok(previewPanelIndex >= 0 && imagePreviewIndex > previewPanelIndex);
+  assert.match(styleSource, /\.media-workspace-grid:has\(\.image-field-grid\) \.media-field\[data-image-parameter="referenceImages"\] > input,[\s\S]*?display: none;/);
+  assert.match(styleSource, /\.media-workspace-grid:has\(\.image-field-grid\) \.media-field\[data-image-parameter="inputImageUrl"\] > input \{[\s\S]*?display: none;/);
+  assert.match(styleSource, /\.media-workspace-grid:has\(\.image-field-grid\) \.media-asset-picker \{ display: none;/);
+  assert.doesNotMatch(styleSource, /本地产物路径/);
   assert.match(appSource, /media-preview-heading/);
-  assert.match(appSource, /media-preview-fullscreen/);
-  assert.match(appSource, /role="tablist"/);
-  assert.match(appSource, /media-empty-output-card/);
-  assert.match(styleSource, /\.media-output-tabs \{/);
-  assert.match(styleSource, /\.media-empty-output-grid \{/);
+  assert.match(appSource, /generationStatus=\{isImage && activeRunId \?/);
+  assert.match(appSource, /media-image-stage/);
+  assert.match(appSource, /media-image-history/);
+  assert.match(styleSource, /\.media-image-fullscreen-frame:fullscreen \{/);
+  assert.match(styleSource, /\.media-image-fullscreen-frame:fullscreen \.media-image-fullscreen-close \{/);
+  assert.match(styleSource, /\.media-image-actions \{/);
+  assert.match(styleSource, /\.media-image-history-thumbnail \{/);
   assert.match(styleSource, /\.image-reference-cards \{/);
+});
+
+test("desktop image assistant keeps transient progress in the image stage and exposes history only", () => {
+  const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const routeSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/routes.ts"), "utf8");
+  const previewStart = appSource.indexOf("function DesktopImageArtifactPreview");
+  const previewSource = appSource.slice(previewStart, appSource.indexOf("type DesktopMediaWorkspaceProps", previewStart));
+  assert.match(appSource, /generationStatus=\{isImage && activeRunId \?/);
+  assert.doesNotMatch(appSource, /generationStatus=\{isImage && activeRunId \? <WorkbenchTask/);
+  assert.match(previewSource, /className="media-image-stage"/);
+  assert.match(previewSource, /className="media-image-actions"/);
+  assert.match(previewSource, /className="media-image-history"/);
+  assert.match(previewSource, /className="media-image-history-thumbnail"/);
+  assert.match(previewSource, /data-image-generation-status/);
+  assert.match(appSource, /media-image-details/);
+  assert.match(appSource, /提示词/);
+  assert.match(appSource, /参数/);
+  assert.match(appSource, /imageGeneration: buildDesktopImageGenerationMetadata/);
+  assert.match(appSource, /runMetadataById/);
+  assert.match(previewSource, /media-image-fullscreen-frame/);
+  assert.match(previewSource, /media-image-fullscreen-close/);
+  assert.match(previewSource, /fullscreenchange/);
+  assert.match(previewSource, /document\.fullscreenElement === imageRef\.current/);
+  assert.doesNotMatch(appSource.slice(appSource.indexOf('<section className="media-preview-panel">'), appSource.indexOf("function DesktopImageArtifactPreview")), /media-output-tabs/);
+  assert.doesNotMatch(previewSource, /media-artifact-row/);
+  assert.doesNotMatch(routeSource, /对话生图/);
+});
+
+test("desktop image assistant uses a viewport-sized two-pane studio layout", () => {
+  const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const styleSource = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+  assert.match(appSource, /showHeader && !isImage \? "workflow-page-header"/);
+  assert.match(styleSource, /\.media-workspace:has\(\.image-field-grid\) \{[\s\S]*?max-width: none;[\s\S]*?height: 100%;[\s\S]*?overflow: hidden;/);
+  assert.match(styleSource, /\.media-workspace-grid:has\(\.image-field-grid\) \{[\s\S]*?grid-template-columns: minmax\(360px, 460px\) minmax\(0, 1fr\);[\s\S]*?height: 100%;/);
+  assert.match(styleSource, /\.media-workspace-grid:has\(\.image-field-grid\) \.media-control-panel \{[\s\S]*?overflow-y: auto;/);
+  assert.match(styleSource, /\.media-workspace-grid:has\(\.image-field-grid\) \.media-preview-panel \{[\s\S]*?display: flex;[\s\S]*?overflow: hidden;/);
+  assert.match(styleSource, /\.media-image-output \{[\s\S]*?flex: 1;/);
+  assert.match(styleSource, /\.media-image-stage \{[\s\S]*?height: 100%;/);
 });
 
 test("desktop conversation history stays in the sidebar instead of above the composer", () => {
@@ -721,7 +766,7 @@ test("desktop image assistant restores session prompt and image artifacts withou
   assert.doesNotMatch(appSource, /media-session-prompt/);
   assert.match(appSource, /function DesktopImageArtifactPreview/);
   assert.match(appSource, /read_artifact/);
-  assert.match(appSource, /<img src=\{preview\.source\}/);
+  assert.match(appSource, /src=\{preview\.source\}/);
 });
 
 test("writer and video title bars do not duplicate composer or form controls", () => {
@@ -1038,7 +1083,11 @@ test("desktop media and asset artifact reveals consume the WorkbenchClient file 
   assert.match(assetCardSource, /<DesktopArtifactCardMedia/);
   assert.match(appSource, /function DesktopArtifactCardMedia/);
   const assetCardMediaSource = appSource.match(/function DesktopArtifactCardMedia\([\s\S]*?function DesktopArtifactLibraryCard/)?.[0] ?? "";
-  assert.match(assetCardMediaSource, /readArtifactPreviewSource\(item\)/);
+  assert.match(assetCardMediaSource, /readCachedArtifactPreview\(item\)/);
+  assert.match(appSource, /const ARTIFACT_PREVIEW_CACHE_LIMIT = 64/);
+  assert.match(appSource, /const artifactPreviewPending = new Map/);
+  assert.match(assetCardMediaSource, /cancelled = true;[\s\S]*sourceRef\.current = null/);
+  assert.doesNotMatch(assetCardMediaSource, /URL\.revokeObjectURL\(sourceRef\.current\)/);
   assert.match(assetCardMediaSource, /<img src=\{source\}/);
   assert.match(assetCardMediaSource, /<video controls preload="metadata" src=\{source\}/);
   assert.match(assetCardMediaSource, /<audio controls preload="metadata" src=\{source\}/);
@@ -1051,7 +1100,9 @@ test("desktop media and asset artifact reveals consume the WorkbenchClient file 
   assert.match(assetCardSource, /<time dateTime=\{item\.created_at\}>\{formatDateTime\(item\.created_at, locale\)\}<\/time>/);
   assert.doesNotMatch(assetCardSource, /copy\.generatedAt/);
   const assetPreviewSource = appSource.match(/function DesktopArtifactPreviewModal\([\s\S]*?function DesktopAssetLibrarySurface/)?.[0] ?? "";
-  assert.match(assetPreviewSource, /readArtifactPreviewSource\(artifact\)/);
+  assert.match(assetPreviewSource, /source: string/);
+  assert.doesNotMatch(assetPreviewSource, /readArtifactPreviewSource\(artifact\)/);
+  assert.match(appSource, /onPreview=\{\(artifact, source\) => setPreviewArtifact\(\{ artifact, source \}\)\}/);
   assert.match(appSource, /artifact-preview-content/);
   assert.match(appSource, /open_artifact_folder/);
   assert.match(appSource, /<video controls preload="metadata" src=\{preview\.source\}/);
@@ -1144,6 +1195,9 @@ test("desktop workflow builder keeps the Canvas full-screen with movable side pa
   assert.match(appSource, /onSelectWorkflowFiles/);
   assert.doesNotMatch(modernSurface, /persistLocalFile/);
   assert.match(appSource, /uploadedFiles: files/);
+  assert.doesNotMatch(appSource, /config: \{ \.\.\.node\.config, uploadedFiles: files \}/);
+  assert.match(appSource, /_onRun\(localDefinitionRef\.current\)/);
+  assert.match(appSource, /onRun=\{onRun\}/);
   assert.doesNotMatch(appSource, /FileReader/);
   assert.match(appSource, /const updateNodeConfig = \(nodeKey: string, key: string, value: WorkflowParameterValue\)/);
   assert.match(canvasSource, /event\.currentTarget\.setPointerCapture\?\.\(event\.pointerId\)/);
@@ -1194,6 +1248,7 @@ test("desktop workflow palette appends repeated node types from the latest canva
   const addNodeSource = appSource.match(/const addNode = \(type: WorkflowAction[\s\S]*?\n  \};/)?.[0] ?? "";
   assert.match(addNodeSource, /const current = localDefinitionRef\.current/);
   assert.match(addNodeSource, /createUniqueWorkflowNodeKey\(type, current\.nodes\)/);
+  assert.match(addNodeSource, /title: nextNodeTitle\(type, current\.nodes\)/);
   assert.match(addNodeSource, /commit\(\{ \.\.\.current, nodes: \[\.\.\.current\.nodes, node\] \}\)/);
   assert.doesNotMatch(addNodeSource, /type === "text_input"/);
   assert.doesNotMatch(addNodeSource, /type === "output"\) \{ setSelectedNodeKey/);
@@ -1202,8 +1257,20 @@ test("desktop workflow palette appends repeated node types from the latest canva
   const duplicateNodeSource = appSource.match(/const duplicateNode = \(nodeKey: string\)[\s\S]*?\n  \};/)?.[0] ?? "";
   assert.match(duplicateNodeSource, /const current = localDefinitionRef\.current/);
   assert.match(duplicateNodeSource, /const source = current\.nodes\.find/);
+  assert.match(duplicateNodeSource, /title: nextNodeTitle\(source\.type as WorkflowAction, current\.nodes\)/);
   assert.match(duplicateNodeSource, /commit\(\{ \.\.\.current, nodes: \[\.\.\.current\.nodes, clone\]/);
   assert.doesNotMatch(duplicateNodeSource, /commit\(\{ \.\.\.localDefinition, nodes: \[\.\.\.localDefinition\.nodes, clone\]/);
+});
+
+test("workflow node titles are editable and persist on blur or Enter", () => {
+  const canvasSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/workflow-canvas.tsx"), "utf8");
+  assert.match(canvasSource, /onDoubleClick=.*beginTitleEdit/);
+  assert.match(canvasSource, /data-node-no-drag="true" onPointerDown=\{\(event\) => event\.stopPropagation\(\)\}/);
+  assert.match(canvasSource, /onBlur=\{\(\) => commitTitleEdit\(node\)\}/);
+  assert.match(canvasSource, /if \(event\.key === "Enter"\) commitTitleEdit\(node\)/);
+  assert.match(canvasSource, /data-workflow-title-editor="true"/);
+  assert.match(canvasSource, /commitWhenClickingOutsideTitle/);
+  assert.match(canvasSource, /onUpdateNode\(node\.nodeKey, \{[\s\S]*title: titleDraft\.trim\(\)/);
 });
 
 test("desktop workflows persist the edited Canvas and restore the exact task snapshot with node outputs", () => {
@@ -1253,6 +1320,21 @@ test("desktop workflow recovery actions are hidden after a successful run", () =
   assert.match(builderSource, /\{canContinue \? <button className="ghost" type="button" onClick=\{\(\) => props\.onRerun\(localDefinition\)\}>\{copy\.rerun\}<\/button> : null\}/);
   assert.match(builderSource, /\{canContinue \? <button className="ghost" type="button" onClick=\{props\.onContinue\}>\{copy\.continue\}<\/button> : null\}/);
   assert.doesNotMatch(builderSource, /\["failed", "cancelled", "interrupted", "succeeded"\]\.includes\(terminalRun\)/);
+});
+
+test("desktop workflow recovery actions execute in the workflow canvas without navigating to chat", () => {
+  const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  assert.match(appSource, /onRerun=\{\(definition\) => void runAgent\(undefined, undefined, undefined, definition\)\}/);
+  assert.match(appSource, /onContinue=\{\(\) => void continueWorkflowRun\(\)\}/);
+  assert.match(appSource, /workflowLastRunsRef\.current\.get\(workflowKey\)\?\.runId/);
+  assert.match(appSource, /new URLSearchParams\(activePathRef\.current\.split\("\?", 2\)\[1\] \?\? ""\)/);
+  assert.match(appSource, /await prepareRunRetry\(latest, \{ workflowOnly: true \}\)/);
+  assert.match(appSource, /const setRetryStatus = workflowOnly \? setWorkflowRunStatus : setRunStatus/);
+  assert.match(appSource, /if \(workflowOnly && retryDefinition\) \{/);
+  assert.match(appSource, /await runAgent\(undefined, undefined, undefined, retryDefinition/);
+  assert.match(appSource, /const executableRecoveryDefinitionHash = workflowRetry \? hashWorkflowDefinition\(hostWorkflowDefinition\) : undefined/);
+  assert.match(appSource, /recoveryDefinitionHash: executableRecoveryDefinitionHash/);
+  assert.match(appSource, /本地运行环境仍在准备中，请稍候再运行[\s\S]*?workflowLaunchLocksRef\.current\.delete\(workflowKey\)/);
 });
 
 test("desktop workflow persistence actions expose click progress and completion state", () => {
@@ -1323,6 +1405,14 @@ test("desktop supervises a crashed workflow host before marking the active run i
   assert.match(appSource, /status: "failed", message: detail/);
   assert.match(supervisorSource, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/);
   assert.match(supervisorSource, /SetInformationJobObject/);
+});
+
+test("provider model discovery starts the host when settings open early", () => {
+  const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const start = appSource.indexOf("async function discoverProviderModels");
+  const end = appSource.indexOf("\n  async function respondToPermission", start);
+  assert.ok(start >= 0 && end > start);
+  assert.match(appSource.slice(start, end), /await tauriBridge\.invoke\("host_start"\)/);
 });
 
 test("workflow-host delegates RAG and Obsidian storage to the reverse-RPC knowledge service", () => {

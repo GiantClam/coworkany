@@ -11,6 +11,6 @@ test("desktop ZIP packaging keeps the full runtime in the standalone runtime arc
   assert.match(packageScript, /\$packageRuntime\s*=\s*Join-Path\s+\$packageRoot\s+"_up_/u);
   assert.match(packageScript, /runtime-manifest\.json/u);
   assert.match(packageScript, /foreach\s+\(\$directory\s+in\s+@\("skills",\s+"agents"\)\)/u);
-  assert.doesNotMatch(packageScript, /Copy-Item\s+-LiteralPath\s+\$distRuntime\s+-Destination[\s\S]*?-Recurse\s+-Force/u);
-  assert.doesNotMatch(packageScript, /Copy-Item\s+-LiteralPath\s+\(Join-Path\s+\$distRuntime\s+"runtime"\)/u);
+  assert.match(packageScript, /if\s+\(\$Portable\)\s*\{[\s\S]*?Copy-Item\s+-LiteralPath\s+\$bundledRuntime\s+-Destination\s+\(Join-Path\s+\$packageRuntime\s+"runtime"\)\s+-Recurse\s+-Force/u);
+  assert.match(packageScript, /Copy-Item\s+-LiteralPath\s+\$manifest\s+-Destination\s+\(Join-Path\s+\$packageRuntime\s+"runtime\\runtime-manifest\.json"\)\s+-Force/u);
 });

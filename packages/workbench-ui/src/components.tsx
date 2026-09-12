@@ -291,6 +291,7 @@ export function WorkbenchShell({
   sessionsLabel,
   activeSessionAgentId,
   activeSessionAgentLabel,
+  hideSessionScopes = [],
   newSessionLabel,
   onNewSession,
   initialSessionsExpanded = false,
@@ -312,6 +313,7 @@ export function WorkbenchShell({
   /** Restricts the expanded chat list to the selected Agent, matching the web workspace. */
   activeSessionAgentId?: string | null;
   activeSessionAgentLabel?: string;
+  hideSessionScopes?: readonly string[];
   newSessionLabel?: string;
   onNewSession?: () => void;
   initialSessionsExpanded?: boolean;
@@ -329,6 +331,7 @@ export function WorkbenchShell({
   const hasMatchingSessionNav = Boolean(activeSessionScope && navItems.some((item) => workbenchSessionScope(item.path) === activeSessionScope));
   const renderSessionSection = (item: WorkbenchShellNavItem) => {
     const itemSessionScope = workbenchSessionScope(item.path);
+    if (itemSessionScope && hideSessionScopes.includes(itemSessionScope)) return null;
     const isRoot = item.path === "/dashboard/ai" || item.path === "/dashboard/writer" || item.path === "/dashboard/image-assistant";
     const isCurrentAgent = Boolean(itemSessionScope && itemSessionScope === activeSessionScope);
     const isFallbackAgent = isRoot && Boolean(activeSessionScope) && !hasMatchingSessionNav;
@@ -369,13 +372,15 @@ export function WorkbenchShell({
               const isAssistantEntry = item.path.startsWith("/dashboard/ai");
               const isSessionRoot = item.path === "/dashboard/ai" || item.path === "/dashboard/writer" || item.path === "/dashboard/image-assistant";
               const itemSessionScope = workbenchSessionScope(item.path);
+              const sessionScopeHidden = Boolean(itemSessionScope && hideSessionScopes.includes(itemSessionScope));
+              const sessionNavigationEnabled = !sessionScopeHidden && (isSessionRoot || Boolean(itemSessionScope));
               const sessionItemMatches = itemSessionScope ? itemSessionScope === activeSessionScope : !activeSessionScope || !hasMatchingSessionNav;
               const assistantHighlighted = (isAssistantRoot && !activeSessionScope && isWorkbenchSessionPath(activePath)) || (itemSessionScope && itemSessionScope === activeSessionScope) || (isActive && isAssistantEntry && !(isAssistantRoot && activeSessionScope));
               const showSection = Boolean(item.section && !collapsed && item.section !== lastSection);
               if (item.section) lastSection = item.section;
               return <div key={item.path}>
             {showSection ? <h3 className="wb-nav-section">{item.section}</h3> : null}
-            <button type="button" className={`wb-nav-item ${isActive || assistantHighlighted ? "wb-nav-item-active" : ""} ${assistantHighlighted ? "wb-nav-item-active-assistant" : ""}`.trim()} title={item.label} aria-label={item.label} aria-current={isActive ? "page" : undefined} aria-expanded={(isSessionRoot || itemSessionScope) ? (!collapsed && assistantSessionsExpanded && isWorkbenchSessionPath(activePath) && sessionItemMatches) : undefined} data-agent-nav={item.label} onClick={() => { if (!(isSessionRoot || itemSessionScope)) { onNavigate(item.path); return; } if (isWorkbenchSessionPath(activePath) && sessionItemMatches) { setAssistantSessionsExpanded((current) => !current); return; } setAssistantSessionsExpanded(true); onNavigate(item.path); }}><span className="wb-nav-glyph" aria-hidden="true">{item.icon ?? item.glyph ?? item.label.slice(0, 1)}</span>{!collapsed ? <span className="wb-nav-label">{item.label}</span> : null}{(isSessionRoot || itemSessionScope) && !collapsed ? <span className="wb-nav-expander" aria-hidden="true">{assistantSessionsExpanded && isWorkbenchSessionPath(activePath) && sessionItemMatches ? "⌄" : "›"}</span> : null}</button>
+            <button type="button" className={`wb-nav-item ${isActive || assistantHighlighted ? "wb-nav-item-active" : ""} ${assistantHighlighted ? "wb-nav-item-active-assistant" : ""}`.trim()} title={item.label} aria-label={item.label} aria-current={isActive ? "page" : undefined} aria-expanded={sessionNavigationEnabled ? (!collapsed && assistantSessionsExpanded && isWorkbenchSessionPath(activePath) && sessionItemMatches) : undefined} data-agent-nav={item.label} onClick={() => { if (!sessionNavigationEnabled) { onNavigate(item.path); return; } if (isWorkbenchSessionPath(activePath) && sessionItemMatches) { setAssistantSessionsExpanded((current) => !current); return; } setAssistantSessionsExpanded(true); onNavigate(item.path); }}><span className="wb-nav-glyph" aria-hidden="true">{item.icon ?? item.glyph ?? item.label.slice(0, 1)}</span>{!collapsed ? <span className="wb-nav-label">{item.label}</span> : null}{sessionNavigationEnabled && !collapsed ? <span className="wb-nav-expander" aria-hidden="true">{assistantSessionsExpanded && isWorkbenchSessionPath(activePath) && sessionItemMatches ? "⌄" : "›"}</span> : null}</button>
             {renderSessionSection(item)}
           </div>;
             })}

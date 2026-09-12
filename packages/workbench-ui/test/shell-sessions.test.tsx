@@ -75,6 +75,7 @@ test("creative workspace assistants render only their own conversation history",
     sessions={sessions}
     activeSessionAgentId={scope}
     activeSessionAgentLabel={label}
+    hideSessionScopes={["entry:image-assistant"]}
     onNewSession={() => undefined}
     initialSessionsExpanded
   ><div>内容</div></WorkbenchShell>);
@@ -87,9 +88,9 @@ test("creative workspace assistants render only their own conversation history",
   assert.doesNotMatch(writerMarkup, /通用会话/);
 
   const imageMarkup = renderCreativeShell("/dashboard/image-assistant/image-1", "entry:image-assistant", "图片设计助手");
-  assert.match(imageMarkup, /产品海报/);
-  assert.match(imageMarkup, /aria-expanded="true"/);
-  assert.doesNotMatch(imageMarkup, /class="wb-sidebar-session-heading">图片设计助手/);
+  assert.doesNotMatch(imageMarkup, /产品海报/);
+  assert.doesNotMatch(imageMarkup, /wb-sidebar-sessions/);
+  assert.doesNotMatch(imageMarkup, /aria-expanded="true"/);
   assert.doesNotMatch(imageMarkup, /公众号文案/);
   assert.doesNotMatch(imageMarkup, /通用会话/);
 });

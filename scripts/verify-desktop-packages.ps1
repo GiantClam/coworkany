@@ -51,10 +51,12 @@ function Verify-Package {
       "$packageName/_up_/dist-runtime/runtime/opencode/node_modules/",
       "$packageName/_up_/dist-runtime/CoworkAny-Runtime-x64.zip"
     )
-    foreach ($entry in $archive.Entries) {
-      $normalizedEntry = $entry.FullName.Replace('\', '/')
-      foreach ($marker in $fullRuntimeMarkers) {
-        if ($normalizedEntry.StartsWith($marker, [StringComparison]::OrdinalIgnoreCase)) { throw "desktop_package_embeds_full_runtime:${Mode}:$normalizedEntry" }
+    if (-not $ExpectPortable) {
+      foreach ($entry in $archive.Entries) {
+        $normalizedEntry = $entry.FullName.Replace('\', '/')
+        foreach ($marker in $fullRuntimeMarkers) {
+          if ($normalizedEntry.StartsWith($marker, [StringComparison]::OrdinalIgnoreCase)) { throw "desktop_package_embeds_full_runtime:${Mode}:$normalizedEntry" }
+        }
       }
     }
 
