@@ -5334,7 +5334,11 @@ export function App() {
           setWorkflowNodeSnapshots([]);
           setWorkflowRunStatus(locale === "zh" ? "工作流已创建" : "Workflow created");
         } catch (error) {
-          setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "创建工作流失败" : "Unable to create workflow"));
+          // Keep the template actionable when persistence is temporarily unavailable.
+          // The draft stays open and the Builder's auto-save can retry the same definition.
+          openWorkflowCanvas(definition);
+          setWorkflowMetadata((current) => ({ ...current, title }));
+          setWorkflowRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "创建工作流失败，已打开未保存草稿" : "Unable to create workflow; opened an unsaved draft"));
         }
       };
       if (action.id === "video-ffmpeg-transform" || action.id === "audio-ffmpeg-trim") {

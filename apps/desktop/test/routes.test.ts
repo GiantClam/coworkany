@@ -146,6 +146,7 @@ test("desktop workflows open the shared online directory before the local canvas
   assert.match(appSource, /action\.type === "create"[\s\S]*?setWorkflowBuilderOpen\(true\)/);
   assert.match(appSource, /action\.type === "open"[\s\S]*?openWorkflowCanvas\(definition(?:, workflow)?\)/);
   assert.match(appSource, /action\.type === "instantiate"[\s\S]*?workbenchClient\.workflows\.save\(\{ id, title, definition \}\)[\s\S]*?openWorkflowCanvas\(definition, saved\)/);
+  assert.match(appSource, /action\.type === "instantiate"[\s\S]*?catch \(error\) \{[\s\S]*?openWorkflowCanvas\(definition\);[\s\S]*?setWorkflowMetadata\(\(current\) => \(\{ \.\.\.current, title \}\)\)/);
   assert.match(appSource, /action\.type === "open-run" && action\.id[\s\S]*?workbenchClient\.navigation\.go\(`\/dashboard\/workflows\?runId=\$\{encodeURIComponent\(action\.id\)\}`\)/);
   assert.doesNotMatch(appSource, /action\.type === "open-run"\) workbenchClient\.navigation\.go\("\/dashboard\/tasks"\)/);
   assert.match(appSource, /action\.type === "delete"[\s\S]*?workbenchClient\.workflows\.remove\(workflowId\)/);
@@ -1325,8 +1326,10 @@ test("desktop workflow recovery actions are hidden after a successful run", () =
 
 test("desktop workflow recovery actions execute in the workflow canvas without navigating to chat", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  assert.match(appSource, /onRerun=\{\(definition\) => void runAgent\(undefined, undefined, undefined, definition\)\}/);
-  assert.match(appSource, /onContinue=\{\(\) => void continueWorkflowRun\(\)\}/);
+  assert.match(appSource, /const rerunWorkflow = onRerun/);
+  assert.match(appSource, /onRerun=\{rerunWorkflow\}/);
+  assert.match(appSource, /const continueWorkflow = onContinue/);
+  assert.match(appSource, /onContinue=\{continueWorkflow\}/);
   assert.match(appSource, /workflowLastRunsRef\.current\.get\(workflowKey\)\?\.runId/);
   assert.match(appSource, /new URLSearchParams\(activePathRef\.current\.split\("\?", 2\)\[1\] \?\? ""\)/);
   assert.match(appSource, /await prepareRunRetry\(latest, \{ workflowOnly: true \}\)/);
