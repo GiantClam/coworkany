@@ -41,5 +41,6 @@ export const WORKBENCH_PROVIDER_CATALOG: Readonly<Record<WorkbenchProviderCatego
       "speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo", "speech-02-hd", "speech-02-turbo",
       "music-2.6", "music-2.6-free", "music-cover", "music-cover-free",
     ] },
+    { providerId: "runninghub", providerLabel: "RunningHub", integrationLabel: "RunningHub AI App", models: [] },
   ],
 };

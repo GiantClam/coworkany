@@ -19,7 +19,7 @@ test("settings platforms do not prefill a built-in model catalog", () => {
 });
 
 test("audio exposes only its supported Provider platforms", () => {
-  assert.deepEqual(PROVIDER_PLATFORM_OPTIONS.audio.map((platform) => platform.id), ["minimax_official"]);
+  assert.deepEqual(PROVIDER_PLATFORM_OPTIONS.audio.map((platform) => platform.id), ["minimax_official", "runninghub"]);
 });
 
 test("platform selection creates a capability-scoped profile ready for a model id", () => {
@@ -29,6 +29,14 @@ test("platform selection creates a capability-scoped profile ready for a model i
     source: "runninghub",
     baseUrl: "https://www.runninghub.cn",
     capabilities: ["video"],
+    model: "",
+    models: [],
+  });
+  assert.deepEqual(createPlatformProviderProfile("audio", "runninghub"), {
+    id: "audio-runninghub",
+    source: "runninghub",
+    baseUrl: "https://www.runninghub.cn",
+    capabilities: ["audio"],
     model: "",
     models: [],
   });
