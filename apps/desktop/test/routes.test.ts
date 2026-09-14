@@ -145,6 +145,7 @@ test("desktop workflows open the shared online directory before the local canvas
   assert.match(appSource, /workflowBuilderOpen\s*\?/);
   assert.match(appSource, /action\.type === "create"[\s\S]*?setWorkflowBuilderOpen\(true\)/);
   assert.match(appSource, /action\.type === "open"[\s\S]*?openWorkflowCanvas\(definition(?:, workflow)?\)/);
+  assert.match(appSource, /action\.type === "instantiate"[\s\S]*?workbenchClient\.workflows\.save\(\{ id, title, definition \}\)[\s\S]*?openWorkflowCanvas\(definition, saved\)/);
   assert.match(appSource, /action\.type === "open-run" && action\.id[\s\S]*?workbenchClient\.navigation\.go\(`\/dashboard\/workflows\?runId=\$\{encodeURIComponent\(action\.id\)\}`\)/);
   assert.doesNotMatch(appSource, /action\.type === "open-run"\) workbenchClient\.navigation\.go\("\/dashboard\/tasks"\)/);
   assert.match(appSource, /action\.type === "delete"[\s\S]*?workbenchClient\.workflows\.remove\(workflowId\)/);

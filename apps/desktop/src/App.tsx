@@ -5324,19 +5324,35 @@ export function App() {
       return;
     }
     if (action.type === "instantiate") {
+      const createWorkflowFromTemplate = async (definition: WorkflowDefinitionEnvelope, title: string) => {
+        const id = globalThis.crypto?.randomUUID?.() ?? `workflow-${Date.now()}`;
+        try {
+          const saved = toSavedWorkflow(await workbenchClient.workflows.save({ id, title, definition }));
+          setSavedWorkflows((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+          openWorkflowCanvas(definition, saved);
+          setLastWorkflowRunId(null);
+          setWorkflowNodeSnapshots([]);
+          setWorkflowRunStatus(locale === "zh" ? "工作流已创建" : "Workflow created");
+        } catch (error) {
+          setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "创建工作流失败" : "Unable to create workflow"));
+        }
+      };
       if (action.id === "video-ffmpeg-transform" || action.id === "audio-ffmpeg-trim") {
-        openWorkflowCanvas(buildLocalMediaWorkflowDefinition(action.id === "video-ffmpeg-transform" ? "video" : "audio", locale));
+        const mediaKind = action.id === "video-ffmpeg-transform" ? "video" : "audio";
+        await createWorkflowFromTemplate(buildLocalMediaWorkflowDefinition(mediaKind, locale), mediaKind === "video"
+          ? (locale === "zh" ? "FFmpeg 视频变换" : "FFmpeg video transform")
+          : (locale === "zh" ? "FFmpeg 音频裁剪" : "FFmpeg audio trim"));
         return;
       }
       if (action.id === "product-promotion-video") {
-        openWorkflowCanvas(buildProductPromotionWorkflowDefinition(providerForCapability(config, "video"), providerForCapability(config, "audio"), locale));
+        await createWorkflowFromTemplate(buildProductPromotionWorkflowDefinition(providerForCapability(config, "video"), providerForCapability(config, "audio"), locale), locale === "zh" ? "产品宣传视频流水线" : "Product promotion video pipeline");
         return;
       }
       if (action.id === "character-swap-video") {
         const imageProvider = providerForCapability(config, "image");
         const audioProvider = audioTranscriptionProvider;
         const videoProvider = providerForCapability(config, "video");
-        openWorkflowCanvas(buildCharacterSwapVideoWorkflowDefinition({ image: imageProvider, audio: audioProvider, video: videoProvider }, locale));
+        await createWorkflowFromTemplate(buildCharacterSwapVideoWorkflowDefinition({ image: imageProvider, audio: audioProvider, video: videoProvider }, locale), locale === "zh" ? "人物替换字幕视频" : "Character replacement video");
         return;
       }
       const templateAction: WorkflowAction = action.id === "presentation" ? "ppt_generate" : action.id === "image-campaign" ? "image_generate" : "writer";
@@ -5345,7 +5361,9 @@ export function App() {
         : action.id === "image-campaign"
           ? (locale === "zh" ? "生成一组营销活动图片" : "Generate a set of campaign images")
           : (locale === "zh" ? "生成一份营销内容方案" : "Create a marketing content plan");
-      openWorkflowCanvas(buildWorkflowDefinition(templatePrompt, templateAction, providerForCapability(config, capabilityForWorkflowAction(templateAction)), {}, locale));
+      await createWorkflowFromTemplate(buildWorkflowDefinition(templatePrompt, templateAction, providerForCapability(config, capabilityForWorkflowAction(templateAction)), {}, locale), locale === "zh"
+        ? action.id === "presentation" ? "演示文稿生成" : action.id === "image-campaign" ? "营销图片批量生成" : "内容营销流水线"
+        : action.id === "presentation" ? "Presentation generation" : action.id === "image-campaign" ? "Campaign image generation" : "Content marketing pipeline");
       return;
     }
     if (action.type === "open-run" && action.id) {
