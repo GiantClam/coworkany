@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 
 const run = promisify(execFile);
 const shellPath = new URL("../apps/desktop/src-tauri/src/lib.rs", import.meta.url);
+const pythonCommand = process.env.COWORKANY_TEST_PYTHON ?? (process.platform === "win32" ? "python" : "python3");
 
 test("desktop Python probe rejects isolated mode, without inventing PPT output", async () => {
   const source = await readFile(shellPath, "utf8");
@@ -13,11 +14,12 @@ test("desktop Python probe rejects isolated mode, without inventing PPT output",
   assert.ok(probe);
   assert.doesNotMatch(probe, /Presentation\(|add_textbox|presentation\.save/u);
   assert.doesNotMatch(probe, /import pptx|import pathops/u, "runtime selection is independent of one Skill's dependencies");
+  assert.match(probe, /getattr\(sys\.flags, ["']safe_path["'], False\)/u, "macOS and older system Python builds must share compatible flag probing");
   // Check path semantics before importing optional skill requirements. An
   // isolated interpreter must not pass readiness even with all packages present.
   const compatibility = probe;
-  await assert.rejects(run("python", ["-I", "-c", compatibility], { windowsHide: true }), /python_script_path_isolated/u);
-  await run("python", ["-c", compatibility], { windowsHide: true });
+  await assert.rejects(run(pythonCommand, ["-I", "-c", compatibility], { windowsHide: true }), /python_script_path_isolated/u);
+  await run(pythonCommand, ["-c", compatibility], { windowsHide: true });
 });
 
 test("probe and launch share native runtime and packaged Skill resolution", async () => {

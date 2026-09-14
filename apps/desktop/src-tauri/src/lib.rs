@@ -19,8 +19,10 @@ mod bootstrap;
 mod instance_lock;
 
 pub(crate) const PPT_PYTHON_PROBE: &str = r#"
-import sys, venv, pip
-assert not sys.flags.isolated and not sys.flags.safe_path, "python_script_path_isolated"
+import os, sys, venv
+assert not sys.flags.isolated and not getattr(sys.flags, "safe_path", False), "python_script_path_isolated"
+if os.environ.get("PYTHONHOME"):
+    assert os.path.realpath(sys.prefix) == os.path.realpath(os.environ["PYTHONHOME"]), "python_home_not_applied"
 "#;
 
 /// Resolve Windows command shims to the executable they dispatch before a
@@ -65,8 +67,12 @@ fn health() -> Health {
 fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
     let data = data_dir(&app)?;
+    logs::append(&data, "runtime-probe", &format!("probe_started resource={} data={}", resource.display(), data.display()));
     let cache_fingerprint = runtime_probe_fingerprint(&data, &resource);
-    if let Some(cached) = read_runtime_probe_cache(&data, &cache_fingerprint) { return Ok(cached); }
+    if let Some(cached) = read_runtime_probe_cache(&data, &cache_fingerprint) {
+        logs::append(&data, "runtime-probe", &format!("probe_cached {}", cached));
+        return Ok(cached);
+    }
     let database = data.join("app.db");
     let migrations = storage::migrations_ready_without_initialization(&database).unwrap_or(false);
     let configured_node = configured_runtime_executable(&data, "nodePath");
@@ -158,6 +164,7 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         ("lancedbPath", lancedb_path.as_ref()), ("embeddingPath", embedding_path.as_ref()),
     ])?;
     let result = serde_json::json!({ "ready": node && opencode && python && skills && fonts && migrations && host && knowledge && lancedb && embedding && media, "development": cfg!(debug_assertions), "node": node, "opencode": opencode, "python": python, "skills": skills, "fonts": fonts, "migrations": migrations, "host": host, "knowledge": knowledge, "lancedb": lancedb, "embedding": embedding, "media": media, "semanticRag": lancedb, "paths": { "node": node_path, "opencode": opencode_path, "python": python_path, "host": host_path, "knowledge": knowledge_path, "skills": skill_path, "fonts": fonts_path, "lancedb": lancedb_path, "embedding": embedding_path, "media": media_path } });
+    logs::append(&data, "runtime-probe", &format!("probe_result {}", result));
     if result.get("ready").and_then(serde_json::Value::as_bool) == Some(true) {
         write_runtime_probe_cache(&data, &runtime_probe_fingerprint(&data, &resource), &result);
     }
@@ -460,16 +467,44 @@ fn repair_runtime(app: tauri::AppHandle, options: Option<RuntimeRepairOptions>) 
 
 #[tauri::command]
 #[cfg(not(windows))]
-fn repair_runtime(_app: tauri::AppHandle, _options: Option<RuntimeRepairOptions>) -> Result<serde_json::Value, String> {
+fn repair_runtime(app: tauri::AppHandle, _options: Option<RuntimeRepairOptions>) -> Result<serde_json::Value, String> {
+    let data = data_dir(&app)?;
+    logs::append(&data, "runtime-repair", "repair_started");
+    #[cfg(target_os = "macos")]
+    {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        if internal_portable_distribution_root(&executable).is_some() {
+            let app_bundle = executable.parent().and_then(Path::parent).and_then(Path::parent).ok_or_else(|| "macos_app_bundle_missing".to_string())?;
+            let status = Command::new("/usr/bin/xattr")
+                .args(["-dr", "com.apple.quarantine"])
+                .arg(app_bundle)
+                .status()
+                .map_err(|error| format!("macos_internal_quarantine_clear_failed: {error}"))?;
+            logs::append(&data, "runtime-repair", &format!("quarantine_clear status={}", status));
+            if !status.success() { return Err("macos_internal_quarantine_clear_failed".to_string()); }
+            logs::append(&data, "runtime-repair", "repair_finished status=bundled");
+            return Ok(serde_json::json!({ "status": "bundled", "mode": "internal" }));
+        }
+    }
     // macOS runtime executables are sealed inside the signed application bundle.
     // Downloading or replacing them after notarization would invalidate the
     // distribution security model, so repair is intentionally fail-closed.
+    logs::append(&data, "runtime-repair", "repair_rejected reason=requires_signed_macos_bundle");
     Err("runtime_repair_requires_signed_macos_bundle".to_string())
 }
 
 fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     Ok(storage::data_root(&platform::distribution_root(&executable), configured_local_app_data(&app)))
+}
+
+fn internal_portable_distribution_root(executable: &Path) -> Option<PathBuf> {
+    let root = platform::distribution_root(executable);
+    let package_name = root.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+    (package_name == "CoworkAny-macOS-arm64-internal-portable"
+        && (root.join("portable.flag").is_file()
+            || executable.parent()?.parent()?.parent()?.join("Contents/Resources/internal-portable.flag").is_file()))
+        .then_some(root)
 }
 
 /// Older green packages and user instructions sometimes placed `config.json`
@@ -782,6 +817,8 @@ fn write_file_atomically(target: &std::path::Path, bytes: &[u8]) -> Result<(), S
 fn powershell_quote(value: &str) -> String { value.replace('\'', "''") }
 
 fn archive_diagnostics(staging: &std::path::Path, zip_path: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
     let source = powershell_quote(&staging.to_string_lossy());
     let destination = powershell_quote(&zip_path.to_string_lossy());
     let command = format!("Compress-Archive -Path '{}\\*' -DestinationPath '{}' -Force", source, destination);
@@ -791,6 +828,36 @@ fn archive_diagnostics(staging: &std::path::Path, zip_path: &std::path::Path) ->
         .map_err(|error| format!("diagnostics_archive_spawn_failed: {error}"))?;
     if !output.status.success() { return Err(format!("diagnostics_archive_failed: {}", String::from_utf8_lossy(&output.stderr).trim())); }
     Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("/usr/bin/ditto")
+            .args(["-c", "-k", "--sequesterRsrc", "--keepParent"])
+            .arg(staging)
+            .arg(zip_path)
+            .output()
+            .map_err(|error| format!("diagnostics_archive_spawn_failed: {error}"))?;
+        if !output.status.success() {
+            return Err(format!("diagnostics_archive_failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+        }
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let output = Command::new("/usr/bin/zip")
+            .args(["-q", "-r"])
+            .arg(zip_path)
+            .arg(".")
+            .current_dir(staging)
+            .output()
+            .map_err(|error| format!("diagnostics_archive_spawn_failed: {error}"))?;
+        if !output.status.success() {
+            return Err(format!("diagnostics_archive_failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+        }
+        return Ok(());
+    }
 }
 
 fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
@@ -1362,7 +1429,7 @@ fn adjacent_instance_lock_path(data_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -1379,6 +1446,22 @@ mod tests {
         let lock = adjacent_instance_lock_path(data_root);
         assert_eq!(lock, PathBuf::from("C:/Users/test/AppData/Local/CoworkAny.instance.lock"));
         assert_ne!(lock.parent(), Some(data_root));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn internal_portable_root_requires_the_portable_marker_next_to_the_app() {
+        let root = std::env::temp_dir().join(format!("coworkany-macos-portable-marker-{}", std::process::id()));
+        let executable = root.join("CoworkAny-macOS-arm64-internal-portable/CoworkAny.app/Contents/MacOS/coworkany");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        assert_eq!(internal_portable_distribution_root(&executable), None);
+        fs::write(root.join("CoworkAny-macOS-arm64-internal-portable/portable.flag"), b"").unwrap();
+        assert_eq!(internal_portable_distribution_root(&executable), Some(root.join("CoworkAny-macOS-arm64-internal-portable")));
+        fs::remove_file(root.join("CoworkAny-macOS-arm64-internal-portable/portable.flag")).unwrap();
+        fs::create_dir_all(root.join("CoworkAny-macOS-arm64-internal-portable/CoworkAny.app/Contents/Resources")).unwrap();
+        fs::write(root.join("CoworkAny-macOS-arm64-internal-portable/CoworkAny.app/Contents/Resources/internal-portable.flag"), b"").unwrap();
+        assert_eq!(internal_portable_distribution_root(&executable), Some(root.join("CoworkAny-macOS-arm64-internal-portable")));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1661,6 +1744,29 @@ mod tests {
         assert!(!archived.contains("archive-secret"));
         assert!(archived.contains("[REDACTED]"));
         assert!(archived.contains("中文"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn diagnostic_archive_uses_macos_archive_tool() {
+        let root = std::env::temp_dir().join(format!("coworkany-diagnostics-macos-{}", std::process::id()));
+        let staging = root.join("staging");
+        let archive = root.join("diagnostics.zip");
+        let extracted = root.join("extracted");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("runtime-probe.jsonl"), b"{\"python\":false}").unwrap();
+
+        archive_diagnostics(&staging, &archive).unwrap();
+        let output = std::process::Command::new("/usr/bin/ditto")
+            .args(["-x", "-k"])
+            .arg(&archive)
+            .arg(&extracted)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(fs::read_to_string(extracted.join("staging/runtime-probe.jsonl")).unwrap(), "{\"python\":false}");
         let _ = fs::remove_dir_all(root);
     }
 }

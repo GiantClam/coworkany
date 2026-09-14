@@ -1,11 +1,14 @@
 import { access, chmod, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
+const execFileAsync = promisify(execFile);
 const output = resolve(process.env.COWORKANY_MAC_RUNTIME_OUTPUT ?? join(root, "apps/desktop/dist-runtime/runtime"));
 const source = {
   node: process.env.COWORKANY_MAC_NODE_RUNTIME_DIR,
@@ -41,6 +44,61 @@ async function copyRuntimeDirectory(name, destination, executable) {
   if (!details.isDirectory()) throw new Error(`macos_runtime_${name}_directory_required:${path}`);
   await cp(path, destination, { recursive: true, dereference: true });
   await access(join(destination, executable), constants.X_OK).catch(() => { throw new Error(`macos_runtime_${name}_executable_missing:${join(destination, executable)}`); });
+}
+
+async function listPythonMachOFiles(rootPath) {
+  const files = [];
+  const visit = async path => {
+    const details = await stat(path);
+    if (details.isDirectory()) {
+      for (const entry of await readdir(path)) await visit(join(path, entry));
+      return;
+    }
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    if (name === "Python" || name === "python3" || name === "python3.12" || path.endsWith(".dylib") || path.endsWith(".so")) files.push(path);
+  };
+  await visit(rootPath);
+  return files;
+}
+
+function pythonFrameworkDependency(value) {
+  const match = value.match(/^\/Library\/Frameworks\/Python\.framework\/Versions\/[^/]+\/(.+)$/u);
+  return match?.[1];
+}
+
+async function repairPythonMachODependencies() {
+  const pythonRoot = join(output, "python");
+  const files = await listPythonMachOFiles(pythonRoot);
+  const bundled = new Set(files);
+  const changed = [];
+  for (const file of files) {
+    const { stdout } = await execFileAsync("/usr/bin/otool", ["-L", file], { encoding: "utf8" }).catch(() => ({ stdout: "" }));
+    const dependencies = stdout.split("\n").map(line => line.trim().split(" (", 1)[0]);
+    for (const dependency of dependencies) {
+      const relativeTarget = pythonFrameworkDependency(dependency);
+      if (!relativeTarget) continue;
+      const target = join(pythonRoot, relativeTarget);
+      if (!bundled.has(target)) continue;
+      const replacement = `@loader_path/${relative(dirname(file), target).replaceAll("\\\\", "/")}`;
+      await execFileAsync("/usr/bin/install_name_tool", ["-change", dependency, replacement, file]);
+      changed.push(file);
+    }
+    if (file.endsWith(".dylib")) {
+      const ids = (await execFileAsync("/usr/bin/otool", ["-D", file], { encoding: "utf8" }).catch(() => ({ stdout: "" }))).stdout
+        .split("\n")
+        .map(line => line.trim().split(" (", 1)[0]);
+      for (const id of ids) {
+        const relativeTarget = pythonFrameworkDependency(id);
+        if (!relativeTarget || !bundled.has(join(pythonRoot, relativeTarget))) continue;
+        await execFileAsync("/usr/bin/install_name_tool", ["-id", `@loader_path/${file.slice(file.lastIndexOf("/") + 1)}`, file]);
+        changed.push(file);
+        break;
+      }
+    }
+  }
+  for (const file of new Set(changed)) {
+    await execFileAsync("/usr/bin/codesign", ["--force", "--sign", "-", file]);
+  }
 }
 
 async function makeWritableTree(path) {
@@ -124,6 +182,7 @@ await mkdir(output, { recursive: true });
 await copyRuntimeDirectory("node", join(output, "node"), "node");
 await copyRuntimeDirectory("opencode", join(output, "opencode"), "opencode");
 await copyRuntimeDirectory("python", join(output, "python"), "python3");
+await repairPythonMachODependencies();
 const font = await requiredPath("font", source.font);
 await mkdir(join(output, "fonts"), { recursive: true });
 await cp(font, join(output, "fonts/NotoSansCJKsc-Regular.otf"), { dereference: true });
