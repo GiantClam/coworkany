@@ -27,7 +27,7 @@ test("probe and launch share native runtime and packaged Skill resolution", asyn
   assert.match(source, /host::skills_directory\(&app\)/u);
   assert.match(host, /let skills = skills_directory\(&app\)/u);
   assert.doesNotMatch(source, /fn system_python\(/u);
-  assert.match(source, /"native-runtime-v2"/u, "invalidate previously successful isolated-runtime probe caches");
+  assert.match(source, /"native-runtime-v3"/u, "invalidate previously successful isolated-runtime probe caches");
 });
 
 test("packaged Python wins over a previously discovered configured interpreter", async () => {

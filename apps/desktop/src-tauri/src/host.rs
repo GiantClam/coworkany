@@ -462,6 +462,8 @@ pub fn host_start(app: AppHandle, state: State<'_, HostState>) -> Result<u64, St
     // Keep OpenCode's sockets and lock files under CoworkAny's writable data
     // root; this is runtime plumbing, not Skill-specific behavior.
     let opencode_runtime = crate::data_dir(&app)?;
+    let runtime_directory = opencode_runtime.join("runtime");
+    let media_directory = crate::media_runtime_directory(&app)?;
     let mut command = Command::new(node_executable(&app)?);
     command
         .arg(script)
@@ -473,6 +475,8 @@ pub fn host_start(app: AppHandle, state: State<'_, HostState>) -> Result<u64, St
         .envs(opencode_executable(&app)?.map(|path| [("COWORKANY_OPENCODE_PATH", path)]).into_iter().flatten())
         .envs(python.map(|path| [("COWORKANY_PYTHON_PATH", path)]).into_iter().flatten())
         .envs(lancedb_runtime_directory(&app)?.map(|path| [("COWORKANY_LANCEDB_DIR", path)]).into_iter().flatten())
+        .env("COWORKANY_RUNTIME_DIR", runtime_directory)
+        .env("COWORKANY_MEDIA_DIR", media_directory)
         .env("OPENCODE_RUNTIME_DIR", opencode_runtime);
     crate::platform::configure_child_command(&mut command);
     let mut child = command.spawn()

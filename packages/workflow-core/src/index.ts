@@ -8,3 +8,4 @@ export * from "./migrations";
 export * from "./compiler";
 export * from "./ports";
 export * from "./execution";
+export * from "./media-processing";

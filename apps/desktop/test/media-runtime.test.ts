@@ -84,6 +84,19 @@ test("desktop host emits terminal media attempt events for recovery idempotency"
   assert.match(app, /standaloneMediaRunsRef\.current\.add\(runId\)/);
 });
 
+test("workflow host dispatches local media processing nodes to ffmpeg", () => {
+  const host = readFileSync(resolve(process.cwd(), "runtime/host.ts"), "utf8");
+  const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  assert.match(host, /runFfmpegMediaProcess/);
+  assert.match(host, /executorId === "video_process" \|\| executorId === "audio_process"/);
+  assert.match(host, /artifactPort\.register/);
+  assert.match(app, /id: "video_process"/);
+  assert.match(app, /id: "audio_process"/);
+  assert.doesNotMatch(app, /\{ id: "audio_generate", label: "通用音频"/);
+  assert.doesNotMatch(app, /\{ id: "audio_generate", title: "通用音频"/);
+  assert.match(app, /filter\(\(feature\) => feature\.id !== "audio-generate"\)/);
+});
+
 test("desktop keeps large files and Provider credentials out of UI payload persistence", () => {
   const app = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
   const upload = readFileSync(resolve(process.cwd(), "src/local-file-upload.ts"), "utf8");

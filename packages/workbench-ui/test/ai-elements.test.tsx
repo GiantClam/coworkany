@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { resolve } from "node:path";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { WorkbenchAttachments, WorkbenchMessage, WorkbenchModelSelector, WorkbenchPlan, WorkbenchPromptInput, WorkbenchReasoning, WorkbenchTask, WorkbenchTool } from "../src/index";
@@ -31,9 +33,9 @@ test("prompt input keeps contextual hints in the header and actions in the foote
   assert.match(markup, /data-slot="prompt-input-custom-tools"/);
 });
 
-test("model selector groups models and renders an accessible dialog trigger", () => {
+test("model selector groups models and renders an accessible listbox trigger", () => {
   const markup = renderToStaticMarkup(<WorkbenchModelSelector models={[{ id: "openai:gpt", label: "GPT", provider: "OpenAI" }, { id: "local:qwen", label: "Qwen", provider: "Local" }]} value="openai:gpt" onChange={() => undefined} locale="en" />);
-  assert.match(markup, /aria-haspopup="dialog"/);
+  assert.match(markup, /aria-haspopup="listbox"/);
   assert.match(markup, /GPT/);
   assert.match(markup, /ai-elements-model-selector-logo/);
 });
@@ -42,6 +44,15 @@ test("model selector uses a stable neutral badge for localized provider labels",
   const markup = renderToStaticMarkup(<WorkbenchModelSelector models={[{ id: "deepseek:chat", label: "deepseek-chat", provider: "已配置模型" }]} value="deepseek:chat" onChange={() => undefined} locale="zh" />);
   assert.match(markup, /ai-elements-model-selector-logo[^>]*>AI<\/span>/);
   assert.doesNotMatch(markup, />已配<\/span>/);
+});
+
+test("model selector keeps its menu anchored and opaque", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/prompt-input.tsx"), "utf8");
+  const styleSource = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+  assert.match(source, /aria-haspopup="listbox"/);
+  assert.match(source, /aria-expanded=\{open\}/);
+  assert.match(source, /data-model-menu/);
+  assert.match(styleSource, /\.wb-ai-model-popover \{[\s\S]*?position: fixed;[\s\S]*?background: #fff;/);
 });
 
 test("process primitives preserve plan, task, tool and reasoning semantics", () => {

@@ -21,6 +21,10 @@ function normalizedSource(provider: Pick<DesktopProviderConfig, "source" | "id">
   return (provider.source ?? provider.id ?? "").trim().toLowerCase().replace(/[_\s]+/gu, "-");
 }
 
+function isPptokenProvider(provider: Pick<DesktopProviderConfig, "source" | "id" | "baseUrl">): boolean {
+  return normalizedSource(provider) === "pptoken" || /(?:^|\/\/)api\.pptoken\.cc(?:\/|$)/iu.test(provider.baseUrl ?? "");
+}
+
 function isOfficialGemini(provider: Pick<DesktopProviderConfig, "source" | "id" | "baseUrl">): boolean {
   const source = normalizedSource(provider);
   const baseUrl = provider.baseUrl ?? "";
@@ -142,6 +146,13 @@ function modelSupportsCapability(item: unknown, provider: ProviderModelDiscovery
   if (declared.length) {
     if (capability === "audio") return declared.some((value) => ["TTS", "ASR", "AUDIO", "MUSIC", "REALTIME-TEXT-TO-SPEECH", "REALTIME-ASR"].includes(value));
     return declared.includes(expected);
+  }
+  // PPTOKEN exposes OpenAI-compatible model records without modality metadata.
+  // Its image catalog uses the stable gpt-image-* naming convention, so keep
+  // those models discoverable without allowing ordinary text models through.
+  if (capability === "image" && isPptokenProvider(provider)) {
+    const model = typeof item === "string" ? textValue(item) : item && typeof item === "object" ? modelIdFromRecord(item as Record<string, unknown>, provider) : undefined;
+    return Boolean(model && /^gpt-image(?:-|$)/iu.test(model));
   }
   // The DashScope model-directory request is capability-filtered server-side.
   // Do not trust its unfiltered permissions fallback for media configuration.

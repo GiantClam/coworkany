@@ -20,7 +20,7 @@ function memoryRun(events: OpenCodeRuntimeEvent[], timeline: string[]) {
     runId: RUN, sessionId: SESSION, turnStartedAt: TURN_START,
     sink: (event: OpenCodeRuntimeEvent) => { events.push(event); timeline.push(event.event === "text_delta" ? event.delta : event.event); },
     serveEvents: createOpenCodeServeEventState(),
-    messageIds: new Set<string>(), userMessageIds: new Set<string>(), ignoredMessageIds: new Set<string>(), questionIds: new Set<string>(),
+    messageIds: new Set<string>(), userMessageIds: new Set<string>(), ignoredMessageIds: new Set<string>(), questionIds: new Set<string>(), pendingQuestionIds: new Set<string>(),
     pendingFrames: new Map<string, string[]>(),
     completion: completion.promise,
     resolveCompletion: () => { timeline.push("complete"); completion.resolve(); },
@@ -221,6 +221,20 @@ test("idle reconciliation recovers a compaction parent and excludes historical s
   await h.reconcile();
   assert.equal(h.textOutput(), "恢复后的最终回答");
   assert.equal(h.active.completed, true);
+});
+
+test("idle reconciliation does not finish a turn with a pending question", async (t) => {
+  const question = { id: "question-pending", sessionID: SESSION, questions: [{ header: "确认", question: "是否继续", options: [{ label: "继续", description: "继续执行" }] }] };
+  const h = harness(t, (url) => {
+    if (url.pathname.endsWith("/message")) return [{ info: userInfo("current-user"), parts: [] }, { info: finalInfo("answer", "current-user"), parts: [textPart("answer", "尚未确认")] }];
+    if (url.pathname === "/question") return [question];
+    return [];
+  });
+  h.user("current-user");
+  h.assistant("answer", "current-user", finalInfo("answer", "current-user"));
+  await h.reconcile();
+  assert.equal(h.active.completed, false);
+  assert.equal(h.events.filter(event => event.event === "question_request").length, 1);
 });
 
 test("pending question polling restores a missed request and deduplicates subsequent polls and SSE", async (t) => {

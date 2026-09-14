@@ -231,7 +231,7 @@ function Seed-BundledRuntime() {
   $bundledRuntime = Join-Path $bundledRoot "runtime"
   if (Test-Path -LiteralPath $bundledRuntime -PathType Container) {
     New-Item -ItemType Directory -Force -Path (Join-Path $stageRoot "runtime") | Out-Null
-    foreach ($name in @("node", "opencode", "lancedb", "fonts", "embedding")) {
+    foreach ($name in @("node", "opencode", "lancedb", "fonts", "embedding", "media")) {
       $source = Join-Path $bundledRuntime $name
       if (Test-Path -LiteralPath $source -PathType Container) { Copy-Item -LiteralPath $source -Destination (Join-Path $stageRoot "runtime") -Recurse -Force }
     }
@@ -319,7 +319,7 @@ function Get-OpenCodeVersion([string]$path) {
 
 function Install-OpenCodePackage([switch]$Offline) {
   Write-RuntimeProgress "opencode_check"
-  $requiredVersion = "1.18.27"
+  $requiredVersion = "1.18.30"
   $target = Join-Path $stageRoot "runtime/opencode/opencode.exe"
   if (Test-Path -LiteralPath $target -PathType Leaf) {
     $actualVersion = Get-OpenCodeVersion $target

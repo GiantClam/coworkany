@@ -5,8 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
-import { sanitizeWorkflowDefinitionForExport, sanitizeWorkflowDefinitionForStorage } from "../src/workflow-storage";
+import { hashWorkflowPresentation, sanitizeWorkflowDefinitionForExport, sanitizeWorkflowDefinitionForStorage } from "../src/workflow-storage";
 import { parseWorkflowImportText, serializeWorkflowExport } from "../src/workflow-portability";
+
+test("workflow presentation hash changes when saved title or metadata changes", () => {
+  const definition = { schemaVersion: 2, revision: 1, definitionHash: "", nodes: [], edges: [], metadata: { description: "draft", status: "draft" } } as never as WorkflowDefinitionEnvelope;
+  const original = hashWorkflowPresentation(definition, "Original");
+  assert.notEqual(hashWorkflowPresentation(definition, "Renamed"), original);
+  assert.notEqual(hashWorkflowPresentation({ ...definition, metadata: { description: "updated", status: "draft" } }, "Original"), original);
+  assert.notEqual(hashWorkflowPresentation({ ...definition, metadata: { description: "draft", status: "live" } }, "Original"), original);
+});
 
 test("workflow persistence removes provider credentials without changing executable fields", () => {
   const credentialField = ["api", "Key"].join("");

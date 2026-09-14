@@ -84,7 +84,7 @@ test("official NuGet package assembles and migrates offline with sibling imports
     await writeFile(join(source, "runtime/python/get-pip.py"), "legacy sentinel", "utf8");
     for (const name of ["install-desktop-runtime.ps1", "runtime-manifest-crypto.mjs"]) await copyFile(join(scripts, name), join(source, name));
     // Only OpenCode is a fixture; Python, pip, requirements and archive operations are real.
-    await ps(`Add-Type -TypeDefinition 'public class VersionFixture { public static void Main() { System.Console.WriteLine("1.18.27"); } }' -OutputAssembly ${quote(join(source, "runtime/opencode/opencode.exe"))} -OutputType ConsoleApplication`);
+    await ps(`Add-Type -TypeDefinition 'public class VersionFixture { public static void Main() { System.Console.WriteLine("1.18.30"); } }' -OutputAssembly ${quote(join(source, "runtime/opencode/opencode.exe"))} -OutputType ConsoleApplication`);
     const manifest = {
       schemaVersion: 1, manifestId: "python-integration", platform: "windows", architecture: "x64",
       compatibility: { architecture: "x64" },

@@ -15,7 +15,7 @@ const execFileAsync = promisify(execFile);
 const offline = process.argv.includes("--offline");
 const directoryDigestAlgorithm = "sha256-tree-v1";
 const skillLock = JSON.parse(await readFile(join(repoRoot, "scripts", "desktop-skills.lock.json"), "utf8"));
-if (skillLock?.schemaVersion !== 1 || skillLock?.directoryDigestAlgorithm !== directoryDigestAlgorithm || !Array.isArray(skillLock?.skills)) {
+if (skillLock?.schemaVersion !== 1 || skillLock?.directoryDigestAlgorithm !== directoryDigestAlgorithm || ![undefined, "latest-on-build", "pinned"].includes(skillLock?.resolution) || !Array.isArray(skillLock?.skills)) {
   throw new Error("desktop_skill_lock_invalid");
 }
 function lockedSkill(id) {
@@ -25,8 +25,27 @@ function lockedSkill(id) {
   }
   return skill;
 }
-const pptMaster = lockedSkill("ppt-master");
-const dashiPpt = lockedSkill("dashi-ppt");
+
+async function resolveLatestSkill(skill) {
+  if (offline || skillLock.resolution !== "latest-on-build") return skill;
+  try {
+    const { stdout } = await execFileAsync("git", ["ls-remote", `https://github.com/${skill.repo}.git`, `refs/heads/${skill.branch}`], {
+      windowsHide: true,
+      timeout: 60000,
+      maxBuffer: 64 * 1024,
+    });
+    const commit = stdout.trim().split(/\s+/u)[0];
+    if (!/^[a-f0-9]{40}$/iu.test(commit)) throw new Error("invalid_remote_head");
+    if (commit.toLowerCase() === skill.commit.toLowerCase()) return skill;
+    return { ...skill, version: `${skill.branch}-${commit.slice(0, 12)}`, commit, directoryDigest: "" };
+  } catch (error) {
+    console.warn(`Unable to resolve latest ${skill.id}; using locked ${skill.commit}: ${error instanceof Error ? error.message : String(error)}`);
+    return skill;
+  }
+}
+
+const pptMaster = await resolveLatestSkill(lockedSkill("ppt-master"));
+const dashiPpt = await resolveLatestSkill(lockedSkill("dashi-ppt"));
 await mkdir(dirname(target), { recursive: true });
 await syncDirectory(source, target, new Set(["ppt-master", "dashi-ppt", "ppt-master.manifest.json", "dashi-ppt.manifest.json"]));
 // Agency Agents are OpenCode agents, not SKILL.md packages. Keep their
@@ -124,7 +143,7 @@ async function acquireGitSkill({ id, repo, commit, branch, skillPath, stagingNam
   const staging = join(repoRoot, ".artifacts", `${stagingName}-${commit}`);
   const acquired = join(staging, skillPath);
   if (await exists(join(acquired, "SKILL.md"))) {
-    if (await digestDirectory(acquired) !== directoryDigest) throw new Error(`skill_cache_integrity_failed:${id}`);
+    if (directoryDigest && await digestDirectory(acquired) !== directoryDigest) throw new Error(`skill_cache_integrity_failed:${id}`);
     return acquired;
   }
   if (offline) throw new Error(`offline_skill_missing:${repo}@${commit}`);
@@ -134,14 +153,16 @@ async function acquireGitSkill({ id, repo, commit, branch, skillPath, stagingNam
     // Git for Windows may apply core.autocrlf during checkout, which changes
     // the pinned tree bytes and makes the lock digest fail. Disable conversion
     // so every platform verifies the same upstream content.
-    await execFileAsync("git", ["-c", "core.autocrlf=false", "clone", "--depth", "1", "--branch", branch, `https://github.com/${repo}.git`, staging], { windowsHide: true, timeout: 180000, maxBuffer: 64 * 1024 });
-    await execFileAsync("git", ["-C", staging, "checkout", "--detach", commit], { windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 });
+    await execFileAsync("git", ["init", staging], { windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 });
+    await execFileAsync("git", ["-C", staging, "remote", "add", "origin", `https://github.com/${repo}.git`], { windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 });
+    await execFileAsync("git", ["-C", staging, "-c", "core.autocrlf=false", "fetch", "--depth", "1", "origin", commit], { windowsHide: true, timeout: 180000, maxBuffer: 64 * 1024 });
+    await execFileAsync("git", ["-C", staging, "-c", "core.autocrlf=false", "checkout", "--detach", commit], { windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 });
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
     throw new Error(`Unable to acquire ${repo} ${commit}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
   if (!(await exists(join(acquired, "SKILL.md")))) throw new Error(`Acquired ${repo} repository has no ${skillPath}/SKILL.md`);
-  if (await digestDirectory(acquired) !== directoryDigest) {
+  if (directoryDigest && await digestDirectory(acquired) !== directoryDigest) {
     await rm(staging, { recursive: true, force: true });
     throw new Error(`skill_source_integrity_failed:${id}`);
   }

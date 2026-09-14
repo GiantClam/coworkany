@@ -29,9 +29,22 @@ test("v1 registry exposes voice cloning as a distinct media capability", () => {
   assert.equal(definition.inputs.some((port) => port.valueKind === "audio"), true);
 });
 
+test("registry exposes local video and audio processing nodes", () => {
+  const video = workflowNodeRegistry.require("video_process");
+  const audio = workflowNodeRegistry.require("audio_process");
+  assert.equal(video.category, "media");
+  assert.equal(video.executorId, "video_process");
+  assert.deepEqual(video.inputs.map((port) => port.id), ["videos", "images", "audios", "text"]);
+  assert.deepEqual(video.outputs.map((port) => port.id), ["video"]);
+  assert.equal(audio.category, "media");
+  assert.equal(audio.executorId, "audio_process");
+  assert.deepEqual(audio.inputs.map((port) => port.id), ["audios"]);
+  assert.deepEqual(audio.outputs.map((port) => port.id), ["audio"]);
+});
+
 test("v1 registry matches the approved capability boundary", () => {
   const types = new Set(workflowNodeRegistry.list().map((definition) => definition.type));
-  for (const required of ["upload", "text_input", "file_create", "writer", "llm_generate", "agent_execute", "image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate", "ppt_generate", "knowledge_retrieve", "knowledge_write", "product_store", "foreach", "collect", "output"]) assert.equal(types.has(required as never), true, required);
+  for (const required of ["upload", "text_input", "file_create", "writer", "llm_generate", "agent_execute", "image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate", "video_process", "audio_process", "ppt_generate", "knowledge_retrieve", "knowledge_write", "product_store", "foreach", "collect", "output"]) assert.equal(types.has(required as never), true, required);
   for (const excluded of ["lead_hunter", "publish_as_agent", "workflow_marketplace", "enterprise_preset"]) assert.equal(types.has(excluded as never), false, excluded);
 });
 

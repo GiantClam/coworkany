@@ -13,10 +13,12 @@ test("desktop OpenCode uses the asynchronous serve-session contract", () => {
   assert.match(source, /createOpenCodeServePromptPayload/);
   assert.match(source, /useCommand \? "command" : "prompt_async"/);
   assert.match(source, /normalizeOpenCodeServeEvent\("pending", payload/);
-  assert.doesNotMatch(source, /DEFAULT_PROMPT_TIMEOUT_MS = 60_000/);
+  assert.match(source, /DEFAULT_STALLED_RUN_TIMEOUT_MS = 300_000/);
+  assert.match(source, /promptStallTimeoutMs\?: number/);
   assert.match(source, /promptTimeoutMs\?: number/);
   assert.match(source, /typeof timeoutMs === "number"/);
   assert.match(source, /this\.promptTimeoutMs \?\? false/u);
+  assert.match(source, /opencode_prompt_stalled/u);
   assert.match(source, /runtimeEnvironmentSignature/);
   assert.match(source, /sessionCreateQueue/);
   assert.match(source, /opencode_prompt_timeout/);
@@ -71,6 +73,74 @@ test("OpenCode Serve turns a hanging provider request into a retryable runtime e
     const timeout = events.find((event) => event.event === "runtime_error");
     assert.equal(timeout?.code, "opencode_prompt_timeout");
     assert.match(String(timeout?.message), /timed out/iu);
+  } finally {
+    await client.stop();
+    await rm(runtimeDirectory, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode Serve completes a turn when prompt submission disconnects after streamed activity", async () => {
+  const runtimeDirectory = await mkdtemp(resolve(tmpdir(), "coworkany-opencode-disconnect-"));
+  const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");
+  const client = new OpenCodeServeClient(process.execPath, runtimeDirectory, [fixture]);
+  const events: Array<{ event: string; [key: string]: unknown }> = [];
+  try {
+    const session = await client.createOrResumeSession(runtimeDirectory, undefined, { model: "configured/model" }, { FAKE_OPENCODE_PROMPT_DISCONNECT: "1" });
+    await client.prompt(session.sessionId, runtimeDirectory, "disconnect-run", "Prompt request disconnects", { model: "configured/model" }, event => events.push(event));
+    assert.equal(events.some(event => event.event === "runtime_error"), false);
+    assert.equal(events.some(event => event.event === "text_delta" && event.delta === "Recovered after prompt disconnect"), true);
+    assert.equal(events.some(event => event.event === "done"), true);
+  } finally {
+    await client.stop();
+    await rm(runtimeDirectory, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode Serve turns a tool that never returns into a retryable stalled-run error", async () => {
+  const runtimeDirectory = await mkdtemp(resolve(tmpdir(), "coworkany-opencode-stall-"));
+  const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");
+  const client = new OpenCodeServeClient(process.execPath, runtimeDirectory, [fixture], undefined, 80);
+  const events: Array<{ event: string; [key: string]: unknown }> = [];
+  try {
+    const session = await client.createOrResumeSession(runtimeDirectory, undefined, { model: "configured/model" }, { FAKE_OPENCODE_STALLED_TOOL: "1" });
+    await client.prompt(session.sessionId, runtimeDirectory, "stalled-run", "This tool will never return", { model: "configured/model" }, (event) => events.push(event));
+    const stalled = events.find((event) => event.event === "runtime_error");
+    assert.equal(stalled?.code, "opencode_prompt_stalled");
+    assert.match(String(stalled?.message), /no progress/iu);
+  } finally {
+    await client.stop();
+    await rm(runtimeDirectory, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode Serve keeps a run alive while the preview server tool is long-lived", async () => {
+  const runtimeDirectory = await mkdtemp(resolve(tmpdir(), "coworkany-opencode-preview-stall-"));
+  const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");
+  const client = new OpenCodeServeClient(process.execPath, runtimeDirectory, [fixture], undefined, 50);
+  const events: Array<{ event: string; [key: string]: unknown }> = [];
+  try {
+    const session = await client.createOrResumeSession(runtimeDirectory, undefined, { model: "configured/model" }, { FAKE_OPENCODE_PREVIEW_TOOL: "1" });
+    await client.prompt(session.sessionId, runtimeDirectory, "preview-run", "Start the preview server", { model: "configured/model" }, event => events.push(event));
+    assert.equal(events.some(event => event.event === "runtime_error" && event.code === "opencode_prompt_stalled"), false);
+    assert.equal(events.some(event => event.event === "text_delta" && event.delta === "Preview server started"), true);
+    assert.equal(events.some(event => event.event === "done"), true);
+  } finally {
+    await client.stop();
+    await rm(runtimeDirectory, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode Serve serializes concurrent session creation behind startup health", async () => {
+  const runtimeDirectory = await mkdtemp(resolve(tmpdir(), "coworkany-opencode-startup-race-"));
+  const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");
+  const client = new OpenCodeServeClient(process.execPath, runtimeDirectory, [fixture]);
+  try {
+    const environment = { FAKE_OPENCODE_HEALTH_DELAY_MS: "200" };
+    const sessions = await Promise.all([
+      client.createOrResumeSession(runtimeDirectory, undefined, { model: "configured/model" }, environment),
+      client.createOrResumeSession(runtimeDirectory, undefined, { model: "configured/model" }, environment),
+    ]);
+    assert.deepEqual(sessions.map(session => session.sessionId), ["recovered-session", "recovered-session"]);
   } finally {
     await client.stop();
     await rm(runtimeDirectory, { recursive: true, force: true });
@@ -217,6 +287,32 @@ test("native questions pause and resume the same turn, including rejection and o
     }
     assert.equal((await readFile(log, "utf8")).trim().split("\n").length, 2);
   } finally { await client.stop(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("native question confirmation is not treated as a stalled run", async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), "coworkany-native-question-stall-"));
+  const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");
+  const client = new OpenCodeServeClient(process.execPath, directory, [fixture], undefined, 80);
+  try {
+    const session = await client.createOrResumeSession(directory, undefined, { model: "configured/model" }, {});
+    const events: Array<{ event: string; [key: string]: unknown }> = [];
+    let onQuestion!: () => void;
+    const asked = new Promise<void>(resolveAsked => { onQuestion = resolveAsked; });
+    const running = client.prompt(session.sessionId, directory, "question-stall", "Ask a question", { model: "configured/model" }, event => {
+      events.push(event);
+      if (event.event === "question_request") onQuestion();
+    });
+    await asked;
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 160));
+    assert.equal(events.some(event => event.code === "opencode_prompt_stalled"), false);
+    assert.equal(events.some(event => event.event === "done"), false);
+    await client.replyQuestion(session.sessionId, "question-1", [["A"]], directory);
+    await running;
+    assert.equal(events.filter(event => event.event === "done").length, 1);
+  } finally {
+    await client.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("OpenCode Serve forwards the selected packaged Agency Agent", async () => {

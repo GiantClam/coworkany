@@ -8,6 +8,8 @@ pub fn runtime_executable(component: &str) -> &str {
             "node" => "node.exe",
             "opencode" => "opencode.exe",
             "python" => "python.exe",
+            "ffmpeg" => "ffmpeg.exe",
+            "ffprobe" => "ffprobe.exe",
             _ => component,
         };
     }
@@ -121,6 +123,10 @@ mod tests {
     fn runtime_executables_match_the_current_platform() {
         #[cfg(windows)]
         assert_eq!(runtime_executable("python"), "python.exe");
+        #[cfg(windows)]
+        assert_eq!(runtime_executable("ffmpeg"), "ffmpeg.exe");
+        #[cfg(windows)]
+        assert_eq!(runtime_executable("ffprobe"), "ffprobe.exe");
         #[cfg(not(windows))]
         assert_eq!(runtime_executable("python"), "python3");
     }

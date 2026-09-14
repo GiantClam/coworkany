@@ -26,6 +26,16 @@ test("does not send PNG compression and normalizes image edit references", () =>
   assert.equal("inputImageUrl" in input, false);
 });
 
+test("keeps a separate mask reference for image edits", () => {
+  const input = buildMediaCapabilityInput("image_generate", {}, {
+    inputImageUrl: "data:image/png;base64,AQID",
+    maskImageUrl: "data:image/png;base64,BAUG",
+    text: "Edit only the marked area",
+  });
+  assert.deepEqual(input.referenceImageUrls, ["data:image/png;base64,AQID"]);
+  assert.equal(input.maskImageUrl, "data:image/png;base64,BAUG");
+});
+
 test("passes local workflow images to the compatible image adapter as references", () => {
   const input = buildMediaCapabilityInput("image_generate", {}, {
     images: [{ fileName: "reference.png", mimeType: "image/png", localPath: "C:\\media\\reference.png" }],
@@ -121,6 +131,17 @@ test("uses upstream media outputs as video and digital-human references", () => 
   const digitalHuman = buildMediaCapabilityInput("digital_human", {}, { images: ["https://example.test/avatar.png"], audios: ["https://example.test/speech.mp3"] });
   assert.equal(digitalHuman.avatarImageUrl, "https://example.test/avatar.png");
   assert.equal(digitalHuman.audioUrl, "https://example.test/speech.mp3");
+});
+
+test("keeps a connected video prompt when an older node is still marked text-to-video", () => {
+  const input = buildMediaCapabilityInput("video_generate", { featureId: "text-to-video", mode: "auto" }, {
+    text: "让人物自然转身并向镜头微笑",
+    images: ["https://example.test/first.png"],
+  });
+  assert.equal(input.prompt, "让人物自然转身并向镜头微笑");
+  assert.equal(input.firstFrameUrl, "https://example.test/first.png");
+  assert.equal(input.featureId, "text-to-video");
+  assert.equal(input.mode, "auto");
 });
 
 test("keeps workflow local file paths out of node metadata and exposes them only as runtime attachments", () => {

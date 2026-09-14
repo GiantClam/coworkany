@@ -14,6 +14,7 @@ import { assertVideoMediaCapability, resolveVideoMediaCapabilities } from "./med
 import { discoverProviderModels } from "../src/provider-model-discovery";
 import type { RunningHubWorkflowRegistration } from "../src/runninghub-workflow";
 import { migrateLegacyRunningHubWorkflows } from "../src/runninghub-workflow";
+import { detectMediaStreams, runFfmpegMediaProcess } from "./media-process";
 // Namespace access is compatible with the Node 24 + tsx loader used by the
 // source-host validator, which otherwise misclassifies this sibling module.
 import * as chatAttachmentExtractor from "../../../lib/chat-attachments/extract.ts";
@@ -763,15 +764,17 @@ async function runWorkflow(command: HostCommand) {
         const referencedArtifactIds = Array.isArray(config.referencedArtifactIds) ? config.referencedArtifactIds : [];
         const isMimeType = (value: unknown, prefix: string) => Boolean(value && typeof value === "object" && typeof (value as { mimeType?: unknown }).mimeType === "string" && (value as { mimeType: string }).mimeType.startsWith(prefix));
         const assets = [...uploadedFiles, ...referencedArtifactIds];
+        const detectedStreams = await Promise.all(uploadedFiles.map(async (file) => ({ file, streams: await detectMediaStreams(file, workspacePath, signal) })));
+        const hasMediaType = (file: unknown, prefix: string, stream: "hasVideo" | "hasAudio") => isMimeType(file, prefix) || Boolean(detectedStreams.find((entry) => entry.file === file)?.streams?.[stream]);
         return {
           assets,
           asset: assets,
           images: uploadedFiles.filter((file) => isMimeType(file, "image/")),
           image: uploadedFiles.filter((file) => isMimeType(file, "image/")),
-          videos: uploadedFiles.filter((file) => isMimeType(file, "video/")),
-          video: uploadedFiles.filter((file) => isMimeType(file, "video/")),
-          audios: uploadedFiles.filter((file) => isMimeType(file, "audio/")),
-          audio: uploadedFiles.filter((file) => isMimeType(file, "audio/")),
+          videos: uploadedFiles.filter((file) => hasMediaType(file, "video/", "hasVideo")),
+          video: uploadedFiles.filter((file) => hasMediaType(file, "video/", "hasVideo")),
+          audios: uploadedFiles.filter((file) => hasMediaType(file, "audio/", "hasAudio")),
+          audio: uploadedFiles.filter((file) => hasMediaType(file, "audio/", "hasAudio")),
         };
       }
       if (executorId === "collect" || executorId === "output") return inputs;
@@ -801,6 +804,12 @@ async function runWorkflow(command: HostCommand) {
         const vaultPath = typeof config.vaultPath === "string" ? config.vaultPath : typeof command.payload?.vaultPath === "string" ? command.payload.vaultPath : "";
         if (!vaultPath) throw new Error("knowledge_vault_required");
         return requestService("knowledge.write", { vaultPath, targetPath: config.targetPath, content: typeof inputs.text === "string" ? inputs.text : JSON.stringify(inputs, null, 2), baseHash: config.baseHash }, signal);
+      }
+      if (executorId === "video_process" || executorId === "audio_process") {
+        const result = await runFfmpegMediaProcess({ nodeType: executorId, config, inputs, workspacePath, runId, nodeKey, signal });
+        const registration = await artifactPort.register({ relativePath: result.relativePath, mimeType: result.mimeType, byteLength: result.byteLength, sha256: result.sha256 });
+        const artifact = { artifactId: registration.artifactId, localPath: result.localPath, relativePath: result.relativePath, mimeType: result.mimeType, byteLength: result.byteLength, sha256: result.sha256 };
+        return { artifacts: [artifact], ...(executorId === "video_process" ? { video: [artifact], videos: [artifact] } : { audio: [artifact], audios: [artifact] }) };
       }
       if (["image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate"].includes(executorId)) return runMediaCapability(command, runId, nodeKey, executorId, config, inputs, workspacePath, signal);
       if (["writer", "llm_generate"].includes(executorId)) {

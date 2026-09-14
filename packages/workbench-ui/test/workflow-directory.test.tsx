@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { resolve } from "node:path";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { WorkbenchWorkflowDirectory } from "../src/index";
@@ -33,4 +35,13 @@ test("workflow directory hides unsupported destructive host actions", () => {
   />);
   assert.match(markup, />复制</);
   assert.doesNotMatch(markup, />删除</);
+});
+
+test("workflow deletion is gated by an in-page confirmation", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/workflow-directory.tsx"), "utf8");
+  assert.match(source, /pendingDeleteWorkflowId/u);
+  assert.match(source, /data-workflow-delete-confirmation="true"/u);
+  assert.match(source, /确认删除|Confirm delete/u);
+  assert.match(source, /onAction\(\{ type: "delete", id: pendingDeleteWorkflowId \}\)/u);
+  assert.doesNotMatch(source, /onAction\(\{ type: "delete", id: workflow\.id \}\)/u);
 });

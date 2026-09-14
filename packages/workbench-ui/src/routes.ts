@@ -56,7 +56,7 @@ export const WORKBENCH_HOME_COPY = {
 
 /** Canonical retained dashboard routes. SaaS and Tauri adapters consume this manifest. */
 export const WORKBENCH_ROUTE_MANIFEST: readonly WorkbenchRoute[] = [
-  { path: "/dashboard", label: { zh: "首页", en: "Home" }, description: { zh: "工作台按能力统一组织。顾问负责策略与增长，写作负责多平台内容生产，图片助手负责对话生图与画布精修。", en: "A capability-oriented AI marketing workspace for strategy, writing, image generation, and execution." }, mode: "home", glyph: "⌂" },
+  { path: "/dashboard", label: { zh: "首页", en: "Home" }, description: { zh: "工作台按能力统一组织。顾问负责策略与增长，写作负责多平台内容生产，图片助手负责图片生成与画布精修。", en: "A capability-oriented AI marketing workspace for strategy, writing, image generation, and execution." }, mode: "home", glyph: "⌂" },
   // Keep the visible copy identical to the online AI-entry surface. OpenCode
   // remains the desktop transport, but it is an implementation detail rather
   // than a different user-facing route description.
@@ -71,7 +71,7 @@ export const WORKBENCH_ROUTE_MANIFEST: readonly WorkbenchRoute[] = [
   { path: "/dashboard/ai?agent=executive-ppt", label: { zh: "可编辑 PPT 助手", en: "Editable PPT Assistant" }, description: { zh: "使用本地 ppt-master Skill 生成可编辑演示文稿", en: "Generate editable decks with the local ppt-master Skill" }, mode: "chat", section: { zh: "专家 Agent", en: "Expert agents" }, glyph: "▣" },
   { path: "/dashboard/ai?agent=executive-presentation-ppt", label: { zh: "演讲型 PPT 助手", en: "Presentation PPT Assistant" }, description: { zh: "生成演讲结构、讲稿与本地 PPT 产物", en: "Create talk structure, notes, and local PPT artifacts" }, mode: "chat", section: { zh: "专家 Agent", en: "Expert agents" }, glyph: "▤" },
   { path: "/dashboard/writer", label: { zh: "多平台写作", en: "Multi-platform writing" }, description: { zh: "统一生成多平台图文内容，并支持 Markdown 编辑与发布准备。", en: "Generate multi-platform written content with Markdown editing and publishing preparation." }, mode: "writer", section: { zh: "创作工作台", en: "Creative workspace" }, glyph: "✎" },
-  { path: "/dashboard/image-assistant", label: { zh: "图片设计助手", en: "Image design assistant" }, description: { zh: "集对话生图、参考图编辑与画布精修于一体的工作台。", en: "A unified workspace for conversational image generation, reference editing, and canvas refinement." }, mode: "workflow", section: { zh: "创作工作台", en: "Creative workspace" }, glyph: "▧" },
+  { path: "/dashboard/image-assistant", label: { zh: "图片设计助手", en: "Image design assistant" }, description: { zh: "生成图片、编辑参考图并完成画布精修。", en: "Generate images, edit references, and refine the canvas." }, mode: "workflow", section: { zh: "创作工作台", en: "Creative workspace" }, glyph: "▧" },
   { path: "/dashboard/capabilities", label: { zh: "能力中心", en: "Capabilities" }, description: { zh: "查看本地可用的营销能力与 Skills", en: "Browse local marketing capabilities and Skills" }, mode: "library", section: { zh: "平台中台", en: "Platform" }, glyph: "▦" },
   { path: "/dashboard/agent-platform", label: { zh: "智能体中心", en: "Agent Center" }, description: { zh: "搜索已安装的本地智能体与 Skills，并启动本地对话", en: "Search installed local agents and Skills, then start a local conversation" }, mode: "library", section: { zh: "平台中台", en: "Platform" }, glyph: "◈" },
   { path: "/dashboard/workflows", label: { zh: "工作流", en: "Workflows" }, description: { zh: "编排内容、媒体、PPT 与 Obsidian 节点", en: "Compose content, media, PPT, and Obsidian nodes" }, mode: "workflow", section: { zh: "平台中台", en: "Platform" }, glyph: "⌘" },

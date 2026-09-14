@@ -4,7 +4,7 @@ import { createPlatformProviderProfile, platformIdForProvider, PROVIDER_PLATFORM
 
 test("image and video directly expose the cloud governance provider catalog", () => {
   assert.deepEqual(PROVIDER_PLATFORM_OPTIONS.image.map((platform) => platform.id), [
-    "bailian_official", "google_official", "openai_official", "runninghub",
+    "bailian_official", "google_official", "openai_official", "runninghub", "pptoken",
   ]);
   assert.deepEqual(PROVIDER_PLATFORM_OPTIONS.video.map((platform) => platform.id), [
     "bailian_official", "minimax_official", "gemini_official", "runninghub",
@@ -13,7 +13,7 @@ test("image and video directly expose the cloud governance provider catalog", ()
 
 test("settings platforms do not prefill a built-in model catalog", () => {
   assert.deepEqual(PROVIDER_PLATFORM_OPTIONS.text.map((platform) => platform.id), [
-    "siliconflow", "openrouter", "openai_compatible", "qwen_official", "minimax_official", "glm_official", "volcengine_official",
+    "siliconflow", "openrouter", "openai_compatible", "qwen_official", "minimax_official", "glm_official", "volcengine_official", "pptoken",
   ]);
   assert.ok(Object.values(PROVIDER_PLATFORM_OPTIONS).flat().every((platform) => !("models" in platform)));
 });
@@ -34,7 +34,9 @@ test("platform selection creates a capability-scoped profile ready for a model i
   });
   assert.equal(platformIdForProvider({ source: "bailian" }, "image"), "bailian_official");
   assert.equal(platformIdForProvider({ source: "openai-compatible" }, "text"), "openai_compatible");
-  assert.equal(platformIdForProvider({ source: "pptoken" }, "text"), "openai_compatible");
+  assert.equal(platformIdForProvider({ source: "pptoken" }, "text"), "pptoken");
+  assert.equal(platformIdForProvider({ source: "pptoken" }, "image"), "pptoken");
+  assert.equal(platformIdForProvider({ source: "openai-compatible", baseUrl: "https://api.pptoken.cc/v1" }, "image"), "pptoken");
   assert.equal(platformIdForProvider({ source: "openai-compatible" }, "video"), "");
   assert.throws(() => createPlatformProviderProfile("video", "openai_compatible"), /unsupported_provider_platform/);
 });

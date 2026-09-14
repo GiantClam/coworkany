@@ -540,6 +540,7 @@ async function curlImageEditRequest(
   options: DirectProviderOptions,
   fields: readonly (readonly [string, string])[],
   references: readonly CurlImageEditReference[],
+  mask: CurlImageEditReference | undefined,
   cancellation: CancellationPort,
   idempotencyKey?: string,
 ) {
@@ -558,6 +559,12 @@ async function curlImageEditRequest(
       await writeFile(filePath, new Uint8Array(await reference.blob.arrayBuffer()));
       return { filePath, contentType: reference.blob.type || "image/png" };
     }));
+    const maskFile = mask ? await (async () => {
+      const extension = extname(mask.fileName).replace(/[^a-z0-9.]/giu, "") || ".png";
+      const filePath = join(tempDirectory, `mask${extension}`);
+      await writeFile(filePath, new Uint8Array(await mask.blob.arrayBuffer()));
+      return { filePath, contentType: mask.blob.type || "image/png" };
+    })() : undefined;
     const args = [
       "-sS", "--connect-timeout", String(Math.max(5, Math.ceil((options.requestTimeoutMs ?? IMAGE_GENERATION_REQUEST_TIMEOUT_MS) / 3000))),
       "--max-time", String(Math.max(10, Math.ceil((options.requestTimeoutMs ?? IMAGE_GENERATION_REQUEST_TIMEOUT_MS) / 1000))),
@@ -568,6 +575,7 @@ async function curlImageEditRequest(
       ...(idempotencyKey ? ["-H", `Idempotency-Key: ${idempotencyKey}`] : []),
       ...fields.flatMap(([key, value]) => ["--form-string", `${key}=${value}`]),
       ...files.flatMap(({ filePath, contentType }) => ["--form", `image=@${filePath};type=${contentType}`]),
+      ...(maskFile ? ["--form", `mask=@${maskFile.filePath};type=${maskFile.contentType}`] : []),
       "-w", "\n__HTTP_STATUS__:%{http_code}",
     ];
     const result = await (options.curlRunner ?? defaultCurlRunner)(args, { signal: requestAbort.signal });
@@ -734,6 +742,7 @@ export function createOpenAICompatibleImageAdapter(options: DirectProviderOption
         ...(Array.isArray(input.referenceImageUrls) ? input.referenceImageUrls.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).map((value) => value.trim()) : []),
         ...(text(input.inputImageUrl) ? [text(input.inputImageUrl)] : []),
       ])];
+      const maskImageUrl = text(input.maskImageUrl);
       const optional = (key: string) => {
         const value = input[key];
         return typeof value === "string" && value.trim() ? { [key]: value.trim() } : {};
@@ -774,12 +783,14 @@ export function createOpenAICompatibleImageAdapter(options: DirectProviderOption
             const loaded = await loadReferenceImage(reference, index);
             loadedReferences.push(loaded);
           }
-          if (options.imageTransport === "curl") return curlImageEditRequest(options, fields, loadedReferences, cancellation, idempotencyKey);
+          const loadedMask = maskImageUrl ? await loadReferenceImage(maskImageUrl, loadedReferences.length) : undefined;
+          if (options.imageTransport === "curl") return curlImageEditRequest(options, fields, loadedReferences, loadedMask, cancellation, idempotencyKey);
           const form = new FormData();
           for (const [key, value] of fields) form.set(key, value);
           for (const reference of loadedReferences) {
             form.append("image", reference.blob, reference.fileName);
           }
+          if (loadedMask) form.append("mask", loadedMask.blob, loadedMask.fileName);
           return jsonRequest(options, "/images/edits", {
             method: "POST",
             body: form,
@@ -868,12 +879,29 @@ export function createBailianVideoAdapter(options: DirectProviderOptions): Media
       const input = request.input as Record<string, unknown>;
       const model = request.modelId;
       const prompt = text(input.prompt);
-      const explicitFeature = text(input.featureId) || text(input.mode);
+      const mode = text(input.mode).toLowerCase();
+      const configuredFeature = text(input.featureId);
+      const explicitFeature = mode && mode !== "auto" ? mode : configuredFeature;
       const referenceVideoInputs = Array.isArray(input.referenceVideoUrls) ? input.referenceVideoUrls : [];
       const referenceAudioInputs = Array.isArray(input.referenceAudioUrls) ? input.referenceAudioUrls : [];
-      const feature = ["text-to-video", "image-to-video", "reference-to-video", "video-edit"].includes(explicitFeature)
-        ? explicitFeature
-        : text(input.sourceVideoUrl) ? "video-edit" : Array.isArray(input.referenceImageUrls) && input.referenceImageUrls.length ? "reference-to-video" : referenceVideoInputs.length || referenceAudioInputs.length ? "reference-to-video" : text(input.firstFrameUrl) ? "image-to-video" : "text-to-video";
+      const inferredFeature = text(input.sourceVideoUrl)
+        ? "video-edit"
+        : Array.isArray(input.referenceImageUrls) && input.referenceImageUrls.length
+          ? "reference-to-video"
+          : referenceVideoInputs.length || referenceAudioInputs.length
+            ? "reference-to-video"
+            : text(input.firstFrameUrl)
+              ? "image-to-video"
+              : "text-to-video";
+      // `mode: auto` means the connected media ports are authoritative. Older
+      // workflow definitions also persisted the launcher feature as
+      // `featureId: text-to-video`, which otherwise silently discarded a
+      // connected first frame and submitted a text-only request.
+      const feature = mode === "auto"
+        ? (inferredFeature === "text-to-video" && ["image-to-video", "reference-to-video", "video-edit"].includes(configuredFeature) ? configuredFeature : inferredFeature)
+        : ["text-to-video", "image-to-video", "reference-to-video", "video-edit"].includes(explicitFeature)
+          ? explicitFeature
+          : inferredFeature;
       if (!prompt && feature !== "image-to-video") throw new Error("video_prompt_required");
       const parameters: Record<string, unknown> = {
         resolution: text(input.resolution).toUpperCase() === "720P" ? "720P" : "1080P",

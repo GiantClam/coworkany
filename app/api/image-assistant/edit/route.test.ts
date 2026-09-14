@@ -16,8 +16,10 @@ type ConversationTurnParams = {
   requestIp: string
   sessionId?: string | null
   prompt: string
-  taskType: "generate" | "edit"
+  taskType: "generate" | "edit" | "mask_edit"
   referenceAssetIds?: string[]
+  snapshotAssetId?: string | null
+  maskAssetId?: string | null
   modelOptionId?: string | null
   providerLock?: "pptoken" | "aiberm" | "crazyroute" | null
   model?: string | null
@@ -34,6 +36,7 @@ type ConversationTurnParams = {
 
 let runTurnCalls: ConversationTurnParams[] = []
 let enqueueCalls = 0
+let enqueuePayload: Record<string, any> | null = null
 let shouldFailSessionDetail = false
 
 nodeModule._load = function patchedModuleLoad(request: string, parent: unknown, isMain: boolean) {
@@ -59,8 +62,9 @@ nodeModule._load = function patchedModuleLoad(request: string, parent: unknown, 
       ensureImageAssistantSessionForTask: async () => ({
         sessionId: "s-1",
       }),
-      enqueueAssistantTask: async () => {
+      enqueueAssistantTask: async (input: { payload: Record<string, any> }) => {
         enqueueCalls += 1
+        enqueuePayload = input.payload
         return { id: "task-1" }
       },
     }
@@ -149,6 +153,7 @@ test.before(async () => {
 test.beforeEach(() => {
   runTurnCalls = []
   enqueueCalls = 0
+  enqueuePayload = null
   shouldFailSessionDetail = false
 })
 
@@ -179,4 +184,46 @@ test("edit route keeps direct success when detail read is temporarily unavailabl
   assert.equal(response.body?.data?.direct, true)
   assert.equal(response.body?.data?.detail_snapshot, null)
   assert.equal(enqueueCalls, 0)
+})
+
+test("edit route preserves mask context for direct mask edits", async () => {
+  const response = await POST({
+    json: async () => ({
+      prompt: "remove the marked object",
+      sessionId: "s-1",
+      referenceAssetIds: ["asset-1"],
+      snapshotAssetId: "snapshot-1",
+      maskAssetId: "mask-1",
+      candidateCount: 1,
+      preferAsync: false,
+    }),
+  })
+
+  assert.equal(response.status, 200)
+  assert.equal(runTurnCalls.length, 1)
+  assert.equal(runTurnCalls[0].taskType, "mask_edit")
+  assert.deepEqual(runTurnCalls[0].referenceAssetIds, ["asset-1", "snapshot-1", "mask-1"])
+  assert.equal(runTurnCalls[0].snapshotAssetId, "snapshot-1")
+  assert.equal(runTurnCalls[0].maskAssetId, "mask-1")
+})
+
+test("edit route preserves mask context for queued mask edits", async () => {
+  const response = await POST({
+    json: async () => ({
+      prompt: "remove the marked object",
+      sessionId: "s-1",
+      referenceAssetIds: ["asset-1"],
+      snapshotAssetId: "snapshot-1",
+      maskAssetId: "mask-1",
+      candidateCount: 1,
+      preferAsync: true,
+    }),
+  })
+
+  assert.equal(response.status, 200)
+  assert.equal(enqueueCalls, 1)
+  assert.equal(enqueuePayload?.taskType, "mask_edit")
+  assert.deepEqual(enqueuePayload?.referenceAssetIds, ["asset-1", "snapshot-1", "mask-1"])
+  assert.equal(enqueuePayload?.snapshotAssetId, "snapshot-1")
+  assert.equal(enqueuePayload?.maskAssetId, "mask-1")
 })

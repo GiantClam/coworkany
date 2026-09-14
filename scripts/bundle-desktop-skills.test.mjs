@@ -61,6 +61,7 @@ test("offline bundle fingerprints complete skill trees and retains exact upstrea
     await put(root, "scripts/desktop-skills.lock.json", `${JSON.stringify({
       schemaVersion: 1,
       directoryDigestAlgorithm: "sha256-tree-v1",
+      resolution: "latest-on-build",
       skills: [
         { id: "ppt-master", repo: "hugohe3/ppt-master", version: "6.3.0", commit: pptCommit, branch: "v6.3.0", skillPath: "skills/ppt-master", stagingName: "ppt-master-acquire", directoryDigest: await digestTree(join(root, ppt)) },
         { id: "dashi-ppt", repo: "chuspeeism/dashi-ppt-skill", version: "0.4.11", commit: dashiCommit, branch: "main", skillPath: "skills/dashi-ppt", stagingName: "dashi-ppt-acquire", directoryDigest: await digestTree(join(root, dashi)) },

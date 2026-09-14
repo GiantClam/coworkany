@@ -74,7 +74,11 @@ const server = createServer(async (request, response) => {
     answerQuestion?.();
     return json(response, 200, true);
   }
-  if (request.method === "GET" && url.pathname === "/global/health") return json(response, 200, { status: "ok" });
+  if (request.method === "GET" && url.pathname === "/global/health") {
+    const delay = Number(process.env.FAKE_OPENCODE_HEALTH_DELAY_MS ?? 0);
+    if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+    return json(response, 200, { status: "ok" });
+  }
   if (request.method === "GET" && url.pathname === "/event") {
     response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
     response.flushHeaders();
@@ -151,6 +155,38 @@ const server = createServer(async (request, response) => {
     if (process.env.FAKE_OPENCODE_PROMPT_HANG === "1") {
       await new Promise((resolve) => setTimeout(resolve, 10_000));
       response.writeHead(204); response.end();
+      return;
+    }
+    if (process.env.FAKE_OPENCODE_STALLED_TOOL === "1") {
+      sendEvent({ payload: { type: "session.status", properties: { sessionID: "recovered-session", status: { type: "busy" } } } });
+      sendEvent({ payload: { type: "message.updated", properties: { sessionID: "recovered-session", info: { id: "stalled-assistant", role: "assistant" } } } });
+      sendEvent({ payload: { type: "message.part.updated", properties: { sessionID: "recovered-session", part: { id: "stalled-tool", messageID: "stalled-assistant", type: "tool", tool: "bash", state: { status: "running", input: { command: "npm run build" } } } } } });
+      response.writeHead(204); response.end();
+      return;
+    }
+    if (process.env.FAKE_OPENCODE_PREVIEW_TOOL === "1") {
+      sendEvent({ payload: { type: "session.status", properties: { sessionID: "recovered-session", status: { type: "busy" } } } });
+      sendEvent({ payload: { type: "message.updated", properties: { sessionID: "recovered-session", info: { id: "preview-assistant", role: "assistant" } } } });
+      sendEvent({ payload: { type: "message.part.updated", properties: { sessionID: "recovered-session", part: { id: "preview-tool", messageID: "preview-assistant", type: "tool", tool: "bash", state: { status: "running", input: { command: "node scripts/start-preview-server.mjs" } } } } } });
+      setTimeout(() => {
+        sendEvent({ payload: { type: "message.part.updated", properties: { sessionID: "recovered-session", part: { id: "preview-tool", messageID: "preview-assistant", type: "tool", tool: "bash", state: { status: "completed", input: { command: "node scripts/start-preview-server.mjs" } } } } } });
+        sendEvent({ payload: { type: "message.part.updated", properties: { sessionID: "recovered-session", part: { id: "preview-text", messageID: "preview-assistant", type: "text", text: "Preview server started" } } } });
+        sendEvent({ payload: { type: "message.updated", properties: { sessionID: "recovered-session", info: { id: "preview-assistant", role: "assistant", finish: "stop", time: { completed: Date.now() } } } } });
+        sendEvent({ payload: { type: "session.status", properties: { sessionID: "recovered-session", status: { type: "idle" } } } });
+      }, 700);
+      response.writeHead(204); response.end();
+      return;
+    }
+    if (process.env.FAKE_OPENCODE_PROMPT_DISCONNECT === "1") {
+      sendEvent({ payload: { type: "session.status", properties: { sessionID: "recovered-session", status: { type: "busy" } } } });
+      sendEvent({ payload: { type: "message.updated", properties: { sessionID: "recovered-session", info: { id: "disconnect-assistant", role: "assistant" } } } });
+      response.destroy();
+      setTimeout(() => {
+        sendEvent({ payload: { type: "message.part.updated", properties: { sessionID: "recovered-session", part: { id: "disconnect-text", messageID: "disconnect-assistant", type: "text", text: "Recovered after prompt disconnect" } } } });
+        sendEvent({ payload: { type: "message.part.updated", properties: { sessionID: "recovered-session", part: { id: "disconnect-usage", messageID: "disconnect-assistant", type: "step-finish", tokens: { input: 5, output: 3 }, cost: 0.002 } } } });
+        sendEvent({ payload: { type: "message.updated", properties: { sessionID: "recovered-session", info: { id: "disconnect-assistant", role: "assistant", finish: "stop", time: { completed: Date.now() } } } } });
+        sendEvent({ payload: { type: "session.status", properties: { sessionID: "recovered-session", status: { type: "idle" } } } });
+      }, 40);
       return;
     }
     if (payload.parts?.[0]?.text === "Trigger crash") {

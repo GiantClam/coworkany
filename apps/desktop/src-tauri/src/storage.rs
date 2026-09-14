@@ -5,10 +5,12 @@ use sha2::Digest;
 use std::fs;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const BACKUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const REDACTED: &str = "[REDACTED]";
+static BACKUP_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 const SCHEMA: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -87,7 +89,11 @@ fn is_database_corruption(error: &rusqlite::Error) -> bool {
 }
 
 fn ensure_recent_consistent_backup(path: &Path) -> Result<()> {
+    let _guard = BACKUP_LOCK.get_or_init(|| Mutex::new(())).lock().map_err(|_| rusqlite::Error::InvalidQuery)?;
     let backup = backup_path(path);
+    // Re-check after waiting for another reader that may have just refreshed
+    // the backup. Without this second check, parallel startup reads all run
+    // VACUUM INTO against the same temporary file.
     let stale = backup.metadata().and_then(|metadata| metadata.modified()).ok()
         .and_then(|modified| SystemTime::now().duration_since(modified).ok())
         .is_none_or(|age| age >= BACKUP_INTERVAL);

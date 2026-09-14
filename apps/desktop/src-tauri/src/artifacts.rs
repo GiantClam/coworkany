@@ -6,6 +6,16 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, serde::Serialize)]
 pub struct ArtifactMetadata { pub relative_path: String, pub mime_type: String, pub byte_length: u64, pub sha256: String }
 
+pub fn is_available(project_root: &Path, relative_path: &str, mime_type: &str) -> bool {
+    let relative = PathBuf::from(relative_path);
+    if relative.is_absolute() || relative.components().any(|component| matches!(component, std::path::Component::ParentDir)) { return false; }
+    let Ok(root) = project_root.canonicalize() else { return false; };
+    let Ok(target) = root.join(&relative).canonicalize() else { return false; };
+    target.starts_with(&root)
+        && target.metadata().map(|metadata| metadata.is_file()).unwrap_or(false)
+        && mime_matches_extension(&relative, mime_type)
+}
+
 pub fn inspect(project_root: &Path, relative_path: &str, mime_type: &str) -> Result<ArtifactMetadata, String> {
     let relative = PathBuf::from(relative_path);
     if relative.is_absolute() || relative.components().any(|component| matches!(component, std::path::Component::ParentDir)) { return Err("artifact_path_escape".to_string()); }
@@ -54,6 +64,18 @@ mod tests {
         assert_eq!(metadata.byte_length, 3); assert_eq!(metadata.sha256.len(), 64);
         assert_eq!(inspect(&root, "deck.pptx", "image/png").unwrap_err(), "artifact_mime_mismatch");
         assert_eq!(inspect(&root, "../deck.pptx", "application/octet-stream").unwrap_err(), "artifact_path_escape");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn availability_check_validates_without_rehashing_file() {
+        let root = std::env::temp_dir().join(format!("coworkany-artifact-availability-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root); std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("clip.mp4"), vec![0_u8; 1024]).unwrap();
+        assert!(is_available(&root, "clip.mp4", "video/mp4"));
+        assert!(!is_available(&root, "clip.mp4", "image/png"));
+        assert!(!is_available(&root, "../clip.mp4", "video/mp4"));
+        assert!(!is_available(&root, "missing.mp4", "video/mp4"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

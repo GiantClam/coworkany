@@ -75,7 +75,7 @@ export function quickPromptsForDesktopRoute(path: string, locale: DesktopLocale)
 }
 
 export const workflowActionEnglish: Record<string, string> = {
-  upload: "Upload asset", text_input: "Text input", file_create: "Local file", writer: "Content writing", llm_generate: "Model generation", agent_execute: "Agent execution", ppt_generate: "PPT (ppt-master)", image_generate: "Image generation", video_generate: "Video generation", digital_human: "Digital human", music_generate: "Music generation", voice_synthesis: "Voice synthesis", voice_clone: "Voice cloning", audio_generate: "General audio", knowledge_retrieve: "Obsidian retrieval", knowledge_write: "Write to Obsidian", product_store: "Save to Asset Library", foreach: "Process each", collect: "Collect results", output: "Result Preview",
+  upload: "Upload asset", text_input: "Text input", file_create: "Local file", writer: "Content writing", llm_generate: "Model generation", agent_execute: "Agent execution", ppt_generate: "PPT (ppt-master)", image_generate: "Image generation", video_generate: "Video generation", digital_human: "Digital human", music_generate: "Music generation", voice_synthesis: "Voice synthesis", voice_clone: "Voice cloning", audio_generate: "General audio", video_process: "Video processing", audio_process: "Audio processing", knowledge_retrieve: "Obsidian retrieval", knowledge_write: "Write to Obsidian", product_store: "Save to Asset Library", foreach: "Process each", collect: "Collect results", output: "Result Preview",
 };
 
 /** Home group headings are shared as stable English identifiers with SaaS;

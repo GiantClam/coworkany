@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { embeddingDescriptorPath, fontsAssetPath, isRuntimeReady, MANDATORY_RUNTIME_COMPONENTS, type BootstrapManifest } from "../runtime/bootstrap";
 import { desktopPlatform } from "../runtime/platform";
-import { shouldRepairRuntime } from "../runtime/runtime-gate";
+import { canRunImageWorkflow, shouldRepairRuntime } from "../runtime/runtime-gate";
 
 test("runtime readiness requires every mandatory component", () => {
   const base: BootstrapManifest = { schemaVersion: 1, source: "system", checkedAt: new Date(0).toISOString(), probes: [
@@ -53,8 +53,33 @@ test("browser preview opens the desktop shell without a Tauri bootstrap", () => 
   assert.match(source, /setRuntimeReady\(true\);[\s\S]*setShellReady\(true\);[\s\S]*return;/);
 });
 
+test("runtime repair failure still renders the shell for recovery", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+
+  assert.match(source, /setRuntimeStatus\(preview \? "浏览器预览模式 · Tauri 未连接" : `运行环境修复失败：/u);
+  assert.match(source, /setShellReady\(true\);[\s\S]*setRuntimeReady\(preview\);/u);
+  assert.match(source, /if \(shouldRepairRuntime\(runtime\) && !imageRuntimeReady\) \{[\s\S]*setShellReady\(true\);[\s\S]*repairPromise/u);
+});
+
+test("desktop shell is released before slow artifact hydration", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const hydrationStart = source.indexOf("const [recent, usageRows, artifactRowsFromClient, workflows, runRowsFromClient] = await Promise.all");
+  const shellRelease = source.indexOf("setShellReady(true);", source.indexOf("const stored = await tauriBridge.invoke<DesktopConfig>(\"read_config\")"));
+
+  assert.ok(hydrationStart >= 0);
+  assert.ok(shellRelease >= 0);
+  assert.ok(shellRelease < hydrationStart);
+});
+
+test("image-ready runtimes skip the full optional repair gate", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  assert.match(source, /const imageRuntimeReady = canRunImageWorkflow\(runtime\);[\s\S]*if \(shouldRepairRuntime\(runtime\) && !imageRuntimeReady\)/u);
+});
+
 test("development runtime does not enter the signed macOS repair gate", () => {
   assert.equal(shouldRepairRuntime({ ready: false, development: true }), false);
   assert.equal(shouldRepairRuntime({ ready: false, development: false }), true);
   assert.equal(shouldRepairRuntime({ ready: true, development: false }), false);
+  assert.equal(canRunImageWorkflow({ ready: false, node: true, host: true, migrations: true }), true);
+  assert.equal(canRunImageWorkflow({ ready: false, node: true, host: true, migrations: false }), false);
 });

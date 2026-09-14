@@ -12,7 +12,7 @@ const scripts = dirname(fileURLToPath(import.meta.url));
 test("desktop probing and launch share bundled-first OpenCode selection", async () => {
   const host = await readFile(join(scripts, "../apps/desktop/src-tauri/src/host.rs"), "utf8");
   const shell = await readFile(join(scripts, "../apps/desktop/src-tauri/src/lib.rs"), "utf8");
-  assert.match(host, /bundled\.into_iter\(\)\.chain\(configured\)/u);
+  assert.match(host, /ordered_runtime_candidates\(private, packaged, configured/u);
   assert.match(shell, /host::opencode_executable\(&app\)/u);
   assert.match(shell, /"up-dist-manifest"/u);
 });
@@ -40,16 +40,16 @@ New-Item -ItemType Directory -Force -Path (Split-Path $target),(Split-Path $npm)
 [IO.File]::WriteAllText($target,'old')
 [IO.File]::WriteAllText($npm,'unused')
 [IO.File]::WriteAllText($candidate,'new')
-$script:targetVersion='1.18.27'; $script:candidateVersion='1.18.27'; $script:npmCalls=0
+$script:targetVersion='1.18.30'; $script:candidateVersion='1.18.30'; $script:npmCalls=0
 function Get-OpenCodeVersion([string]$path) { if ($path -eq $target) { return $script:targetVersion }; return $script:candidateVersion }
 Set-Item -LiteralPath "Function:$npm" -Value {
   $script:npmCalls++
-  if ($args -notcontains 'opencode-ai@1.18.27') { throw 'unpinned_package' }
+  if ($args -notcontains 'opencode-ai@1.18.30') { throw 'unpinned_package' }
   $global:LASTEXITCODE=0
 }
 Install-OpenCodePackage -Offline
 if ($script:npmCalls -ne 0) { throw 'offline_network' }
-foreach ($version in @('1.18.26','','1.18.27-preview','1.18.270')) {
+foreach ($version in @('1.18.29','','1.18.30-preview','1.18.300')) {
   $script:targetVersion=$version
   try { Install-OpenCodePackage -Offline; throw 'accepted_invalid_offline' } catch { if ($_.Exception.Message -notlike 'offline_opencode_version_mismatch*') { throw } }
 }
@@ -80,7 +80,7 @@ ${loadFunctions("stage-desktop-runtime.ps1")}
 $root=${quote(root)}
 $old=Join-Path $root 'old.exe'; $good=Join-Path $root 'good.exe'; $target=Join-Path $root 'target.exe'
 [IO.File]::WriteAllText($old,'old'); [IO.File]::WriteAllText($good,'good'); [IO.File]::WriteAllText($target,'stale')
-function Get-OpenCodeVersion([string]$path) { if ([IO.File]::ReadAllText($path) -eq 'good') { return '1.18.27' }; return '1.18.26' }
+function Get-OpenCodeVersion([string]$path) { if ([IO.File]::ReadAllText($path) -eq 'good') { return '1.18.30' }; return '1.18.29' }
 if (-not (Stage-OpenCode @($old,$good) $target)) { throw 'not_staged' }
 if ([IO.File]::ReadAllText($target) -ne 'good') { throw 'wrong_candidate' }
 if (-not (Stage-OpenCode @() $target)) { throw 'valid_target_not_reused' }
@@ -93,7 +93,7 @@ Write-Output 'stage-regression-ok'
     const { stdout } = await run("powershell.exe", ["-NoProfile", "-Command", command], options);
     assert.match(stdout, /stage-regression-ok/);
     const source = await readFile(join(scripts, "stage-desktop-runtime.ps1"), "utf8");
-    assert.match(source, /opencode = @\{[^\n]*version = "1\.18\.27"/);
+    assert.match(source, /opencode = @\{[^\n]*version = "1\.18\.30"/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -108,8 +108,8 @@ test("version probes require successful exact output and restore offline environ
 $ErrorActionPreference='Stop'
 ${loadFunctions(name)}
 $env:OPENCODE_DISABLE_MODELS_FETCH='previous'; $env:OPENCODE_DISABLE_AUTOUPDATE=$null
-$env:FIXTURE_VERSION='1.18.27'; $env:FIXTURE_EXIT='0'
-if ((Get-OpenCodeVersion ${quote(fixture)}) -ne '1.18.27') { throw 'version_probe_failed' }
+$env:FIXTURE_VERSION='1.18.30'; $env:FIXTURE_EXIT='0'
+if ((Get-OpenCodeVersion ${quote(fixture)}) -ne '1.18.30') { throw 'version_probe_failed' }
 $env:FIXTURE_EXIT='1'
 if (Get-OpenCodeVersion ${quote(fixture)}) { throw 'accepted_nonzero_exit' }
 if ($env:OPENCODE_DISABLE_MODELS_FETCH -ne 'previous' -or $null -ne $env:OPENCODE_DISABLE_AUTOUPDATE) { throw 'environment_not_restored' }

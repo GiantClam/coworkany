@@ -87,6 +87,9 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let opencode = opencode_path.is_some();
     let python_path = host::python_executable(&app)?.map(PathBuf::from).and_then(canonical_path);
     let python = python_path.is_some();
+    let media_directory = media_runtime_directory(&app)?;
+    let media = media_runtime_is_usable(&media_directory);
+    let media_path = media.then(|| canonical_path(media_directory.clone())).flatten();
     let development = development_runtime_directory().unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("apps").join("desktop").join("dist-runtime"));
     let configured_host = configured_runtime_path(&data, "hostPath");
     let host_path = {
@@ -154,7 +157,7 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         ("hostPath", host_path.as_ref()), ("knowledgePath", knowledge_path.as_ref()), ("skillsPath", skill_path.as_ref()), ("fontsPath", fonts_path.as_ref()),
         ("lancedbPath", lancedb_path.as_ref()), ("embeddingPath", embedding_path.as_ref()),
     ])?;
-    let result = serde_json::json!({ "ready": node && opencode && python && skills && fonts && migrations && host && knowledge && lancedb && embedding, "development": cfg!(debug_assertions), "node": node, "opencode": opencode, "python": python, "skills": skills, "fonts": fonts, "migrations": migrations, "host": host, "knowledge": knowledge, "lancedb": lancedb, "embedding": embedding, "semanticRag": lancedb, "paths": { "node": node_path, "opencode": opencode_path, "python": python_path, "host": host_path, "knowledge": knowledge_path, "skills": skill_path, "fonts": fonts_path, "lancedb": lancedb_path, "embedding": embedding_path } });
+    let result = serde_json::json!({ "ready": node && opencode && python && skills && fonts && migrations && host && knowledge && lancedb && embedding && media, "development": cfg!(debug_assertions), "node": node, "opencode": opencode, "python": python, "skills": skills, "fonts": fonts, "migrations": migrations, "host": host, "knowledge": knowledge, "lancedb": lancedb, "embedding": embedding, "media": media, "semanticRag": lancedb, "paths": { "node": node_path, "opencode": opencode_path, "python": python_path, "host": host_path, "knowledge": knowledge_path, "skills": skill_path, "fonts": fonts_path, "lancedb": lancedb_path, "embedding": embedding_path, "media": media_path } });
     if result.get("ready").and_then(serde_json::Value::as_bool) == Some(true) {
         write_runtime_probe_cache(&data, &runtime_probe_fingerprint(&data, &resource), &result);
     }
@@ -167,6 +170,33 @@ fn development_runtime_directory() -> Option<PathBuf> {
     let manifest_runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("dist-runtime");
     let current_runtime = std::env::current_dir().ok()?.join("apps").join("desktop").join("dist-runtime");
     [manifest_runtime, current_runtime].into_iter().find(|path| path.is_dir())
+}
+
+fn media_runtime_candidates(data: &Path, resource: &Path, development: &Path) -> Vec<PathBuf> {
+    vec![
+        data.join("runtime").join("media"),
+        resource.join("dist-runtime").join("runtime").join("media"),
+        resource.join("_up_").join("dist-runtime").join("runtime").join("media"),
+        development.join("runtime").join("media"),
+    ]
+}
+
+fn media_runtime_is_usable(path: &Path) -> bool {
+    let ffmpeg = path.join(platform::runtime_executable("ffmpeg"));
+    let ffprobe = path.join(platform::runtime_executable("ffprobe"));
+    ffmpeg.is_file() && ffprobe.is_file() && executable_works(&ffmpeg, &["-version"]) && executable_works(&ffprobe, &["-version"])
+}
+
+/// Resolve the exact media directory that is both visible to the runtime
+/// probe and passed to the Node workflow host. In development, the bundled
+/// files live under apps/desktop/dist-runtime rather than the writable data
+/// directory used for host state.
+pub(crate) fn media_runtime_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
+    let data = data_dir(app)?;
+    let development = development_runtime_directory().unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("apps").join("desktop").join("dist-runtime"));
+    let fallback = data.join("runtime").join("media");
+    Ok(media_runtime_candidates(&data, &resource, &development).into_iter().find(|path| media_runtime_is_usable(path)).unwrap_or(fallback))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -189,12 +219,16 @@ fn runtime_probe_fingerprint(data: &Path, resource: &Path) -> String {
         ("native-knowledge", resource.join("dist-runtime/knowledge.mjs")),
         ("up-knowledge", resource.join("_up_/dist-runtime/knowledge.mjs")),
         ("private-runtime-manifest", data.join("runtime/runtime-manifest.json")),
+        ("private-runtime-media", data.join("runtime/media")),
         ("config", data.join("config.json")),
         ("database", data.join("app.db")),
         ("resource", resource.to_path_buf()),
         ("manifest", resource.join("runtime-manifest.json")),
         ("dist-manifest", resource.join("dist-runtime").join("runtime").join("runtime-manifest.json")),
         ("up-dist-manifest", resource.join("_up_").join("dist-runtime").join("runtime").join("runtime-manifest.json")),
+        ("development-media", development.join("runtime").join("media")),
+        ("native-media", resource.join("dist-runtime").join("runtime").join("media")),
+        ("up-media", resource.join("_up_").join("dist-runtime").join("runtime").join("media")),
     ]
     .into_iter()
     .map(|(label, path)| format!("{label}={}:{}", path.to_string_lossy(), path_stamp(&path)))
@@ -341,6 +375,14 @@ fn discover_offline_runtime_zip(resource: &Path) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file()).and_then(|path| std::fs::canonicalize(path).ok()).map(bootstrap::powershell_compatible_path)
 }
 
+fn configured_offline_runtime_zip(data: &Path) -> Option<PathBuf> {
+    let value = config::read(&data.join("config.json"), data).ok()?;
+    let configured = value.get("offlineRuntimeZipPath").and_then(serde_json::Value::as_str)?.trim();
+    let path = PathBuf::from(configured);
+    if !path.is_file() { return None; }
+    fs::canonicalize(path).ok().map(bootstrap::powershell_compatible_path)
+}
+
 #[tauri::command]
 #[cfg(windows)]
 fn repair_runtime(app: tauri::AppHandle, options: Option<RuntimeRepairOptions>) -> Result<serde_json::Value, String> {
@@ -364,7 +406,7 @@ fn repair_runtime(app: tauri::AppHandle, options: Option<RuntimeRepairOptions>) 
     invalidate_runtime_probe_cache(&install_root);
     let offline_zip = match options.and_then(|value| value.offline_zip) {
         Some(path) => Some(std::fs::canonicalize(PathBuf::from(path)).map(bootstrap::powershell_compatible_path).map_err(|error| format!("offline_runtime_zip_unavailable: {error}"))?),
-        None => discover_offline_runtime_zip(&resource),
+        None => configured_offline_runtime_zip(&install_root).or_else(|| discover_offline_runtime_zip(&resource)),
     };
     emit_runtime_progress(&app, if offline_zip.is_some() { "offline_archive_discovered" } else { "network_runtime_prepare" });
     let mut command = Command::new("powershell.exe");
@@ -662,7 +704,7 @@ fn list_artifacts(app: tauri::AppHandle) -> Result<Vec<storage::ArtifactRow>, St
   reconcile_persisted_artifacts(&root, &database)?;
   let mut rows = storage::list_artifacts(&database).map_err(|error| error.to_string())?;
     for row in &mut rows {
-        row.available = artifacts::inspect(&root, &row.relative_path, &row.mime_type).is_ok();
+        row.available = artifacts::is_available(&root, &row.relative_path, &row.mime_type);
     }
     Ok(rows)
 }
@@ -1320,7 +1362,7 @@ fn adjacent_instance_lock_path(data_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_runtime_executable, is_default_portable_text_config, is_usable_desktop_config, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -1337,6 +1379,15 @@ mod tests {
         let lock = adjacent_instance_lock_path(data_root);
         assert_eq!(lock, PathBuf::from("C:/Users/test/AppData/Local/CoworkAny.instance.lock"));
         assert_ne!(lock.parent(), Some(data_root));
+    }
+
+    #[test]
+    fn media_runtime_candidates_include_development_bundle_after_private_and_packaged_paths() {
+        let candidates = media_runtime_candidates(Path::new("data"), Path::new("resource"), Path::new("development"));
+        assert_eq!(candidates[0], PathBuf::from("data/runtime/media"));
+        assert_eq!(candidates[1], PathBuf::from("resource/dist-runtime/runtime/media"));
+        assert_eq!(candidates[2], PathBuf::from("resource/_up_/dist-runtime/runtime/media"));
+        assert_eq!(candidates[3], PathBuf::from("development/runtime/media"));
     }
 
     #[test]
@@ -1440,6 +1491,21 @@ mod tests {
     }
 
     #[test]
+    fn configured_offline_runtime_zip_accepts_an_existing_archive() {
+        let root = std::env::temp_dir().join(format!("coworkany-runtime-archive-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("CoworkAny-Runtime-x64.zip");
+        fs::write(&archive, b"fixture").unwrap();
+        let mut value = config::default_config(&root);
+        value["offlineRuntimeZipPath"] = serde_json::json!(archive.to_string_lossy().to_string());
+        config::write(&root.join("config.json"), &value).unwrap();
+
+        assert_eq!(configured_offline_runtime_zip(&root), Some(bootstrap::powershell_compatible_path(fs::canonicalize(&archive).unwrap())));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn app_managed_runtime_paths_precede_stale_configured_and_system_paths() {
         let candidates = ordered_runtime_candidates(
             [PathBuf::from("data/runtime")],
@@ -1521,9 +1587,10 @@ mod tests {
     }
 
     #[test]
-    fn release_binary_uses_the_windows_gui_subsystem() {
+    fn windows_binary_uses_the_gui_subsystem() {
         let source = include_str!("main.rs");
-        assert!(source.contains("windows_subsystem = \"windows\""));
+        assert!(source.contains("#![cfg_attr(windows, windows_subsystem = \"windows\")]"));
+        assert!(!source.contains("not(debug_assertions)"));
     }
 
     #[test]

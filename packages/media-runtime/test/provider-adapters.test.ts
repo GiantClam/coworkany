@@ -143,6 +143,28 @@ test("OpenAI-compatible image adapter reads a validated workflow-local reference
   }
 });
 
+test("OpenAI-compatible image adapter sends a separate mask file for local edits", async () => {
+  let request: RequestInit | undefined;
+  const adapter = createOpenAICompatibleImageAdapter({
+    provider: "fixture" as MediaProviderId,
+    baseUrl: "https://api.example.test/v1",
+    apiKey: "secret",
+    fetchImpl: async (_input, init) => {
+      request = init;
+      return new Response(JSON.stringify({ data: [{ b64_json: "AQID" }] }), { status: 200 });
+    },
+  });
+  const task = await adapter.execute({ provider: "fixture" as MediaProviderId, modelId: "gpt-image-2", input: {
+    prompt: "Edit only the marked area",
+    referenceImageUrls: ["data:image/png;base64,AQID"],
+    maskImageUrl: "data:image/png;base64,BAUG",
+  } }, cancellation());
+  assert.equal(task.status, "succeeded");
+  const form = request?.body as FormData;
+  assert.equal((form.get("image") as File).type, "image/png");
+  assert.equal((form.get("mask") as File).type, "image/png");
+});
+
 test("image generation requests use a five minute provider timeout", async () => {
   assert.equal(IMAGE_GENERATION_REQUEST_TIMEOUT_MS, 5 * 60 * 1000);
   const adapter = createOpenAICompatibleImageAdapter({
@@ -220,7 +242,7 @@ test("PPTOKEN image edits use curl multipart transport for reference images", as
   const task = await adapter.execute({
     provider: "pptoken" as MediaProviderId,
     modelId: "gpt-image-2",
-    input: { prompt: "edit with a reference", referenceImageUrls: ["data:image/png;base64,AQID"] },
+    input: { prompt: "edit with a reference", referenceImageUrls: ["data:image/png;base64,AQID"], maskImageUrl: "data:image/png;base64,BAUG" },
     idempotencyKey: "curl:image-edit:1",
   }, cancellation());
   assert.equal(task.status, "succeeded");
@@ -231,6 +253,9 @@ test("PPTOKEN image edits use curl multipart transport for reference images", as
   const imageForm = args.find((value) => value.startsWith("image=@"));
   assert.ok(imageForm);
   assert.equal(existsSync(imageForm!.slice("image=@".length).split(";", 1)[0]), false);
+  const maskForm = args.find((value) => value.startsWith("mask=@"));
+  assert.ok(maskForm);
+  assert.equal(existsSync(maskForm!.slice("mask=@".length).split(";", 1)[0]), false);
 });
 
 test("OpenAI-compatible image adapter finds media nested in provider result envelopes", async () => {
@@ -342,6 +367,20 @@ test("Bailian video adapter sends direct DashScope async request and polls task"
   assert.match(calls[0].url, /video-synthesis$/);
   assert.equal(new Headers(calls[0].init?.headers).get("X-DashScope-Async"), "enable");
   assert.equal((JSON.parse(String(calls[0].init?.body)) as { input: { prompt: string } }).input.prompt, "中文广告");
+});
+
+test("Bailian video adapter infers image-to-video in auto mode when a legacy text feature has a first frame", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const adapter = createBailianVideoAdapter({ provider: "bailian" as MediaProviderId, baseUrl: "https://dashscope.aliyuncs.com", apiKey: "secret", fetchImpl: async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+    return new Response(JSON.stringify({ output: { task_id: "task-auto-image", task_status: "PENDING" } }), { status: 200 });
+  } });
+  await adapter.execute({ provider: "bailian" as MediaProviderId, modelId: "wan3.0-video-prime", input: {
+    featureId: "text-to-video", mode: "auto", prompt: "让人物自然转身并向镜头微笑", firstFrameUrl: "https://files.invalid/first.png",
+  } }, cancellation());
+  const input = requestBody?.input as Record<string, unknown>;
+  assert.equal(input.prompt, "让人物自然转身并向镜头微笑");
+  assert.deepEqual(input.media, [{ type: "first_frame", url: "https://files.invalid/first.png" }]);
 });
 
 test("Bailian video adapter preserves reference/edit media parameters", async () => {

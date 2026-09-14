@@ -649,20 +649,31 @@ export function WorkflowCanvas({
     setConnectionDrag(next);
   };
   const beginTitleEdit = (node: WorkflowCanvasNode) => {
-    if (!onUpdateNode || !isWorkflowNodeType(node.type)) return;
+    if (!onUpdateNode || node.nodeKey === "input") return;
     onSelectNode(node.nodeKey);
     setEditingTitle(node.nodeKey);
-    setTitleDraft(resolveWorkflowNodeTitle(node.type, node.title, locale));
+    setTitleDraft(isWorkflowNodeType(node.type) ? resolveWorkflowNodeTitle(node.type, node.title, locale) : node.title);
   };
   const commitTitleEdit = (node: WorkflowCanvasNode) => {
-    if (onUpdateNode && isWorkflowNodeType(node.type)) {
+    if (onUpdateNode && node.nodeKey !== "input") {
       onUpdateNode(node.nodeKey, {
-        title: titleDraft.trim() || resolveWorkflowNodeTitle(node.type, node.title, locale),
+        title: titleDraft.trim() || (isWorkflowNodeType(node.type) ? resolveWorkflowNodeTitle(node.type, node.title, locale) : node.title),
       });
     }
     setEditingTitle(null);
     setTitleDraft("");
   };
+  useEffect(() => {
+    if (!editingTitle) return undefined;
+    const commitWhenClickingOutsideTitle = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("[data-workflow-title-editor='true']")) return;
+      const node = renderedNodeMap.get(editingTitle);
+      if (node) commitTitleEdit(node);
+    };
+    document.addEventListener("pointerdown", commitWhenClickingOutsideTitle, true);
+    return () => document.removeEventListener("pointerdown", commitWhenClickingOutsideTitle, true);
+  }, [commitTitleEdit, editingTitle, renderedNodeMap]);
 
   const sceneBounds = useMemo(
     () => calculateWorkflowCanvasSceneBounds(renderedNodes, viewport, viewportSize),
@@ -843,6 +854,7 @@ export function WorkflowCanvas({
                     {titleEditing ? (
                       <input
                         autoFocus
+                        data-workflow-title-editor="true"
                         value={titleDraft}
                         onChange={(event) => setTitleDraft(event.target.value)}
                         onBlur={() => commitTitleEdit(node)}
@@ -856,7 +868,7 @@ export function WorkflowCanvas({
                         onPointerDown={(event) => event.stopPropagation()}
                       />
                     ) : (
-                      <strong onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); beginTitleEdit(node); }}>
+                      <strong data-node-no-drag="true" onPointerDown={(event) => event.stopPropagation()} onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); beginTitleEdit(node); }}>
                         {isWorkflowNodeType(node.type) ? resolveWorkflowNodeTitle(node.type, node.title, locale) : node.title}
                       </strong>
                     )}

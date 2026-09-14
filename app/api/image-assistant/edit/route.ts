@@ -119,22 +119,29 @@ export async function POST(req: NextRequest) {
     const requestedModel = typeof body?.model === "string" ? body.model.trim() : null
     const snapshotAssetId = typeof body?.snapshotAssetId === "string" ? body.snapshotAssetId : null
     const maskAssetId = typeof body?.maskAssetId === "string" ? body.maskAssetId : null
+    const resolvedReferenceAssetIds = Array.from(
+      new Set([
+        ...referenceAssetIds,
+        ...(snapshotAssetId ? [snapshotAssetId] : []),
+        ...(maskAssetId ? [maskAssetId] : []),
+      ]),
+    )
     const shouldKeepEditMode = await hasActualEditContext({
       userId: auth.user.id,
       sessionId,
-      referenceAssetIds,
+      referenceAssetIds: resolvedReferenceAssetIds,
       snapshotAssetId,
       maskAssetId,
     })
     const workflowName = shouldKeepEditMode ? "image_turn_edit" : "image_turn_generate"
-    const taskType = shouldKeepEditMode ? "edit" : "generate"
+    const taskType = maskAssetId ? "mask_edit" : shouldKeepEditMode ? "edit" : "generate"
     const governedSelection = await resolveGovernedImageAssistantSelectionForUser({
       user: auth.user,
       modelOptionId: requestedModelOptionId,
       providerLock: requestedProviderLock,
       model: requestedModel,
       taskType,
-      hasReferenceInput: Boolean(referenceAssetIds.length),
+      hasReferenceInput: Boolean(resolvedReferenceAssetIds.length),
       hasMask: Boolean(maskAssetId),
       hasSnapshot: Boolean(snapshotAssetId),
     })
@@ -150,7 +157,7 @@ export async function POST(req: NextRequest) {
     if (!shouldKeepEditMode) {
       console.info("image-assistant.edit.normalized_to_generate", {
         sessionId,
-        referenceAssetCount: referenceAssetIds.length,
+        referenceAssetCount: resolvedReferenceAssetIds.length,
       })
     }
 
@@ -165,7 +172,7 @@ export async function POST(req: NextRequest) {
         prompt,
         brief,
         taskType,
-        referenceAssetIds,
+        referenceAssetIds: resolvedReferenceAssetIds,
         modelOptionId,
         enterpriseRole: auth.user.enterpriseRole || null,
         enterpriseStatus: auth.user.enterpriseStatus || null,
@@ -183,6 +190,8 @@ export async function POST(req: NextRequest) {
         imageResponseFormat: typeof body?.imageResponseFormat === "string" ? body.imageResponseFormat : null,
         modelParameters: body?.modelParameters && typeof body.modelParameters === "object" ? body.modelParameters : null,
         parentVersionId: typeof body?.parentVersionId === "string" ? body.parentVersionId : null,
+        snapshotAssetId,
+        maskAssetId,
         guidedSelection: normalizeGuidedSelection(body?.guidedSelection),
       })
 
@@ -231,7 +240,7 @@ export async function POST(req: NextRequest) {
         prompt,
         brief,
         taskType,
-        referenceAssetIds,
+        referenceAssetIds: resolvedReferenceAssetIds,
         modelOptionId,
         enterpriseRole: auth.user.enterpriseRole || null,
         enterpriseStatus: auth.user.enterpriseStatus || null,
@@ -249,6 +258,8 @@ export async function POST(req: NextRequest) {
         imageResponseFormat: typeof body?.imageResponseFormat === "string" ? body.imageResponseFormat : null,
         modelParameters: body?.modelParameters && typeof body.modelParameters === "object" ? body.modelParameters : null,
         parentVersionId: typeof body?.parentVersionId === "string" ? body.parentVersionId : null,
+        snapshotAssetId,
+        maskAssetId,
         guidedSelection: normalizeGuidedSelection(body?.guidedSelection),
       },
     })

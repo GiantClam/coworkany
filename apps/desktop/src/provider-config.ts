@@ -34,6 +34,23 @@ type ProviderConfigContainer = {
   readonly defaults?: DesktopProviderDefaults;
 };
 
+/** Include the legacy top-level provider in settings without duplicating profiles. */
+export function configuredProviderEntries(config: ProviderConfigContainer): Array<[string, DesktopProviderConfig]> {
+  const entries = Object.entries(config.providers ?? {});
+  const fallbackSource = (config.provider.source ?? config.provider.id ?? "").trim().toLowerCase();
+  const fallbackModel = config.provider.model?.trim() ?? "";
+  const fallbackId = config.provider.id?.trim() || config.provider.source?.trim() || "default";
+  if ((fallbackSource !== "local" || fallbackModel) && !entries.some(([id]) => id === fallbackId)) {
+    entries.push([fallbackId, { ...config.provider, id: fallbackId }]);
+  }
+  return entries.sort(([left], [right]) => left.localeCompare(right));
+}
+
+function isPptokenProvider(provider: DesktopProviderConfig): boolean {
+  const source = (provider.source ?? provider.id ?? "").trim().toLowerCase();
+  return source === "pptoken" || /(?:^|\/\/)api\.pptoken\.cc(?:\/|$)/iu.test(provider.baseUrl ?? "");
+}
+
 export type ResolvedDesktopProviderConfig = DesktopProviderConfig & { readonly id: string; readonly model: string };
 
 /**
@@ -129,6 +146,7 @@ export function supportsProviderCapability(provider: DesktopProviderConfig, capa
     : [];
   if (explicit.length) return explicit.includes(capability);
   const source = (provider.source ?? provider.id ?? "").trim().toLowerCase();
+  if (isPptokenProvider(provider)) return capability === "text" || capability === "image";
   const identity = [provider.id, provider.model, provider.endpoint, provider.queryEndpoint]
     .filter((value) => typeof value === "string")
     .join(" ")
@@ -140,7 +158,7 @@ export function supportsProviderCapability(provider: DesktopProviderConfig, capa
   if (source === "runninghub") return capability === "video";
   if (source === "minimax") return capability === "audio";
   if (source === "bailian" || source === "dashscope") return capability === "image";
-  if (["openai", "openai-compatible", "pptoken", "siliconflow", "deepseek", "openrouter"].includes(source)) return capability === "text";
+  if (["openai", "openai-compatible", "siliconflow", "deepseek", "openrouter"].includes(source)) return capability === "text";
   return true;
 }
 

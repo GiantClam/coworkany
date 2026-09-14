@@ -77,6 +77,14 @@ test("untyped generic model lists cannot populate a media provider", async () =>
   );
 });
 
+test("pptoken image discovery keeps gpt-image models without modality metadata", async () => {
+  const result = await discoverProviderModels(
+    { source: "openai-compatible", baseUrl: "https://api.pptoken.cc/v1", apiKey: "secret", capability: "image" },
+    async () => new Response(JSON.stringify({ data: [{ id: "gpt-image-2.5" }, { id: "gpt-5.6" }] }), { status: 200 }),
+  );
+  assert.deepEqual(result.models, ["gpt-image-2.5"]);
+});
+
 test("DashScope falls back to the authorized-model directory when the legacy list endpoint is unavailable", async () => {
   const requests: string[] = [];
   const result = await discoverProviderModels(

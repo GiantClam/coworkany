@@ -605,6 +605,14 @@
 }
 
 .wb-workflow-card-actions button:last-child { color: #d93025; }
+.wb-workflow-delete-overlay { align-items: center; background: rgb(17 17 17 / 42%); display: flex; inset: 0; justify-content: center; padding: 1.25rem; position: fixed; z-index: 1000; }
+.wb-workflow-delete-dialog { background: #fff; border: 1px solid #deded6; border-radius: 16px; box-shadow: 0 24px 70px rgb(0 0 0 / 24%); max-width: 34rem; padding: 1.5rem; width: 100%; }
+.wb-workflow-delete-dialog h2 { color: #111; font-family: var(--font-display, "Barlow Condensed", sans-serif); font-size: 1.75rem; font-weight: 900; margin: 0.5rem 0 0; }
+.wb-workflow-delete-dialog p { color: #666; line-height: 1.6; margin: 0.75rem 0 0; }
+.wb-workflow-delete-actions { display: flex; gap: 0.625rem; justify-content: flex-end; margin-top: 1.25rem; }
+.wb-workflow-delete-actions button { background: #fff; border: 1px solid #deded6; border-radius: 9px; color: #111; cursor: pointer; font: inherit; font-weight: 800; min-height: 2.625rem; padding: 0 1rem; }
+.wb-workflow-delete-actions button:last-child { background: #d93025; border-color: #b9241b; color: #fff; }
+.wb-workflow-delete-actions button:disabled { cursor: wait; opacity: 0.65; }
 .wb-workflow-template-grid {
   display: grid;
   gap: 1.25rem;
@@ -825,7 +833,7 @@
 .wb-ai-model-trigger-value .ai-elements-model-selector-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-ai-model-trigger-value .ai-elements-model-selector-logo { align-items: center; background: var(--ai-elements-muted); border-radius: .3rem; color: var(--ai-elements-surface); display: inline-flex; flex: 0 0 1.25rem; font-size: .58rem; font-weight: 750; height: 1.25rem; justify-content: center; width: 1.25rem; }
 .wb-ai-model-trigger:disabled { cursor: not-allowed; opacity: 0.5; }
-.wb-ai-model-popover { position: absolute; bottom: calc(100% + 0.5rem); left: 0; z-index: 30; display: grid; gap: 0.5rem; width: min(20rem, 72vw); border: 1px solid var(--wb-border, #e5e5e0); border-radius: 0.65rem; background: var(--wb-card, #fff); box-shadow: 0 16px 32px rgb(17 17 17 / 14%); padding: 0.6rem; }
+.wb-ai-model-popover { position: fixed; z-index: 80; display: grid; box-sizing: border-box; gap: 0.5rem; width: min(20rem, calc(100vw - 1rem)); max-height: min(22rem, calc(100vh - 1rem)); overflow: auto; border: 1px solid var(--wb-border, #e5e5e0); border-radius: 0.65rem; background: #fff; color: var(--wb-foreground, #111); opacity: 1; box-shadow: 0 16px 32px rgb(17 17 17 / 18%); padding: 0.6rem; }
 .wb-ai-model-search { height: 34px; min-height: 34px; box-sizing: border-box; border: 1px solid var(--wb-border, #e5e5e0); border-radius: 8px; background: var(--wb-background, #fdfdfb); color: var(--wb-foreground, #111); padding: 0 10px; outline: 0; }
 .wb-ai-model-search:focus-visible { border-color: var(--wb-ring, #ffd000); outline: 2px solid color-mix(in srgb, var(--wb-ring, #ffd000) 35%, transparent); }
 .wb-ai-model-list { max-height: 16rem; overflow: auto; }

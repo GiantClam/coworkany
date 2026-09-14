@@ -5,6 +5,9 @@ import { createOpenCodeServeEventState, createOpenCodeServePromptPayload, create
 
 type Provider = { readonly id?: string; readonly model?: string; readonly apiKey?: string; readonly reasoningEffort?: string };
 type EventSink = (event: OpenCodeRuntimeEvent) => void;
+const DEFAULT_STALLED_RUN_TIMEOUT_MS = 300_000;
+const STALL_CHECK_INTERVAL_MS = 500;
+const PROMPT_SUBMISSION_ACTIVITY_GRACE_MS = 250;
 type ActiveRun = {
   readonly runId: string;
   readonly sessionId: string;
@@ -19,8 +22,10 @@ type ActiveRun = {
   readonly userMessageIds: Set<string>;
   readonly ignoredMessageIds: Set<string>;
   readonly questionIds: Set<string>;
+  readonly pendingQuestionIds: Set<string>;
   onAccepted?: () => void;
   readonly pendingFrames: Map<string, string[]>;
+  readonly previewToolCallIds: Set<string>;
   promptSubmitted: boolean;
   assistantMessageSeen: boolean;
   assistantFinalMessageSeen: boolean;
@@ -30,6 +35,7 @@ type ActiveRun = {
   idleSeen?: boolean;
   streamInterrupted?: boolean;
   activitySeen: boolean;
+  lastActivityAt: number;
   completed: boolean;
   failed?: string;
 };
@@ -45,6 +51,26 @@ function record(value: unknown): Record<string, unknown> | null { return value &
 function stringValue(...values: unknown[]) { return values.find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? ""; }
 // eslint-disable-next-line no-control-regex -- remove control bytes from diagnostic text
 function safe(value: unknown) { return stringValue(value).replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 1024); }
+function isPreviewServerTool(part: Record<string, unknown>) {
+  const state = record(part.state);
+  const input = record(state?.input) ?? record(part.input);
+  const candidates = [
+    part.tool,
+    part.name,
+    part.command,
+    state?.command,
+    state?.title,
+    input?.command,
+    input?.cmd,
+    input?.script,
+  ];
+  return candidates.some(value => /start-preview-server\.mjs|preview:start/iu.test(String(value ?? "")));
+}
+function isRecoverablePromptSubmissionError(error: unknown) {
+  if (error instanceof TypeError) return true;
+  const message = (error instanceof Error ? error.message : safe(error)).toLowerCase();
+  return /fetch failed|econnreset|socket|connection (?:closed|reset|refused)/u.test(message);
+}
 function modelParts(model: string | undefined) { const separator = model?.indexOf("/") ?? -1; return separator > 0 ? { providerID: model!.slice(0, separator), modelID: model!.slice(separator + 1) } : undefined; }
 function deepSeekVariant(model: string | undefined, reasoningEffort: string | undefined) {
   if (model !== "deepseek-v4-flash") return undefined;
@@ -92,13 +118,16 @@ export class OpenCodeServeClient {
   private runtimeWorkspace = "";
   private readonly active = new Map<string, ActiveRun>();
   private readonly selectedSkills = new Map<string, string>();
+  private readonly promptStallTimeoutMs: number;
   // OpenCode Serve can be healthy before its session repository is ready for
   // concurrent POSTs. Serialize only the control-plane session handshake;
   // prompts remain fully concurrent once their session IDs exist.
   private sessionCreateQueue: Promise<void> = Promise.resolve();
 
   /** Extra arguments make the supervised executable testable without changing production invocation. */
-  constructor(private readonly executable: string, private readonly runtimeDirectory: string, private readonly executableArgs: readonly string[] = [], private readonly promptTimeoutMs?: number) {}
+  constructor(private readonly executable: string, private readonly runtimeDirectory: string, private readonly executableArgs: readonly string[] = [], private readonly promptTimeoutMs?: number, promptStallTimeoutMs?: number) {
+    this.promptStallTimeoutMs = promptStallTimeoutMs ?? DEFAULT_STALLED_RUN_TIMEOUT_MS;
+  }
 
   private auth() { return `Basic ${Buffer.from(`${this.username}:${this.password}`, "utf8").toString("base64")}`; }
 
@@ -129,11 +158,13 @@ export class OpenCodeServeClient {
     // process start. Reuse the process while its effective config is stable,
     // but restart it before a turn that selects a different model/provider.
     const requestedSignature = runtimeEnvironmentSignature(environment);
-    if (this.child && this.child.exitCode === null && this.runtimeWorkspace === workspacePath && this.runtimeEnvironmentSignature === requestedSignature) return;
     if (this.startPromise) {
       await this.startPromise;
       if (this.child && this.child.exitCode === null && this.runtimeWorkspace === workspacePath && this.runtimeEnvironmentSignature === requestedSignature) return;
     }
+    // A child process can exist before startServe has completed its health
+    // handshake. Never let a concurrent session request race that window.
+    if (this.child && this.child.exitCode === null && this.runtimeWorkspace === workspacePath && this.runtimeEnvironmentSignature === requestedSignature) return;
     if (this.child && this.child.exitCode === null) await this.stop();
     const startPromise = this.startServe(workspacePath, environment);
     this.startPromise = startPromise;
@@ -248,9 +279,10 @@ export class OpenCodeServeClient {
     // suffix. Supplying one ties the persisted user to this request even when
     // the server's wall clock is a millisecond behind the desktop's.
     const submittedMessageId = `msg_${(BigInt(turnStartedAt) * BigInt(0x1000) + BigInt(1)).toString(16).slice(-12).padStart(12, "0")}${randomBytes(7).toString("hex")}`;
-    const active: ActiveRun = { runId, sessionId, sink, serveEvents: createOpenCodeServeEventState(), messageIds: new Set(), userMessageIds: new Set(), ignoredMessageIds: new Set(), questionIds: new Set(), pendingFrames: new Map(), completion, resolveCompletion, turnStartedAt, submittedMessageId, promptSubmitted: false, assistantMessageSeen: false, assistantFinalMessageSeen: false, lastMessagePollAt: 0, busySeen: false, activitySeen: false, completed: false };
+    const active: ActiveRun = { runId, sessionId, sink, serveEvents: createOpenCodeServeEventState(), messageIds: new Set(), userMessageIds: new Set(), ignoredMessageIds: new Set(), questionIds: new Set(), pendingQuestionIds: new Set(), pendingFrames: new Map(), previewToolCallIds: new Set(), completion, resolveCompletion, turnStartedAt, submittedMessageId, promptSubmitted: false, assistantMessageSeen: false, assistantFinalMessageSeen: false, lastMessagePollAt: 0, busySeen: false, activitySeen: false, lastActivityAt: turnStartedAt, completed: false };
     this.active.set(runId, active);
-    const abort = () => { void this.abort(sessionId); };
+    let abortPromise: Promise<void> | undefined;
+    const abort = () => { abortPromise ??= this.abort(sessionId); };
     signal?.addEventListener("abort", abort, { once: true });
     try {
       if (signal?.aborted) throw new Error("opencode_aborted");
@@ -284,7 +316,23 @@ export class OpenCodeServeClient {
         promptSubmission,
         completionWait.then(() => ({ kind: "completed" as const })),
       ]);
-      if (first.kind === "error") throw first.error;
+      if (first.kind === "error") {
+        // OpenCode can accept the prompt, start the turn, and then close the
+        // prompt_async socket while the SSE stream keeps carrying the actual
+        // assistant/tool events. Treat only that transport-level failure as
+        // recoverable after activity has been observed; retrying the prompt
+        // would duplicate side effects such as generated files.
+        if (!signal?.aborted && isRecoverablePromptSubmissionError(first.error)) {
+          // The POST failure and the first SSE frame race each other. Give the
+          // event stream a short opportunity to prove that OpenCode accepted
+          // the turn before treating fetch failed as a rejected submission.
+          if (!active.activitySeen && !active.busySeen) await new Promise(resolve => setTimeout(resolve, PROMPT_SUBMISSION_ACTIVITY_GRACE_MS));
+          if (active.activitySeen || active.busySeen) await completionWait;
+          else throw first.error;
+        } else {
+          throw first.error;
+        }
+      }
       if (first.kind === "response" && !first.response.ok && first.response.status !== 204) {
         const detail = safe(await first.response.text().catch(() => ""));
         throw new Error(`opencode_prompt_failed_${first.response.status}${detail ? `:${detail}` : ""}`);
@@ -316,7 +364,12 @@ export class OpenCodeServeClient {
       if (!active.failed && this.child?.exitCode !== null) this.reportServeExit(active);
       if (active.failed) return;
       sink({ event: "runtime_error", code: signal?.aborted ? "opencode_aborted" : "opencode_prompt_failed", message: safe(error instanceof Error ? error.message : error), retryable: !signal?.aborted, runId });
-    } finally { this.complete(active); signal?.removeEventListener("abort", abort); this.active.delete(runId); }
+    } finally {
+      if (signal?.aborted) await abortPromise;
+      this.complete(active);
+      signal?.removeEventListener("abort", abort);
+      this.active.delete(runId);
+    }
   }
 
   private reportServeExit(active: ActiveRun) {
@@ -407,10 +460,33 @@ export class OpenCodeServeClient {
     const abortPoll = () => pollController.abort();
     signal?.addEventListener("abort", abortPoll, { once: true });
     try {
-      await Promise.race([active.completion, this.pollSessionStatus(active, workspacePath, pollController.signal)]);
+      await Promise.race([active.completion, this.pollSessionStatus(active, workspacePath, pollController.signal), this.watchForStall(active, pollController.signal)]);
     } finally {
       pollController.abort();
       signal?.removeEventListener("abort", abortPoll);
+    }
+  }
+
+  private async watchForStall(active: ActiveRun, signal: AbortSignal) {
+    if (this.promptStallTimeoutMs <= 0) return;
+    while (!active.completed && !active.failed && !signal.aborted) {
+      await new Promise((resolve) => setTimeout(resolve, STALL_CHECK_INTERVAL_MS));
+      if (!active.promptSubmitted || !active.busySeen || active.idleSeen) continue;
+      // Starting the preview server intentionally hands work to a detached
+      // daemon while the provider may keep the tool call open. Do not treat
+      // that known long-lived tool as a stalled model run; ordinary tools
+      // remain covered by this watchdog.
+      if (active.previewToolCallIds.size > 0) continue;
+      // A native question is intentional user-blocking work. The lack of
+      // model events while the user is deciding is not a stalled run.
+      if (active.pendingQuestionIds.size > 0) continue;
+      if (Date.now() - active.lastActivityAt < this.promptStallTimeoutMs) continue;
+      const message = "OpenCode run made no progress and was stopped. Retry the task.";
+      active.failed = message;
+      active.sink({ event: "runtime_error", code: "opencode_prompt_stalled", message, retryable: true, runId: active.runId });
+      this.complete(active);
+      void this.abort(active.sessionId);
+      return;
     }
   }
 
@@ -464,6 +540,16 @@ export class OpenCodeServeClient {
       this.handleEvent(`data: ${JSON.stringify({ type: "message.updated", properties: { sessionID: active.sessionId, info: message } })}`, true);
       const parts = record(entry)?.parts;
       if (Array.isArray(parts)) for (const part of parts) this.handleEvent(`data: ${JSON.stringify({ type: "message.part.updated", properties: { sessionID: active.sessionId, part } })}`, true);
+    }
+    // An idle snapshot can arrive while OpenCode is waiting for a native
+    // question response. Never finish the desktop turn until that question
+    // has actually been answered or rejected.
+    const pendingQuestions = await this.listQuestions(active.sessionId, workspacePath);
+    if (pendingQuestions.length > 0) {
+      for (const question of pendingQuestions) {
+        if (!active.questionIds.has(question.id)) this.handleEvent(`data: ${JSON.stringify({ type: "question.asked", properties: question })}`);
+      }
+      return;
     }
     if (idle && active.assistantFinalMessageSeen) this.complete(active);
   }
@@ -527,27 +613,42 @@ export class OpenCodeServeClient {
     if (!sessionId) return;
     const sessionRuns = [...this.active.values()].filter((item) => item.sessionId === sessionId && !item.failed && !item.completed);
     if (routing.sessionStatus === "busy") {
-      for (const item of sessionRuns) { item.busySeen = true; item.activitySeen = true; item.idleSeen = false; }
+      for (const item of sessionRuns) { item.busySeen = true; item.activitySeen = true; item.lastActivityAt = Date.now(); item.idleSeen = false; }
     }
     if (routing.sessionIdle) for (const item of sessionRuns) item.idleSeen = true;
     // Idle is a trigger for the poller's final snapshot, not permission to
     // finish before any text missed during disconnection has been recovered.
     const active = sessionRuns.length === 1 ? sessionRuns[0] : undefined;
     if (!active) return;
-    const raw = record(payload);
+    const raw = record(record(payload)?.payload) ?? record(payload);
     const properties = record(raw?.properties);
     const info = record(properties?.info);
     const questionEvent = typeof raw?.type === "string" && raw.type.startsWith("question.");
     if (questionEvent) {
+      active.lastActivityAt = Date.now();
       if (raw?.type === "question.asked") {
         const requestId = stringValue(properties?.id);
         if (active.questionIds.has(requestId)) return;
         active.questionIds.add(requestId);
+        active.pendingQuestionIds.add(requestId);
+      } else if (raw?.type === "question.replied" || raw?.type === "question.rejected") {
+        const requestId = stringValue(properties?.requestID, properties?.id);
+        if (requestId) active.pendingQuestionIds.delete(requestId);
       }
       for (const event of normalizeOpenCodeServeEvent(active.runId, payload, active.serveEvents).events) active.sink(event);
       return;
     }
     const part = record(properties?.part);
+    if (part?.type === "tool" && isPreviewServerTool(part)) {
+      const toolCallId = stringValue(part.id);
+      const partState = record(part.state);
+      const status = stringValue(partState?.status, part.status).toLowerCase();
+      const terminal = status === "completed" || status === "success" || status === "failed" || status === "error";
+      if (toolCallId) {
+        if (terminal) active.previewToolCallIds.delete(toolCallId);
+        else active.previewToolCallIds.add(toolCallId);
+      }
+    }
     if (active.streamInterrupted && !snapshot && (part?.type === "text" || part?.type === "reasoning" || raw?.type === "message.part.delta")) return;
     if (routing.messageRole === "user") {
       if (routing.messageId && (routing.messageId === active.submittedMessageId || (routing.messageCreated !== undefined && routing.messageCreated >= active.turnStartedAt))) {
@@ -584,13 +685,13 @@ export class OpenCodeServeClient {
     if (isNewAssistantMessage && active.lastAssistantFinish === "tool-calls" && (!active.streamInterrupted || snapshot)) {
       active.sink({ event: "text_delta", delta: "\n\n", runId: active.runId });
     }
-    if (routing.messageRole === "assistant") { active.assistantMessageSeen = true; active.activitySeen = true; }
+    if (routing.messageRole === "assistant") { active.assistantMessageSeen = true; active.activitySeen = true; active.lastActivityAt = Date.now(); }
     // Only message.updated events with an explicit role identify a message.
     // session.updated also exposes `info.id` (the session ID), which must not
     // consume the run's empty-message routing slot.
     if (routing.messageId && routing.messageRole && routing.messageRole !== "user") active.messageIds.add(routing.messageId);
     const normalized = normalizeOpenCodeServeEvent(active.runId, payload, active.serveEvents);
-    if (normalized.events.length) active.activitySeen = true;
+    if (normalized.events.length) { active.activitySeen = true; active.lastActivityAt = Date.now(); }
     if (normalized.messageCompleted && normalized.messageFinish) {
       active.lastAssistantFinish = normalized.messageFinish;
       active.assistantFinalMessageSeen = normalized.messageFinish !== "tool-calls";

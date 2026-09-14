@@ -115,6 +115,7 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
   const hasInputLastFrame = hasMediaReferences(inputs["image.last_frame"], inputs.lastFrame, inputs.images);
   const configMediaSources = [
     config.referenceImages, config.referenceImageUrls, config.imageUrls,
+    config.maskImageUrl,
     config.sourceVideoUrl, config.videos, config.video,
     config.referenceVideoUrls, config.referenceVideos, config.videoUrls,
     config.referenceAudioUrls, config.referenceAudios, config.audioUrls, config.audioUrl,
@@ -146,6 +147,7 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     const references = uniqueReferences(collectMediaReferences(referenceInput));
     assertMaximum("image.reference", references, 9);
     const inputImageUrl = firstNonEmptyString(config.inputImageUrl, inputs.inputImageUrl);
+    const maskImageUrl = firstNonEmptyString(config.maskImageUrl, inputs.maskImageUrl);
     const referenceImageUrls = [...new Set([
       ...urlsFor(referenceInput),
       ...references.flatMap((reference) => !reference.url && reference.localPath ? [reference.localPath] : []),
@@ -154,6 +156,7 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     delete request.referenceImages;
     delete request.inputImageUrl;
     if (referenceImageUrls.length) request.referenceImageUrls = referenceImageUrls;
+    if (maskImageUrl) request.maskImageUrl = maskImageUrl;
     const size = firstNonEmptyString(config.size, config.imageSize);
     const quality = firstNonEmptyString(config.quality, config.imageQuality);
     const background = firstNonEmptyString(config.background, config.imageBackground);

@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $destination = Join-Path $root $OutputRoot
-New-Item -ItemType Directory -Force -Path (Join-Path $destination "node"), (Join-Path $destination "opencode"), (Join-Path $destination "fonts"), (Join-Path $destination "embedding") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $destination "node"), (Join-Path $destination "opencode"), (Join-Path $destination "fonts"), (Join-Path $destination "embedding"), (Join-Path $destination "media") | Out-Null
 $embeddingDescriptor = @{ schemaVersion = 1; id = "local-hash-384-v1"; type = "builtin-feature-hash"; dimension = 384; network = $false; description = "Deterministic local feature-hash embedding used for offline hybrid retrieval." } | ConvertTo-Json -Compress
 Set-Content -LiteralPath (Join-Path $destination "embedding/local-hash-384-v1.json") -Value $embeddingDescriptor -Encoding utf8
 $lancedbDestination = Join-Path $destination "lancedb"
@@ -20,21 +20,47 @@ function Copy-IfFile([string]$source, [string]$target) {
   return $true
 }
 
+$mediaSourceDirectories = @(
+  (Join-Path $env:LOCALAPPDATA "CoworkAny/runtime/media"),
+  (Join-Path $env:APPDATA "CoworkAny/runtime/media")
+)
+foreach ($name in @("ffmpeg.exe", "ffprobe.exe")) {
+  $target = Join-Path $destination "media/$name"
+  if (Test-Path -LiteralPath $target -PathType Leaf) { continue }
+  $command = Get-Command $name -ErrorAction SilentlyContinue
+  $candidates = @()
+  if ($command -and $command.Source) { $candidates += $command.Source }
+  foreach ($directory in $mediaSourceDirectories) { $candidates += Join-Path $directory $name }
+  foreach ($candidate in $candidates) {
+    if ((Copy-IfFile $candidate $target)) { break }
+  }
+}
+$mediaFfmpegStaged = Test-Path -LiteralPath (Join-Path $destination "media/ffmpeg.exe") -PathType Leaf
+$mediaFfprobeStaged = Test-Path -LiteralPath (Join-Path $destination "media/ffprobe.exe") -PathType Leaf
+
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 $nodeTarget = Join-Path $destination "node/node.exe"
 $nodeStaged = Copy-IfFile $node $nodeTarget
 
 function Get-OpenCodeVersion([string]$path) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+  $previousUserProfile = $env:USERPROFILE
+  $probeUserProfile = Join-Path ([IO.Path]::GetTempPath()) ("coworkany-opencode-version-" + [guid]::NewGuid().ToString("N"))
+  New-Item -ItemType Directory -Force -Path (Join-Path $probeUserProfile ".config") | Out-Null
   $previousModelsFetch = $env:OPENCODE_DISABLE_MODELS_FETCH
   $previousAutoUpdate = $env:OPENCODE_DISABLE_AUTOUPDATE
   try {
+    # OpenCode's version command creates its config directory. Isolate that
+    # side effect so an existing user config cannot turn a valid binary into
+    # a false-negative probe (EEXIST).
+    $env:USERPROFILE = $probeUserProfile
     $env:OPENCODE_DISABLE_MODELS_FETCH = "true"
     $env:OPENCODE_DISABLE_AUTOUPDATE = "true"
     $output = & $path --version 2>$null
     if ($LASTEXITCODE -eq 0) { return (($output -join "`n").Trim()) }
   } catch { return $null }
   finally {
+    $env:USERPROFILE = $previousUserProfile
     $env:OPENCODE_DISABLE_MODELS_FETCH = $previousModelsFetch
     $env:OPENCODE_DISABLE_AUTOUPDATE = $previousAutoUpdate
   }
@@ -46,14 +72,14 @@ function Stage-OpenCode([string[]]$candidates, [string]$target) {
   foreach ($candidate in @($candidates) + @($target)) {
     if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
     $foundExecutable = $true
-    if ((Get-OpenCodeVersion $candidate) -cne "1.18.27") { continue }
+    if ((Get-OpenCodeVersion $candidate) -cne "1.18.30") { continue }
     if ([IO.Path]::GetFullPath($candidate) -ne [IO.Path]::GetFullPath($target)) {
       Copy-Item -LiteralPath $candidate -Destination $target -Force
     }
     return $true
   }
   # Do not leave an old executable available for packaging under a new manifest.
-  if ($foundExecutable) { throw "opencode_version_required:1.18.27" }
+  if ($foundExecutable) { throw "opencode_version_required:1.18.30" }
   return $false
 }
 
@@ -74,11 +100,12 @@ $fontStaged = Copy-IfFile (Join-Path $env:WINDIR "Fonts/msyh.ttc") (Join-Path $d
   integrity = @{ hashAlgorithm = "sha256"; signatureAlgorithm = "ed25519"; signature = $null; required = $false; publicKey = "-----BEGIN PUBLIC KEY-----`nMCowBQYDK2VwAyEAHgKs3hyNJCHJsLN9sle73MWSPew6fOweDLoO1E935JA=`n-----END PUBLIC KEY-----`n" }
   stagedAt = [DateTime]::UtcNow.ToString("o")
   node = @{ staged = $nodeStaged; path = if ($nodeStaged) { "runtime/node/node.exe" } else { $null } }
-  opencode = @{ staged = $opencodeStaged; version = "1.18.27"; path = if ($opencodeStaged) { "runtime/opencode/opencode.exe" } else { $null } }
+  opencode = @{ staged = $opencodeStaged; version = "1.18.30"; path = if ($opencodeStaged) { "runtime/opencode/opencode.exe" } else { $null } }
   python = @{ staged = $false; distribution = "cpython-nuget"; version = "3.13.6"; path = "runtime/python/python.exe"; reason = "Official CPython NuGet tools are installed locally by the runtime installer." }
   fonts = @{ staged = $fontStaged; path = if ($fontStaged) { "runtime/fonts/msyh.ttc" } else { $null } }
   lancedb = @{ staged = Test-Path -LiteralPath (Join-Path $destination "lancedb/node_modules/@lancedb/lancedb/dist/index.js") -PathType Leaf; path = "runtime/lancedb/node_modules/@lancedb/lancedb/dist/index.js"; native = "runtime/lancedb/node_modules/@lancedb/lancedb-win32-x64-msvc/lancedb.win32-x64-msvc.node" }
   embedding = @{ staged = $true; path = "runtime/embedding/local-hash-384-v1.json"; model = "local-hash-384-v1"; dimension = 384; network = $false }
+  media = @{ staged = $mediaFfmpegStaged -and $mediaFfprobeStaged; path = "runtime/media"; binaries = @("runtime/media/ffmpeg.exe", "runtime/media/ffprobe.exe") }
   assets = @(
     @{
       id = "node-embed-amd64"

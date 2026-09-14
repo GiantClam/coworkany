@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { WORKBENCH_HOME_GROUPS, WORKBENCH_MEDIA_FEATURES, WORKBENCH_ROUTE_MANIFEST } from "@coworkany/workbench-ui";
 import { validateWorkflowDefinition } from "@coworkany/workflow-core";
 import { desktopCopy, desktopWriterCopy, detectDesktopLocale, homeGroupLabels, mediaEnglish, mediaFieldEnglish, mediaOptionEnglish, mediaPlaceholderEnglish, mediaSubmitEnglish, mediaSummaryEnglish, quickPromptsForDesktopRoute, resolveDesktopLocale } from "../src/i18n";
-import { buildWorkflowDefinition, desktopExecutionPrompt, isDesktopErrorStatus, localizeDesktopStatus, localizeRuntimeStatus, localizedSkillSystemPrompt, parseImageInputs, resolveDesktopSkillId } from "../src/App";
+import { buildLocalMediaWorkflowDefinition, buildProductPromotionWorkflowDefinition, buildWorkflowDefinition, desktopExecutionPrompt, isDesktopErrorStatus, localizeDesktopStatus, localizeRuntimeStatus, localizedSkillSystemPrompt, parseImageInputs, resolveDesktopSkillId, runtimeRepairOptions } from "../src/App";
 import { promptRequestsArtifact } from "../src/artifact-intent";
 
 test("desktop locale follows Windows/WebView language by default", () => {
@@ -108,6 +108,11 @@ test("every shared route has an English presentation without Chinese fallback te
 test("runtime repair failures are fully localized in the English shell", () => {
   assert.equal(localizeRuntimeStatus("运行环境修复失败：runtime_install_incomplete", "en"), "Runtime repair failed: runtime_install_incomplete");
   assert.equal(localizeRuntimeStatus("运行环境修复失败：runtime_install_incomplete", "zh"), "运行环境修复失败：runtime_install_incomplete");
+});
+
+test("startup runtime repair forwards a configured offline archive", () => {
+  assert.deepEqual(runtimeRepairOptions({ offlineRuntimeZipPath: "  C:/runtime/CoworkAny-Runtime-x64.zip  " }), { options: { offlineZip: "C:/runtime/CoworkAny-Runtime-x64.zip" } });
+  assert.equal(runtimeRepairOptions({ offlineRuntimeZipPath: "   " }), undefined);
 });
 
 test("active Writer workspace has a complete bilingual copy contract", () => {
@@ -226,6 +231,31 @@ test("new desktop workflow nodes initialize the online parameter contract", () =
   assert.equal(pptConfig.pageCount, 8);
   assert.deepEqual(validateWorkflowDefinition(image), []);
   assert.deepEqual(validateWorkflowDefinition(ppt), []);
+});
+
+test("FFmpeg media workflow templates create valid upload-to-process-to-output graphs", () => {
+  const video = buildLocalMediaWorkflowDefinition("video", "zh");
+  const audio = buildLocalMediaWorkflowDefinition("audio", "en");
+  assert.deepEqual(video.nodes.map((node) => node.type), ["upload", "video_process", "output"]);
+  assert.deepEqual(audio.nodes.map((node) => node.type), ["upload", "audio_process", "output"]);
+  assert.deepEqual(video.edges.map((edge) => [edge.sourcePortId, edge.targetPortId]), [["video", "videos"], ["video", "videos"]]);
+  assert.deepEqual(audio.edges.map((edge) => [edge.sourcePortId, edge.targetPortId]), [["audio", "audios"], ["audio", "audios"]]);
+  assert.equal(video.nodes[1]?.config.operation, "transform");
+  assert.equal(audio.nodes[1]?.config.operation, "trim");
+  assert.deepEqual(validateWorkflowDefinition(video), []);
+  assert.deepEqual(validateWorkflowDefinition(audio), []);
+});
+
+test("product promotion template wires generation, ordered clips, subtitles, voiceover, and mux", () => {
+  const definition = buildProductPromotionWorkflowDefinition({ id: "video-main", model: "video-model", baseUrl: "https://video.example.test" }, { id: "audio-main", model: "speech-model", baseUrl: "https://audio.example.test" }, "zh");
+  assert.deepEqual(definition.nodes.map((node) => node.type), ["text_input", "video_generate", "upload", "upload", "upload", "video_process", "video_process", "voice_synthesis", "video_process", "output"]);
+  assert.equal(definition.nodes.find((node) => node.nodeKey === "generated-video")?.config.duration, "5");
+  assert.equal(definition.nodes.find((node) => node.nodeKey === "generated-video")?.config.mode, "text-to-video");
+  assert.equal(definition.nodes.find((node) => node.nodeKey === "stitch")?.config.operation, "stitch");
+  assert.equal(definition.nodes.find((node) => node.nodeKey === "subtitle")?.config.operation, "subtitle");
+  assert.equal(definition.nodes.find((node) => node.nodeKey === "mux")?.config.operation, "mux");
+  assert.equal(definition.edges.filter((edge) => edge.targetNodeKey === "stitch" && edge.targetPortId === "videos").length, 4);
+  assert.deepEqual(validateWorkflowDefinition(definition), []);
 });
 
 test("OpenCode loads the selected Skill without adding workflow rules", () => {

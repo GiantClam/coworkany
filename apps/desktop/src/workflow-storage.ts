@@ -1,4 +1,4 @@
-import { hashWorkflowDefinition, type WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
+import { canonicalJson, hashWorkflowDefinition, hashWorkflowText, type WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
 
 const SENSITIVE_CONFIG_KEY = /(?:^|[_-])(api[_-]?key|access[_-]?token|authorization|secret|password|token)(?:$|[_-])/iu;
 const NON_PORTABLE_CONFIG_KEY = /^(?:(?:referenced[_-]?)?artifact[_-]?ids?|checkpoint[_-]?key|conversation[_-]?id|idempotency[_-]?key|project[_-]?id|provider[_-]?task[_-]?id|run[_-]?id|session[_-]?id)$/iu;
@@ -38,6 +38,15 @@ function sanitizeWorkflowDefinition(definition: WorkflowDefinitionEnvelope, pres
     })),
   };
   return { ...sanitized, definitionHash: hashWorkflowDefinition({ ...sanitized, definitionHash: "" }) };
+}
+
+/**
+ * Definition hashes intentionally exclude display metadata because execution
+ * compatibility should not change when a workflow is renamed. Auto-save still
+ * needs a separate stamp for the persisted title and metadata, however.
+ */
+export function hashWorkflowPresentation(definition: WorkflowDefinitionEnvelope, title: string) {
+  return hashWorkflowText(canonicalJson({ title: title.trim(), metadata: definition.metadata ?? {} }));
 }
 
 /**

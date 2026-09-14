@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { configuredModelOptions, isDevelopmentRunningHubWorkflowId, modelOptionsForProvider, preferredConfiguredModel, providerForCapability, providerForId, supportsProviderCapability, usableRunningHubWorkflowId, type DesktopProviderConfig } from "../src/provider-config";
+import { configuredModelOptions, configuredProviderEntries, isDevelopmentRunningHubWorkflowId, modelOptionsForProvider, preferredConfiguredModel, providerForCapability, providerForId, supportsProviderCapability, usableRunningHubWorkflowId, type DesktopProviderConfig } from "../src/provider-config";
 
 const text: DesktopProviderConfig = { id: "text", model: "text/model", baseUrl: "https://text.test/v1" };
 const image: DesktopProviderConfig = { id: "image", model: "image/model", baseUrl: "https://image.test/v1" };
@@ -99,6 +99,21 @@ test("settings can filter known profiles by capability without breaking legacy p
   assert.equal(supportsProviderCapability({ capabilities: ["image"] }, "image"), true);
   assert.equal(supportsProviderCapability({ capabilities: ["image"] }, "audio"), false);
   assert.equal(supportsProviderCapability({ id: "custom", model: "custom-model" }, "text"), true);
+});
+
+test("pptoken profiles are available to both text and image settings", () => {
+  const provider: DesktopProviderConfig = { id: "pptoken-image", source: "pptoken", model: "" };
+  assert.equal(supportsProviderCapability(provider, "text"), true);
+  assert.equal(supportsProviderCapability(provider, "image"), true);
+  const legacyProvider: DesktopProviderConfig = { id: "image-main", source: "openai-compatible", baseUrl: "https://api.pptoken.cc/v1", model: "" };
+  assert.equal(supportsProviderCapability(legacyProvider, "text"), true);
+  assert.equal(supportsProviderCapability(legacyProvider, "image"), true);
+});
+
+test("legacy top-level providers remain visible in settings", () => {
+  const provider: DesktopProviderConfig = { id: "local", source: "pptoken", model: "gpt-image-2.5" };
+  assert.deepEqual(configuredProviderEntries({ provider }), [["local", provider]]);
+  assert.deepEqual(configuredProviderEntries({ provider: { id: "local", source: "local", model: "" } }), []);
 });
 
 test("capability defaults recover from an existing incompatible profile", () => {

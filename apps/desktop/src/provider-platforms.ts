@@ -33,8 +33,15 @@ const RUNTIME_BY_CLOUD_PROVIDER: Record<string, Pick<ProviderPlatform, "source" 
   runninghub: { source: "runninghub", baseUrl: "https://www.runninghub.cn" },
 };
 
+const PPTOKEN_PLATFORM: ProviderPlatform = {
+  id: "pptoken",
+  label: { zh: "PPTOKEN", en: "PPTOKEN" },
+  source: "pptoken",
+  baseUrl: "https://api.pptoken.cc/v1",
+};
+
 function cloudPlatforms(capability: ConfigurableProviderCapability): readonly ProviderPlatform[] {
-  return WORKBENCH_PROVIDER_CATALOG[CLOUD_CATEGORY_BY_CAPABILITY[capability]]
+  const platforms = WORKBENCH_PROVIDER_CATALOG[CLOUD_CATEGORY_BY_CAPABILITY[capability]]
     // A generic OpenAI-compatible model list has no standard modality field.
     // It cannot prove that an account's returned model is a media model, so
     // keep it text-only instead of permitting text models in media settings.
@@ -48,6 +55,7 @@ function cloudPlatforms(capability: ConfigurableProviderCapability): readonly Pr
       baseUrl: runtime.baseUrl,
     };
   });
+  return capability === "text" || capability === "image" ? [...platforms, PPTOKEN_PLATFORM] : platforms;
 }
 
 /** Directly mirrors the cloud governance Provider directory. */
@@ -66,7 +74,7 @@ export function platformIdForProvider(provider: DesktopProviderConfig | undefine
   const candidates = PROVIDER_PLATFORM_OPTIONS[capability];
   const providerId = provider?.id?.trim() ?? "";
   const source = (provider?.source ?? "").trim().toLowerCase();
-  if (source === "pptoken" && candidates.some((platform) => platform.id === "openai_compatible")) return "openai_compatible";
+  if (/(?:^|\/\/)api\.pptoken\.cc(?:\/|$)/iu.test(provider?.baseUrl ?? "") && candidates.some((platform) => platform.id === "pptoken")) return "pptoken";
   const direct = candidates.find((platform) => providerId === `${capability}-${platform.id}` || providerId === platform.id);
   if (direct) return direct.id;
   const matchingSource = candidates.filter((platform) => platform.source === source);
