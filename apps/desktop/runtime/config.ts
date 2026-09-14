@@ -2,7 +2,7 @@ import { copyFile, mkdir, open, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { DesktopPaths } from "./paths";
 import { usableRunningHubWorkflowId, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "../src/provider-config";
-import { migrateLegacyRunningHubWorkflows, type RunningHubWorkflowRegistration } from "../src/runninghub-workflow";
+import { migrateLegacyRunningHubWorkflows, normalizeRunningHubCharacterImageBindings, type RunningHubWorkflowRegistration } from "../src/runninghub-workflow";
 
 export interface DesktopConfig {
   readonly schemaVersion: 1;
@@ -55,6 +55,7 @@ function parseConfig(raw: string): DesktopConfig {
   const model = models.includes(requestedModel) ? requestedModel : (models[0] ?? requestedModel);
   const capabilities = normalizeProviderCapabilities(value.provider.capabilities);
   const embedding = normalizeEmbeddingConfig(value.embedding);
+  const providerWorkflows = normalizeAndMigrateRunningHubWorkflows(value.provider.workflows, legacyWorkflowIds(value.provider));
   return {
     schemaVersion: 1,
     locale: value.locale === "zh" || value.locale === "en" ? value.locale : "auto",
@@ -64,7 +65,7 @@ function parseConfig(raw: string): DesktopConfig {
     ...(embedding ? { embedding } : {}),
     ...(typeof (value as Partial<DesktopConfig>).offlineRuntimeZipPath === "string" ? { offlineRuntimeZipPath: (value as Partial<DesktopConfig>).offlineRuntimeZipPath } : {}),
     ...(normalizeMenuAgentIds(value.menuAgentIds).length ? { menuAgentIds: normalizeMenuAgentIds(value.menuAgentIds) } : {}),
-    provider: { id: String(value.provider.id ?? "local"), model, ...(models.length ? { models } : {}), ...(capabilities ? { capabilities } : {}), ...(value.provider.source ? { source: String(value.provider.source) } : {}), ...(value.provider.baseUrl ? { baseUrl: String(value.provider.baseUrl) } : {}), ...(value.provider.apiKey ? { apiKey: String(value.provider.apiKey) } : {}), ...(value.provider.reasoningEffort ? { reasoningEffort: String(value.provider.reasoningEffort) } : {}), ...(typeof value.provider.skillId === "string" && value.provider.skillId.trim() ? { skillId: value.provider.skillId.trim() } : {}), ...(value.provider.endpoint ? { endpoint: String(value.provider.endpoint) } : {}), ...(value.provider.queryEndpoint ? { queryEndpoint: String(value.provider.queryEndpoint) } : {}), ...(migrateLegacyRunningHubWorkflows(normalizeRunningHubWorkflows(value.provider.workflows), legacyWorkflowIds(value.provider)) ? { workflows: migrateLegacyRunningHubWorkflows(normalizeRunningHubWorkflows(value.provider.workflows), legacyWorkflowIds(value.provider)) } : {}) },
+    provider: { id: String(value.provider.id ?? "local"), model, ...(models.length ? { models } : {}), ...(capabilities ? { capabilities } : {}), ...(value.provider.source ? { source: String(value.provider.source) } : {}), ...(value.provider.baseUrl ? { baseUrl: String(value.provider.baseUrl) } : {}), ...(value.provider.apiKey ? { apiKey: String(value.provider.apiKey) } : {}), ...(value.provider.reasoningEffort ? { reasoningEffort: String(value.provider.reasoningEffort) } : {}), ...(typeof value.provider.skillId === "string" && value.provider.skillId.trim() ? { skillId: value.provider.skillId.trim() } : {}), ...(value.provider.endpoint ? { endpoint: String(value.provider.endpoint) } : {}), ...(value.provider.queryEndpoint ? { queryEndpoint: String(value.provider.queryEndpoint) } : {}), ...(providerWorkflows ? { workflows: providerWorkflows } : {}) },
     ...(normalizeProviderProfiles(value.providers) ? { providers: normalizeProviderProfiles(value.providers) } : {}),
     ...(normalizeProviderDefaults(value.defaults) ? { defaults: normalizeProviderDefaults(value.defaults) } : {}),
     runtime: {
@@ -97,6 +98,7 @@ function normalizeProviderProfiles(value: unknown): DesktopProviderProfiles | un
     if (!id) continue;
     const models = normalizeConfiguredModels(record.models);
     const capabilities = normalizeProviderCapabilities(record.capabilities);
+    const workflows = normalizeAndMigrateRunningHubWorkflows(record.workflows, legacyWorkflowIds(record));
     profiles[key] = {
       id,
       ...(typeof record.source === "string" && record.source.trim() ? { source: record.source.trim() } : {}),
@@ -109,10 +111,15 @@ function normalizeProviderProfiles(value: unknown): DesktopProviderProfiles | un
       ...(typeof record.skillId === "string" && record.skillId.trim() ? { skillId: record.skillId.trim() } : {}),
       ...(typeof record.endpoint === "string" && record.endpoint.trim() ? { endpoint: record.endpoint.trim() } : {}),
       ...(typeof record.queryEndpoint === "string" && record.queryEndpoint.trim() ? { queryEndpoint: record.queryEndpoint.trim() } : {}),
-      ...(migrateLegacyRunningHubWorkflows(normalizeRunningHubWorkflows(record.workflows), legacyWorkflowIds(record)) ? { workflows: migrateLegacyRunningHubWorkflows(normalizeRunningHubWorkflows(record.workflows), legacyWorkflowIds(record)) } : {}),
+      ...(workflows ? { workflows } : {}),
     };
   }
   return Object.keys(profiles).length ? profiles : undefined;
+}
+
+function normalizeAndMigrateRunningHubWorkflows(value: unknown, legacy: ReturnType<typeof legacyWorkflowIds>): readonly RunningHubWorkflowRegistration[] | undefined {
+  const migrated = migrateLegacyRunningHubWorkflows(normalizeRunningHubWorkflows(value), legacy);
+  return migrated?.map(normalizeRunningHubCharacterImageBindings);
 }
 
 function normalizeRunningHubWorkflows(value: unknown): readonly RunningHubWorkflowRegistration[] | undefined {

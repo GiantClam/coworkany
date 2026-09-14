@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRunningHubAudioTranscriptionRegistration, createRunningHubWorkflowRegistration, migrateLegacyRunningHubWorkflows, parseRunningHubWorkflowJson, resolveRunningHubWorkflowInput, runningHubWorkflowIdFromUrl } from "../src/runninghub-workflow";
+import { createRunningHubAudioTranscriptionRegistration, createRunningHubWorkflowRegistration, migrateLegacyRunningHubWorkflows, normalizeRunningHubCharacterImageBindings, parseRunningHubWorkflowJson, resolveRunningHubWorkflowInput, runningHubWorkflowIdFromUrl } from "../src/runninghub-workflow";
 
 test("RunningHub workflow IDs can be read from URLs or direct IDs", () => {
   assert.equal(runningHubWorkflowIdFromUrl("https://www.runninghub.ai/lite/workflow/abc_123"), "abc_123");
@@ -39,6 +39,42 @@ test("ComfyUI character replacement fields keep reference and person bindings di
   }, { remoteWorkflowId: "image-wf" });
   assert.ok(parsed.nodeBindings.some((binding) => binding.inputId === "referenceImage" && binding.nodeId === "1"));
   assert.ok(parsed.nodeBindings.some((binding) => binding.inputId === "characterImage" && binding.nodeId === "2"));
+});
+
+test("generic LoadImage fields infer the two character replacement roles", () => {
+  const parsed = parseRunningHubWorkflowJson({
+    "1": { class_type: "LoadImage", inputs: { image: "reference.png" } },
+    "2": { class_type: "LoadImage", inputs: { image: "character.png" } },
+  }, { remoteWorkflowId: "image-generic-wf" });
+  assert.deepEqual(parsed.nodeBindings.filter((binding) => binding.valueType === "file").map((binding) => [binding.inputId, binding.nodeId]), [
+    ["referenceImage", "1"],
+    ["characterImage", "2"],
+  ]);
+  assert.deepEqual(parsed.inputSchema.filter((field) => ["referenceImage", "characterImage"].includes(field.id)).map((field) => field.id), ["referenceImage", "characterImage"]);
+});
+
+test("legacy generic image registrations are repaired when config is loaded", () => {
+  const registration = createRunningHubWorkflowRegistration({
+    id: "legacy-image-wf",
+    remoteWorkflowId: "remote-image-wf",
+    name: "Legacy image",
+    capability: "image",
+    sourceKind: "manual",
+    inputSchema: [
+      { id: "1_image", label: "1_image", type: "image" },
+      { id: "2_image", label: "2_image", type: "image" },
+    ],
+    nodeBindings: [
+      { inputId: "1_image", nodeId: "1", fieldName: "image", valueType: "file" },
+      { inputId: "2_image", nodeId: "2", fieldName: "image", valueType: "file" },
+    ],
+    outputSchema: [{ id: "output", type: "image" }],
+    definitionHash: "legacy-hash",
+    warnings: [],
+  });
+  const repaired = normalizeRunningHubCharacterImageBindings(registration);
+  assert.deepEqual(repaired.nodeBindings.map((binding) => binding.inputId), ["referenceImage", "characterImage"]);
+  assert.deepEqual(repaired.inputSchema.map((field) => field.id), ["referenceImage", "characterImage"]);
 });
 
 test("registered workflow preserves ordered file list values", () => {

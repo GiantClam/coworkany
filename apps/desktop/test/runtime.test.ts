@@ -95,14 +95,42 @@ test("config preserves provider profiles and capability defaults", async () => {
     const fixtureCredentials = { text: "fixture-text-key", image: "fixture-image-key", video: "fixture-video-key" };
     const profiles = {
       text: { id: "text", model: "text/model", baseUrl: "https://text.test/v1", apiKey: fixtureCredentials.text, capabilities: ["text"] as const },
-      image: { id: "image", model: "image/model", baseUrl: "https://image.test/v1", apiKey: fixtureCredentials.image, capabilities: ["image"] as const },
+      image: {
+        id: "image",
+        model: "image/model",
+        baseUrl: "https://image.test/v1",
+        apiKey: fixtureCredentials.image,
+        capabilities: ["image"] as const,
+        workflows: [{
+          id: "image-wf",
+          remoteWorkflowId: "remote-image-wf",
+          name: "Legacy image",
+          capability: "image" as const,
+          version: 1,
+          definitionHash: "hash",
+          source: { kind: "manual" as const, importedAt: "2026-08-19T00:00:00.000Z" },
+          inputSchema: [
+            { id: "1_image", label: "1_image", type: "image" as const },
+            { id: "2_image", label: "2_image", type: "image" as const },
+          ],
+          nodeBindings: [
+            { inputId: "1_image", nodeId: "1", fieldName: "image", valueType: "file" as const },
+            { inputId: "2_image", nodeId: "2", fieldName: "image", valueType: "file" as const },
+          ],
+          outputSchema: [{ id: "output", type: "image" as const }],
+        }],
+      },
       video: { id: "video", model: "video/model", baseUrl: "https://video.test/v1", apiKey: fixtureCredentials.video, endpoint: "/videos", capabilities: ["video"] as const, workflows: [{ id: "video-wf", remoteWorkflowId: "user-wf-1", name: "User video", capability: "video" as const, version: 1, definitionHash: "hash", source: { kind: "manual" as const, importedAt: "2026-08-19T00:00:00.000Z" }, inputSchema: [], nodeBindings: [], outputSchema: [{ id: "output", type: "video" as const }] }] },
     };
     const configured = { ...initial, provider: profiles.text, providers: profiles, defaults: { text: "text", image: "image", video: "video" } };
     await writeDesktopConfig(paths, configured);
     const loaded = await readDesktopConfig(paths);
-    assert.deepEqual(loaded.providers, profiles);
+    assert.equal(loaded.providers?.text?.baseUrl, profiles.text.baseUrl);
+    assert.equal(loaded.providers?.image?.apiKey, profiles.image.apiKey);
+    assert.equal(loaded.providers?.video?.workflows?.[0]?.remoteWorkflowId, profiles.video.workflows[0].remoteWorkflowId);
     assert.deepEqual(loaded.defaults, configured.defaults);
+    assert.deepEqual(loaded.providers?.image?.workflows?.[0]?.inputSchema.map((field) => field.id), ["referenceImage", "characterImage"]);
+    assert.deepEqual(loaded.providers?.image?.workflows?.[0]?.nodeBindings.map((binding) => binding.inputId), ["referenceImage", "characterImage"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

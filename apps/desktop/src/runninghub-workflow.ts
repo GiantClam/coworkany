@@ -126,6 +126,38 @@ function capabilityFromInputs(fields: readonly RunningHubWorkflowInputField[]): 
   return "video";
 }
 
+function inferCharacterImageRoleRenames(fields: ReadonlyMap<string, RunningHubWorkflowInputField>, bindings: readonly RunningHubNodeBinding[]) {
+  const canonicalIds = new Set(["referenceImage", "characterImage"]);
+  const imageFileBindings = bindings.filter((binding) =>
+    binding.valueType === "file" &&
+    !canonicalIds.has(binding.inputId) &&
+    ["image", "image_list"].includes(fields.get(binding.inputId)?.type ?? ""),
+  );
+  const renames = new Map<string, string>();
+  const hasBinding = (inputId: string) => bindings.some((binding) => binding.inputId === inputId) || [...renames.values()].includes(inputId);
+  for (const role of ["referenceImage", "characterImage"] as const) {
+    if (hasBinding(role)) continue;
+    const candidate = imageFileBindings.find((binding) => !renames.has(binding.inputId));
+    if (candidate) renames.set(candidate.inputId, role);
+  }
+  return renames;
+}
+
+/** Repairs older image registrations that were imported before canonical
+ * reference/character roles were inferred from generic LoadImage fields. */
+export function normalizeRunningHubCharacterImageBindings(registration: RunningHubWorkflowRegistration): RunningHubWorkflowRegistration {
+  if (registration.capability !== "image") return registration;
+  const fields = new Map(registration.inputSchema.map((field) => [field.id, field]));
+  const renames = inferCharacterImageRoleRenames(fields, registration.nodeBindings);
+  if (!renames.size) return registration;
+  const inputSchema = registration.inputSchema.flatMap((field) => {
+    const nextId = renames.get(field.id);
+    if (!nextId) return [field];
+    return fields.has(nextId) ? [] : [{ ...field, id: nextId, label: nextId }];
+  });
+  return { ...registration, inputSchema, nodeBindings: registration.nodeBindings.map((binding) => ({ ...binding, inputId: renames.get(binding.inputId) ?? binding.inputId })) };
+}
+
 export function parseRunningHubWorkflowJson(raw: unknown, options: { readonly remoteWorkflowId?: string; readonly sourceKind?: RunningHubWorkflowSourceKind } = {}): RunningHubWorkflowImport {
   if (!isRecord(raw)) throw new Error("runninghub_workflow_json_invalid");
   const bindings: RunningHubNodeBinding[] = [];
@@ -150,10 +182,23 @@ export function parseRunningHubWorkflowJson(raw: unknown, options: { readonly re
       bindings.push({ inputId, nodeId, fieldName, valueType: type === "file" || type === "image" || type === "image_list" || type === "video" || type === "audio" ? (multiple ? "file_list" : "file") : "literal", transform: type === "number" || type === "integer" ? "number" : type === "boolean" ? "boolean" : "string" });
     }
   }
-  if (!bindings.length) warnings.push("no_editable_workflow_inputs_detected");
+  // RunningHub exports often call both LoadImage inputs simply `image`. Keep
+  // those workflows usable by assigning the first two unlabelled image files
+  // to the canonical roles used by the character-replacement template.
+  // Explicitly named roles always win, and list bindings are left untouched
+  // because the template expects one file per role.
+  const inputIdRenames = inferCharacterImageRoleRenames(fields, bindings);
+  for (const [from, to] of inputIdRenames) {
+    const field = fields.get(from);
+    if (!field) continue;
+    fields.delete(from);
+    if (!fields.has(to)) fields.set(to, { ...field, id: to, label: to });
+  }
+  const normalizedBindings = bindings.map((binding) => ({ ...binding, inputId: inputIdRenames.get(binding.inputId) ?? binding.inputId }));
+  if (!normalizedBindings.length) warnings.push("no_editable_workflow_inputs_detected");
   const inputSchema = [...fields.values()];
-  const canonical = JSON.stringify({ nodes: nodeEntries(raw).map(([id, node]) => [id, node]), inputs: inputSchema, bindings });
-  return { remoteWorkflowId: options.remoteWorkflowId, sourceKind: options.sourceKind ?? sourceKindFor(raw), inputSchema, nodeBindings: bindings, outputSchema: [{ id: "output", type: capabilityFromInputs(inputSchema) === "image" ? "image" : capabilityFromInputs(inputSchema) === "audio" ? "audio" : "video" }], definitionHash: hashWorkflowText(canonical), warnings };
+  const canonical = JSON.stringify({ nodes: nodeEntries(raw).map(([id, node]) => [id, node]), inputs: inputSchema, bindings: normalizedBindings });
+  return { remoteWorkflowId: options.remoteWorkflowId, sourceKind: options.sourceKind ?? sourceKindFor(raw), inputSchema, nodeBindings: normalizedBindings, outputSchema: [{ id: "output", type: capabilityFromInputs(inputSchema) === "image" ? "image" : capabilityFromInputs(inputSchema) === "audio" ? "audio" : "video" }], definitionHash: hashWorkflowText(canonical), warnings };
 }
 
 export function createRunningHubWorkflowRegistration(input: RunningHubWorkflowImport & { readonly id: string; readonly remoteWorkflowId: string; readonly name: string; readonly capability?: RunningHubWorkflowCapability; readonly source?: { readonly kind: RunningHubWorkflowSourceKind; readonly url?: string }; readonly request?: { readonly kind: RunningHubWorkflowRequestKind; readonly submitPath?: string; readonly queryPath?: string } }): RunningHubWorkflowRegistration {
