@@ -949,6 +949,23 @@ fn workflow_file_mime_type(path: &Path) -> &'static str {
     }
 }
 
+fn workflow_files_from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Vec<LocalWorkflowFile> {
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let metadata = fs::metadata(&path).ok()?;
+            if !metadata.is_file() { return None; }
+            Some(LocalWorkflowFile {
+                file_name: path.file_name()?.to_string_lossy().to_string(),
+                local_path: path.to_string_lossy().to_string(),
+                mime_type: workflow_file_mime_type(&path).to_string(),
+                byte_length: metadata.len(),
+            })
+        })
+        .take(8)
+        .collect()
+}
+
 #[tauri::command]
 fn pick_workflow_files() -> Result<Vec<LocalWorkflowFile>, String> {
     #[cfg(windows)]
@@ -966,26 +983,50 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.
             .output()
             .map_err(|error| format!("workflow_file_picker_spawn_failed: {error}"))?;
         if !output.status.success() { return Err(format!("workflow_file_picker_failed:{}", output.status.code().unwrap_or(-1))); }
-        let files = String::from_utf8_lossy(&output.stdout)
+        let files = workflow_files_from_paths(String::from_utf8_lossy(&output.stdout)
             .lines()
-            .filter_map(|line| {
-                let path = PathBuf::from(line.trim());
-                let metadata = fs::metadata(&path).ok()?;
-                if !metadata.is_file() { return None; }
-                Some(LocalWorkflowFile {
-                    file_name: path.file_name()?.to_string_lossy().to_string(),
-                    local_path: path.to_string_lossy().to_string(),
-                    mime_type: workflow_file_mime_type(&path).to_string(),
-                    byte_length: metadata.len(),
-                })
-            })
-            .take(8)
-            .collect::<Vec<_>>();
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| PathBuf::from(line.trim())));
         return Ok(files);
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
-        Ok(Vec::new())
+        // Tauri does not bundle a native dialog plugin. AppleScript gives the
+        // signed app the same user-selected file access as Finder without
+        // relying on a shell-specific GUI utility (such as `zenity`).
+        let script = r#"
+try
+    set chosenFiles to choose file with prompt "Choose workflow files" with multiple selections allowed
+    set outputText to ""
+    repeat with chosenFile in chosenFiles
+        set outputText to outputText & (POSIX path of chosenFile) & linefeed
+    end repeat
+    return outputText
+on error number -128
+    return ""
+end try
+"#;
+        let output = Command::new("/usr/bin/osascript")
+            .args(["-e", script])
+            .output()
+            .map_err(|error| format!("workflow_file_picker_spawn_failed: {error}"))?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if detail.is_empty() {
+                format!("workflow_file_picker_failed:{}", output.status.code().unwrap_or(-1))
+            } else {
+                format!("workflow_file_picker_failed: {detail}")
+            });
+        }
+        let files = workflow_files_from_paths(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| PathBuf::from(line.trim())));
+        return Ok(files);
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        Err("workflow_file_picker_unavailable".to_string())
     }
 }
 

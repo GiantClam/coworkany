@@ -329,6 +329,7 @@ export function WorkflowNodeEditorFields({
   onUploadFiles,
 }: WorkflowNodeEditorFieldsProps) {
   const textInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const uploadInputRef = useRef<HTMLInputElement | null>(null)
   const [textSelectionStart, setTextSelectionStart] = useState<number | null>(null)
   const [textInputFocused, setTextInputFocused] = useState(false)
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0)
@@ -1125,20 +1126,30 @@ export function WorkflowNodeEditorFields({
           <div className="rounded-[12px] border border-border/70 bg-background/55 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <SectionLabel>{copy.uploadedFiles}</SectionLabel>
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-[10px] bg-primary px-3 py-2 text-xs font-medium text-primary-foreground">
+              <button
+                type="button"
+                data-node-no-drag="true"
+                className="inline-flex cursor-pointer items-center gap-2 rounded-[10px] bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={uploadPending}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  uploadInputRef.current?.click()
+                }}
+              >
                 <FileUp className="size-3.5" />
                 {uploadPending ? copy.uploadPending : copy.uploadNew}
-                <input
-                  type="file"
-                  multiple
-                  className="hidden"
-                  disabled={uploadPending}
-                  onChange={(event) => {
-                    void onUploadFiles(node.nodeKey, event.target.files)
-                    event.currentTarget.value = ""
-                  }}
-                />
-              </label>
+              </button>
+              <input
+                ref={uploadInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                disabled={uploadPending}
+                onChange={(event) => {
+                  void onUploadFiles(node.nodeKey, event.target.files)
+                  event.currentTarget.value = ""
+                }}
+              />
             </div>
 
             <div className="mt-3 space-y-2">
