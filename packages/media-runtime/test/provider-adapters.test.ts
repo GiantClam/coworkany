@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createBailianImageAdapter, createBailianVideoAdapter, createMiniMaxAudioAdapter, createMiniMaxVideoAdapter, createOpenAICompatibleImageAdapter, createRunningHubAdapter, createRunningHubDigitalHumanAdapter, createRunningHubWorkflowAdapter, IMAGE_GENERATION_REQUEST_TIMEOUT_MS, listMiniMaxVoices, uploadRunningHubMedia, uploadRunningHubMediaAsset, type MediaProviderId } from "../src/index";
+import { createBailianImageAdapter, createBailianVideoAdapter, createMiniMaxAudioAdapter, createMiniMaxVideoAdapter, createOpenAICompatibleImageAdapter, createRunningHubAdapter, createRunningHubAiAppAdapter, createRunningHubDigitalHumanAdapter, createRunningHubWorkflowAdapter, IMAGE_GENERATION_REQUEST_TIMEOUT_MS, listMiniMaxVoices, uploadRunningHubMedia, uploadRunningHubMediaAsset, type MediaProviderId } from "../src/index";
 
 function cancellation() { return { throwIfCancelled() {} }; }
 
@@ -51,6 +51,50 @@ test("generic RunningHub workflow adapter applies migrated defaults", async () =
     { nodeId: "35", fieldName: "text", fieldValue: "enhance" },
     { nodeId: "42", fieldName: "value", fieldValue: 10 },
   ]);
+});
+
+test("RunningHub AI App adapter submits audio bindings and reads transcript results", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const adapter = createRunningHubAiAppAdapter({
+    provider: "runninghub" as MediaProviderId,
+    baseUrl: "https://www.runninghub.cn",
+    apiKey: "secret",
+    appId: "1999879555714347010",
+    bindings: [{ inputId: "audio", nodeId: "2", fieldName: "audio", valueType: "file" }],
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, init });
+      return new Response(JSON.stringify(url.includes("/query")
+        ? { taskId: "task-asr", status: "SUCCESS", results: [{ nodeId: "4", outputType: "txt", text: "你好，世界" }] }
+        : { taskId: "task-asr", status: "RUNNING", results: null }), { status: 200 });
+    },
+  });
+  const submitted = await adapter.execute({ provider: "runninghub" as MediaProviderId, modelId: "1999879555714347010", input: { audio: "openapi/audio.flac" } }, cancellation());
+  assert.equal(submitted.providerTaskId, "task-asr");
+  assert.equal(submitted.status, "running");
+  const submitBody = JSON.parse(String(requests[0]?.init?.body)) as Record<string, unknown>;
+  assert.deepEqual(submitBody.nodeInfoList, [{ nodeId: "2", fieldName: "audio", fieldValue: "openapi/audio.flac" }]);
+  assert.equal(requests[0]?.init?.headers && new Headers(requests[0].init?.headers).get("authorization"), "Bearer secret");
+  const result = await adapter.query?.("task-asr", cancellation());
+  assert.equal(result?.status, "succeeded");
+  assert.deepEqual(result?.outputs, [{ nodeId: "4", outputType: "txt", text: "你好，世界" }]);
+});
+
+test("RunningHub AI App adapter accepts array-shaped query data", async () => {
+  const adapter = createRunningHubAiAppAdapter({
+    provider: "runninghub" as MediaProviderId,
+    baseUrl: "https://www.runninghub.cn",
+    apiKey: "secret",
+    appId: "1999879555714347010",
+    bindings: [{ inputId: "audio", nodeId: "2", fieldName: "audio", valueType: "file" }],
+    fetchImpl: async (input) => new Response(JSON.stringify(String(input).includes("/query")
+      ? { data: [{ nodeId: "4", outputType: "txt", text: "array result" }] }
+      : { data: { taskId: "task-array", taskStatus: "RUNNING" } }), { status: 200 }),
+  });
+  await adapter.execute({ provider: "runninghub" as MediaProviderId, modelId: "1999879555714347010", input: { audio: "audio.flac" } }, cancellation());
+  const result = await adapter.query?.("task-array", cancellation());
+  assert.equal(result?.status, "succeeded");
+  assert.deepEqual(result?.outputs, [{ nodeId: "4", outputType: "txt", text: "array result" }]);
 });
 
 test("OpenAI-compatible image adapter sends a local image generation request", async () => {
@@ -496,6 +540,22 @@ test("MiniMax music adapter keeps synchronous base64 output local", async () => 
   const task = await adapter.execute({ provider: "minimax" as MediaProviderId, modelId: "music-1", input: { kind: "music", prompt: "轻快" } }, cancellation());
   assert.equal(task.status, "succeeded");
   assert.equal(task.outputs[0]?.b64_json, "AQID");
+});
+
+test("MiniMax music adapter preserves upstream deprecation guidance", async () => {
+  const adapter = createMiniMaxAudioAdapter({
+    provider: "minimax" as MediaProviderId,
+    baseUrl: "https://api.minimax.io/v1",
+    apiKey: "secret",
+    fetchImpl: async () => new Response(JSON.stringify({
+      base_resp: { status_code: 2153, status_msg: "This Music API is no longer available to new users" },
+      trace_id: "trace-1",
+    }), { status: 410 }),
+  });
+  await assert.rejects(
+    adapter.execute({ provider: "minimax" as MediaProviderId, modelId: "music-2.6", input: { kind: "music", prompt: "smoke" } }, cancellation()),
+    /media_provider_http_410:This Music API is no longer available to new users/,
+  );
 });
 
 test("MiniMax voice-clone capability calls the clone endpoint and preserves the preview", async () => {

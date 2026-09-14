@@ -65,7 +65,7 @@ if (!internal) await promisify(execFile)("codesign", ["--verify", "--deep", "--s
 await mkdir(join(stage, "CoworkAny Data"), { recursive: true });
 await writeFile(join(stage, "portable.flag"), "", "utf8");
 const instructions = internal
-  ? "INTERNAL TEST BUILD - AD HOC SIGNED, NOT DEVELOPER ID SIGNED OR NOTARIZED. Keep CoworkAny.app, CoworkAny Data, and portable.flag together. On another Mac, first launch may require Control-click CoworkAny.app > Open, or Privacy & Security > Open Anyway. Do not store CoworkAny Data inside CoworkAny.app.\n"
+  ? "CoworkAny macOS 内测版（Apple Silicon）。本包仅使用 ad hoc 签名，未使用 Developer ID，未完成公证。\n\n首次打开如果 macOS 阻止应用：\n1. 在 Finder 中双击 CoworkAny.app；如果出现拦截提示，先点“好”。\n2. 打开“系统设置”→“隐私与安全性”→“安全性”。\n3. 点击 CoworkAny.app 旁边的“仍要打开”（Open Anyway），并确认。该按钮通常只在刚刚被拦截过一次后出现。\n4. 回到 Finder，对 CoworkAny.app 按住 Control 键点击或右键，选择“打开”。\n也可以首次直接使用 Control-click CoworkAny.app →“打开”。仅在确认 ZIP 来源可信时执行上述操作。\n\n请保持 CoworkAny.app、CoworkAny Data 和 portable.flag 位于同一目录；不要把 CoworkAny Data 放入 CoworkAny.app 内。\n"
   : "Keep CoworkAny.app, CoworkAny Data, and portable.flag together. Do not store CoworkAny Data inside CoworkAny.app.\n";
 await writeFile(join(stage, "README.txt"), instructions, "utf8");
 await promisify(execFile)("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", stage, archive]);

@@ -28,6 +28,20 @@ def archive_bytes(names):
 
 
 class RuntimeArchiveTests(unittest.TestCase):
+    def test_reseals_nested_python_app_after_relocation(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(runtime.subprocess, "run") as run:
+            python_root = Path(root) / "python"
+            (python_root / "Resources/Python.app/Contents/MacOS").mkdir(parents=True)
+            (python_root / "Python").write_bytes(b"python")
+            (python_root / "Resources/Python.app/Contents/MacOS/Python").write_bytes(b"python")
+
+            runtime.repair_python_relocation(Path(root))
+
+            self.assertTrue(any(
+                call.args[0] == ["codesign", "--force", "--deep", "--sign", "-", str(python_root / "Resources/Python.app")]
+                for call in run.call_args_list
+            ))
+
     def test_rejects_wrong_digest_before_extracting_or_running(self):
         with tempfile.TemporaryDirectory() as root:
             target = Path(root) / "output"

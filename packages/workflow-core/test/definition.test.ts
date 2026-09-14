@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { canonicalizeWorkflowDefinition, canonicalizeWorkflowDefinitionJson, compileWorkflowPlan, hashWorkflowDefinition, migrateLegacyWorkflowDefinition, parseWorkflowDefinitionEnvelope, validateWorkflowDefinition, validateWorkflowPortDefinition, WorkflowDefinitionValidationError } from "../src";
+import { canonicalizeWorkflowDefinition, canonicalizeWorkflowDefinitionJson, compileWorkflowPlan, hashWorkflowDefinition, migrateLegacyWorkflowDefinition, migrateWorkflowDefinitionToCurrent, parseWorkflowDefinitionEnvelope, validateWorkflowDefinition, validateWorkflowPortDefinition, WorkflowDefinitionValidationError } from "../src";
 
 test("migrates legacy nodes and creates a stable definition hash", () => {
   const current = migrateLegacyWorkflowDefinition({ nodes: [{ nodeKey: "a", type: "text_input", config: { text: "hello" } }, { nodeKey: "b", type: "writer" }], edges: [{ sourceNodeKey: "a", targetNodeKey: "b", inputName: "text" }] });
@@ -18,6 +18,40 @@ test("legacy edge migration is independent of payload ordering", () => {
 test("migration prefers an adapter-supplied persisted revision", () => {
   const input = { revision: 2, nodes: [{ nodeKey: "a", type: "text_input" }], edges: [] };
   assert.equal(migrateLegacyWorkflowDefinition(input, { revision: 7 }).revision, 7);
+});
+
+test("migrates the legacy still-image video template to local composition", () => {
+  const input = {
+    schemaVersion: 2,
+    revision: 1,
+    definitionHash: "",
+    nodes: [
+      { nodeKey: "image", type: "image_generate", nodeVersion: 1, title: "Image", positionX: 0, positionY: 0, config: {} },
+      { nodeKey: "audio", type: "upload", nodeVersion: 1, title: "Audio", positionX: 0, positionY: 1, config: {} },
+      { nodeKey: "subtitle", type: "file_create", nodeVersion: 1, title: "Subtitle", positionX: 0, positionY: 2, config: { fileFormat: "srt" } },
+      { nodeKey: "video", type: "video_generate", nodeVersion: 1, title: "Video", positionX: 1, positionY: 0, config: { requiresSubtitleBinding: true, mode: "auto", sound: "on", provider: "video-runninghub" } },
+    ],
+    edges: [
+      { edgeKey: "image-video", sourceNodeKey: "image", sourcePortId: "image", targetNodeKey: "video", targetPortId: "images", inputName: null },
+      { edgeKey: "audio-video", sourceNodeKey: "audio", sourcePortId: "audio", targetNodeKey: "video", targetPortId: "referenceAudios", inputName: null },
+      { edgeKey: "subtitle-video", sourceNodeKey: "subtitle", sourcePortId: "asset", targetNodeKey: "video", targetPortId: "subtitle", inputName: null },
+    ],
+  } as const;
+  const migrated = migrateWorkflowDefinitionToCurrent(input);
+  const video = migrated.nodes.find((node) => node.nodeKey === "video");
+  assert.equal(video?.type, "video_compose");
+  assert.equal(video?.config.provider, undefined);
+  assert.equal(video?.config.subtitleMode, "burn_in");
+  assert.deepEqual(migrated.edges.map((edge) => edge.targetPortId).sort(), ["audio", "image", "subtitle"]);
+});
+
+test("does not migrate AI video workflows with video inputs", () => {
+  const input = {
+    schemaVersion: 2, revision: 1, definitionHash: "",
+    nodes: [{ nodeKey: "video", type: "video_generate", nodeVersion: 1, title: "Video", positionX: 0, positionY: 0, config: { requiresSubtitleBinding: true } }],
+    edges: [{ edgeKey: "source", sourceNodeKey: "source", sourcePortId: "video", targetNodeKey: "video", targetPortId: "videos", inputName: null }, { edgeKey: "subtitle", sourceNodeKey: "subtitle", sourcePortId: "asset", targetNodeKey: "video", targetPortId: "subtitle", inputName: null }, { edgeKey: "audio", sourceNodeKey: "audio", sourcePortId: "audio", targetNodeKey: "video", targetPortId: "referenceAudios", inputName: null }, { edgeKey: "image", sourceNodeKey: "image", sourcePortId: "image", targetNodeKey: "video", targetPortId: "images", inputName: null }],
+  } as const;
+  assert.equal(migrateWorkflowDefinitionToCurrent(input).nodes[0]?.type, "video_generate");
 });
 
 test("rejects cycles before workflow execution", () => {

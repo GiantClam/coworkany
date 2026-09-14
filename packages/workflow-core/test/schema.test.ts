@@ -44,7 +44,7 @@ test("registry exposes local video and audio processing nodes", () => {
 
 test("v1 registry matches the approved capability boundary", () => {
   const types = new Set(workflowNodeRegistry.list().map((definition) => definition.type));
-  for (const required of ["upload", "text_input", "file_create", "writer", "llm_generate", "agent_execute", "image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate", "video_process", "audio_process", "ppt_generate", "knowledge_retrieve", "knowledge_write", "product_store", "foreach", "collect", "output"]) assert.equal(types.has(required as never), true, required);
+  for (const required of ["upload", "text_input", "file_create", "writer", "llm_generate", "agent_execute", "image_generate", "video_generate", "video_compose", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate", "video_process", "audio_process", "ppt_generate", "knowledge_retrieve", "knowledge_write", "product_store", "foreach", "collect", "output"]) assert.equal(types.has(required as never), true, required);
   for (const excluded of ["lead_hunter", "publish_as_agent", "workflow_marketplace", "enterprise_preset"]) assert.equal(types.has(excluded as never), false, excluded);
 });
 
@@ -53,6 +53,24 @@ test("local file nodes expose type-specific output ports for media workflows", (
   assert.deepEqual(upload.outputs.map((port) => port.id), ["asset", "image", "video", "audio"]);
   assert.equal(areWorkflowPortsCompatible(upload.outputs.find((port) => port.id === "image")!, workflowNodeRegistry.require("video_generate").inputs.find((port) => port.id === "images")!), true);
   assert.equal(areWorkflowPortsCompatible(upload.outputs.find((port) => port.id === "audio")!, workflowNodeRegistry.require("voice_clone").inputs.find((port) => port.id === "audios")!), true);
+  const video = workflowNodeRegistry.require("video_generate");
+  const subtitle = video.inputs.find((port) => port.id === "subtitle");
+  assert.equal(subtitle?.valueKind, "asset");
+  assert.equal(subtitle?.maxItems, 1);
+  assert.equal(areWorkflowPortsCompatible(workflowNodeRegistry.require("file_create").outputs.find((port) => port.id === "asset")!, subtitle!), true);
+});
+
+test("video compose accepts a still image, audio, and optional subtitles", () => {
+  const compose = workflowNodeRegistry.require("video_compose");
+  assert.equal(compose.executorId, "video_compose");
+  assert.deepEqual(compose.inputs.map((port) => port.id), ["image", "audio", "subtitle"]);
+  assert.equal(compose.inputs.find((port) => port.id === "image")?.valueKind, "image");
+  assert.equal(compose.inputs.find((port) => port.id === "audio")?.valueKind, "audio");
+  assert.equal(compose.inputs.find((port) => port.id === "subtitle")?.valueKind, "asset");
+  assert.equal(compose.outputs[0]?.valueKind, "video");
+  assert.equal(areWorkflowPortsCompatible(workflowNodeRegistry.require("image_generate").outputs[0]!, compose.inputs.find((port) => port.id === "image")!), true);
+  assert.equal(areWorkflowPortsCompatible(workflowNodeRegistry.require("audio_generate").outputs[0]!, compose.inputs.find((port) => port.id === "audio")!), true);
+  assert.equal(areWorkflowPortsCompatible(workflowNodeRegistry.require("file_create").outputs[0]!, compose.inputs.find((port) => port.id === "subtitle")!), true);
 });
 
 test("preserves SaaS control-node defaults in the shared definition catalog", () => {
@@ -67,6 +85,7 @@ test("shares the online editor parameter contract for desktop workflow nodes", (
   const writer = workflowNodeRegistry.require("writer");
   const image = workflowNodeRegistry.require("image_generate");
   const video = workflowNodeRegistry.require("video_generate");
+  const compose = workflowNodeRegistry.require("video_compose");
   const voiceClone = workflowNodeRegistry.require("voice_clone");
   const ppt = workflowNodeRegistry.require("ppt_generate");
   const fieldIds = (definition: typeof writer) => new Set(definition.configSchema.map((field) => field.id));
@@ -75,6 +94,7 @@ test("shares the online editor parameter contract for desktop workflow nodes", (
   for (const id of ["selectedProviderId", "selectedModelId"]) assert.equal(fieldIds(image).has(id), true, id);
   assert.equal(fieldIds(image).has("workflowRef"), false);
   for (const id of ["selectedProviderId", "model", "mode", "duration", "ratio", "sound"]) assert.equal(fieldIds(video).has(id), true, id);
+  for (const id of ["outputFormat", "subtitleMode", "fitMode"]) assert.equal(fieldIds(compose).has(id), true, id);
   assert.equal(fieldIds(video).has("workflowRef"), false);
   assert.equal(fieldIds(voiceClone).has("model"), true);
   for (const id of ["previewRuntime", "model", "pageCount", "templateId", "language", "scenario"]) assert.equal(fieldIds(ppt).has(id), true, id);

@@ -219,7 +219,7 @@ fn runtime_probe_fingerprint(data: &Path, resource: &Path) -> String {
         ("development-knowledge", development.join("knowledge.mjs")),
         ("development-skill-catalog", development.join("skill-catalog.json")),
         ("development-skills", development.join("skills")),
-        ("native-runtime-v3", resource.join("dist-runtime/skill-catalog.json")),
+        ("native-runtime-v4", resource.join("dist-runtime/skill-catalog.json")),
         ("up-skill-catalog", resource.join("_up_/dist-runtime/skill-catalog.json")),
         ("native-host", resource.join("dist-runtime/host.mjs")),
         ("up-host", resource.join("_up_/dist-runtime/host.mjs")),

@@ -635,7 +635,8 @@ async function jsonRequest(options: DirectProviderOptions, path: string, init: R
   if (!response.ok) {
     const error = body && typeof body === "object" ? body as Record<string, unknown> : {};
     const nested = error.error && typeof error.error === "object" ? error.error as Record<string, unknown> : undefined;
-    const detail = text(nested?.message ?? nested?.msg ?? error.message ?? error.msg ?? error.code).slice(0, 180);
+    const baseResp = error.base_resp && typeof error.base_resp === "object" ? error.base_resp as Record<string, unknown> : undefined;
+    const detail = text(nested?.message ?? nested?.msg ?? error.message ?? error.msg ?? error.code ?? baseResp?.status_msg ?? baseResp?.status_code).slice(0, 300);
     throw new Error(`media_provider_http_${response.status}${detail ? `:${detail}` : ""}`);
   }
   return body && typeof body === "object" ? body as Record<string, unknown> : {};
@@ -1137,6 +1138,70 @@ export type RunningHubWorkflowBinding = {
   readonly transform?: "string" | "number" | "boolean" | "json";
   readonly defaultValue?: unknown;
 };
+
+export type RunningHubAiAppBinding = RunningHubWorkflowBinding;
+
+/** RunningHub AI App task adapter. AI Apps use the v2 `/run/ai-app` endpoint
+ * and return text results (for example ASR transcripts) instead of media URLs. */
+export function createRunningHubAiAppAdapter(options: DirectProviderOptions & {
+  readonly appId: string;
+  readonly bindings: readonly RunningHubAiAppBinding[];
+  readonly submitPath?: string;
+  readonly queryPath?: string;
+  readonly instanceType?: "default" | "plus" | "ultra";
+  readonly usePersonalQueue?: boolean;
+}): MediaProviderAdapter {
+  const submitPath = (options.submitPath || `/openapi/v2/run/ai-app/${encodeURIComponent(options.appId)}`).replace(/\{(?:id|appId)\}/gu, encodeURIComponent(options.appId));
+  const queryPath = options.queryPath || "/openapi/v2/query";
+  const map = (payload: Record<string, unknown>, fallbackId?: string): MediaTask => {
+    const rawData = payload.data;
+    const data = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : payload;
+    const statusValue = data.status ?? payload.status ?? data.taskStatus ?? payload.taskStatus;
+    const providerTaskId = text(data.taskId ?? data.task_id ?? payload.taskId ?? payload.task_id) || fallbackId || `sync-${Date.now()}`;
+    const results = Array.isArray(data.results)
+      ? data.results
+      : Array.isArray(payload.results)
+        ? payload.results
+        : Array.isArray(data.output)
+          ? data.output
+          : Array.isArray(rawData)
+            ? rawData
+            : [];
+    const outputs = results.flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const result = item as Record<string, unknown>;
+      const transcript = text(result.text ?? result.content ?? result.transcript);
+      const url = text(result.url ?? result.download_url ?? result.downloadUrl);
+      if (!transcript && !url) return [];
+      return [{ ...(transcript ? { text: transcript } : {}), ...(url ? { url } : {}), ...(typeof result.nodeId === "string" ? { nodeId: result.nodeId } : {}), ...(typeof result.outputType === "string" ? { outputType: result.outputType } : {}) }];
+    });
+    const mappedStatus = mapProviderStatus(statusValue);
+    const errorMessage = text(data.errorMessage ?? payload.errorMessage ?? data.error_message ?? payload.error_message);
+    return { providerTaskId, status: mappedStatus === "succeeded" && !outputs.length ? "queued" : mappedStatus, ...(statusValue !== undefined ? { providerStatus: String(statusValue) } : {}), ...(errorMessage && mappedStatus === "failed" ? { error: errorMessage.slice(0, 240) } : {}), outputs };
+  };
+  return {
+    provider: options.provider,
+    execute: async (request, cancellation) => {
+      const input = request.input as Record<string, unknown>;
+      const nodeInfoList = options.bindings.flatMap((binding) => {
+        const raw = input[binding.inputId] ?? binding.defaultValue;
+        if (raw === undefined || raw === null || raw === "") return [];
+        const values = binding.valueType === "file_list" ? (Array.isArray(raw) ? raw : [raw]) : binding.valueType === "file" && Array.isArray(raw) ? raw.slice(0, 1) : [raw];
+        return values.map((value) => ({ nodeId: binding.nodeId, fieldName: binding.fieldName, fieldValue: binding.transform === "number" ? Number(value) : binding.transform === "boolean" ? Boolean(value) : binding.transform === "json" ? JSON.stringify(value) : typeof value === "object" && value !== null ? (value as Record<string, unknown>).fileName ?? (value as Record<string, unknown>).url ?? value : value }));
+      });
+      if (!nodeInfoList.length) throw new Error("runninghub_ai_app_inputs_empty");
+      const payload = { nodeInfoList, instanceType: options.instanceType ?? "default", usePersonalQueue: String(options.usePersonalQueue ?? false), ...(request.idempotencyKey ? { clientRequestId: request.idempotencyKey } : {}) };
+      try {
+        return map(await jsonRequest(options, submitPath, { method: "POST", body: JSON.stringify(payload) }, cancellation));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/media_provider_http_(?:401|403|404)/u.test(message)) throw new Error(`runninghub_ai_app_not_accessible:${options.appId}`);
+        throw error;
+      }
+    },
+    query: async (providerTaskId, cancellation) => map(await jsonRequest(options, queryPath, { method: "POST", body: JSON.stringify({ taskId: providerTaskId }) }, cancellation), providerTaskId),
+  };
+}
 
 /** Generic ComfyUI/RunningHub workflow adapter. The desktop registry owns the
  * binding schema; this adapter only submits the resolved node values. */

@@ -247,7 +247,9 @@ pub(crate) fn python_executable(app: &AppHandle) -> Result<Option<String>, Strin
         resource.join("dist-runtime").join("runtime").join("python").join(crate::platform::runtime_executable("python")),
         resource.join("_up_").join("dist-runtime").join("runtime").join("python").join(crate::platform::runtime_executable("python")),
     ];
-    let configured = configured_runtime_path(app, "pythonPath").into_iter();
+    let configured = configured_runtime_path(app, "pythonPath")
+        .filter(|path| is_app_managed_python_path(path, &data, &resource))
+        .into_iter();
     for path in crate::ordered_runtime_candidates(private, bundled, configured, std::iter::empty()) {
         if !path.is_file() { continue; }
         match probe_python(&path) {
@@ -259,14 +261,30 @@ pub(crate) fn python_executable(app: &AppHandle) -> Result<Option<String>, Strin
             Err(detail) => crate::logs::append(&data, "runtime-probe", &format!("python_candidate_failed path={} {}", path.display(), detail)),
         }
     }
-    let system = system_executable(crate::platform::runtime_executable("python"));
-    if let Some(path) = system {
-        match probe_python(&path) {
-            Ok(()) => return Ok(Some(path.to_string_lossy().into_owned())),
-            Err(detail) => crate::logs::append(&data, "runtime-probe", &format!("python_system_failed path={} {}", path.display(), detail)),
+    #[cfg(target_os = "macos")]
+    {
+        crate::logs::append(&data, "runtime-probe", "python_system_fallback_disabled platform=macos");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let system = system_executable(crate::platform::runtime_executable("python"));
+        if let Some(path) = system {
+            match probe_python(&path) {
+                Ok(()) => return Ok(Some(path.to_string_lossy().into_owned())),
+                Err(detail) => crate::logs::append(&data, "runtime-probe", &format!("python_system_failed path={} {}", path.display(), detail)),
+            }
         }
     }
     Ok(None)
+}
+
+fn is_app_managed_python_path(path: &std::path::Path, data: &std::path::Path, resource: &std::path::Path) -> bool {
+    [
+        data.join("runtime"),
+        resource.join("dist-runtime/runtime"),
+        resource.join("_up_/dist-runtime/runtime"),
+        resource.join("runtime"),
+    ].iter().any(|root| path.starts_with(root))
 }
 
 pub(crate) fn skills_directory(app: &AppHandle) -> Result<Option<PathBuf>, String> {
@@ -311,6 +329,11 @@ fn probe_python(path: &std::path::Path) -> Result<(), String> {
 }
 
 fn configure_python_environment(command: &mut Command, executable: &std::path::Path) {
+    // The bundled interpreter lives inside the signed app bundle. Never let
+    // startup probes or workflow imports write __pycache__ files there: a
+    // first launch would otherwise invalidate the bundle seal and cause the
+    // next Python launch to be killed by macOS taskgated.
+    command.env("PYTHONDONTWRITEBYTECODE", "1");
     #[cfg(target_os = "macos")]
     if let Some(root) = executable.parent() {
         // Only bundled runtimes have the relocatable `lib/python3.*` tree
@@ -386,10 +409,15 @@ fn dispatch_workflow_service_request(app: &AppHandle, request: &serde_json::Valu
         }
         "runtime.artifact.write" => {
             let relative_path = payload_string(request, "relativePath")?;
+            // Runtime paths are serialized with `/` separators, but older
+            // clients and cross-platform path helpers may send `\\` on macOS.
+            // Normalize before both writing and inspecting so a Windows-style
+            // path cannot become one literal backslash-containing filename.
+            let normalized_relative_path = relative_path.replace('\\', "/");
             let mime_type = payload_string(request, "mimeType")?;
             let content = payload_string(request, "content")?;
             if content.len() > 4 * 1024 * 1024 { return Err("runtime_artifact_content_too_large".to_string()); }
-            let relative = std::path::PathBuf::from(relative_path);
+            let relative = std::path::PathBuf::from(&normalized_relative_path);
             if relative.is_absolute() || relative.components().any(|component| matches!(component, std::path::Component::ParentDir)) { return Err("runtime_artifact_path_escape".to_string()); }
             let root = crate::project_root(app)?;
             if let Some(workspace_path) = request.get("payload").and_then(|value| value.get("workspacePath")).and_then(serde_json::Value::as_str) {
@@ -397,14 +425,18 @@ fn dispatch_workflow_service_request(app: &AppHandle, request: &serde_json::Valu
                 let configured_root = root.canonicalize().map_err(|error| error.to_string())?;
                 if requested_root != configured_root { return Err("runtime_artifact_workspace_mismatch".to_string()); }
             }
-            let target = root.join(relative_path.replace('/', "\\"));
+            // `relative_path` uses `/` as the RPC contract on every platform.
+            // Replacing it with `\\` before joining creates one literal
+            // backslash-containing filename on macOS/Linux, so the follow-up
+            // artifact inspection cannot find the nested path.
+            let target = root.join(&normalized_relative_path);
             if !target.starts_with(&root) { return Err("runtime_artifact_path_escape".to_string()); }
             if let Some(parent) = target.parent() { std::fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
             let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|duration| duration.as_nanos()).unwrap_or(0);
             let temporary = target.with_extension(format!("{}.{}.tmp", target.extension().and_then(|value| value.to_str()).unwrap_or("artifact"), stamp));
             std::fs::write(&temporary, content.as_bytes()).map_err(|error| error.to_string())?;
             std::fs::rename(&temporary, &target).map_err(|error| error.to_string())?;
-            let metadata = crate::artifacts::inspect(&root, relative_path, mime_type)?;
+            let metadata = crate::artifacts::inspect(&root, &normalized_relative_path, mime_type)?;
             Ok(serde_json::json!({ "relativePath": metadata.relative_path, "mimeType": metadata.mime_type, "byteLength": metadata.byte_length, "sha256": metadata.sha256 }))
         }
         _ => Err("service_method_not_supported".to_string()),

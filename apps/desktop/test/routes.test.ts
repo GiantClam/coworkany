@@ -888,7 +888,7 @@ test("media workflow nodes remain visible with a localized configuration-require
   assert.match(canvasSource, /Configuration required/);
   assert.match(canvasSource, /需要配置 Provider/);
   assert.match(appSource, /openWorkflowProviderSettings/);
-  assert.match(appSource, /providerConfiguredForNode=\{\(nodeType\) => isMediaProviderConfigured\(providerForCapability\(config, capabilityForWorkflowAction\(nodeType\)\)\)\}/);
+  assert.match(appSource, /providerConfiguredForNode=\{\(nodeType\) => isMediaProviderConfigured\(providerForCapability\(config, capabilityForWorkflowAction\(nodeType\)\)\) \|\|/);
   assert.match(canvasSource, /!providerConfiguredForNode\(node\.type\) && requiresProviderForNode\(node\.type\)/);
 });
 

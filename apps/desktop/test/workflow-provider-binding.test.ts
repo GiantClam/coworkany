@@ -182,3 +182,24 @@ test("RunningHub treats registered image workflows as the image model catalog", 
   assert.equal(image.model, "remote-image-2");
   assert.equal("workflowRef" in image, false);
 });
+
+test("RunningHub ASR mode can select an audio Provider from an existing Agent node", () => {
+  const asrDefinition: WorkflowDefinitionEnvelope = {
+    ...definition,
+    nodes: [...definition.nodes, { nodeKey: "asr", type: "agent_execute", nodeVersion: 1, title: "ASR", positionX: 4, positionY: 0, config: { operation: "audio_transcription", selectedProviderId: "runninghub-audio", selectedModelId: "1999879555714347010" } }],
+  };
+  const bound = bindWorkflowProviderDefaults(asrDefinition, {
+    provider: { id: "text", model: "text/default" },
+    providers: {
+      "runninghub-audio": {
+        id: "runninghub-audio", source: "runninghub", model: "1999879555714347010", baseUrl: "https://www.runninghub.cn", capabilities: ["audio"],
+        workflows: [{ id: "asr", remoteWorkflowId: "1999879555714347010", name: "ASR", capability: "audio_transcription", version: 1, definitionHash: "asr", source: { kind: "runninghub-ai-app", importedAt: "2026-09-13T00:00:00.000Z" }, request: { kind: "ai-app", submitPath: "/openapi/v2/run/ai-app/1999879555714347010" }, inputSchema: [], nodeBindings: [], outputSchema: [{ id: "transcript", type: "text" }] }],
+      },
+    },
+    defaults: { audio: "runninghub-audio" },
+  });
+  const asr = bound.nodes.find((node) => node.nodeKey === "asr")?.config ?? {};
+  assert.equal(asr.provider, "runninghub-audio");
+  assert.equal(asr.model, "1999879555714347010");
+  assert.equal(asr.selectedProviderId, "runninghub-audio");
+});

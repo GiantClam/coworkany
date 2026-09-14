@@ -12,7 +12,7 @@ macOS profile 为 `macOS 12+`、Apple Silicon（arm64）、官网分发的签名
 pnpm desktop:macos:internal
 ```
 
-输出为 `.artifacts/desktop-release/CoworkAny-macOS-arm64-internal-portable.zip`。首次在另一台 Mac 打开时，使用右键 **Open**；若仍被拦截，在“系统设置 → 隐私与安全性”选择 **Open Anyway**。该 ZIP 不应作为公开下载版本，也不能替代 Developer ID 发布包。
+输出为 `.artifacts/desktop-release/CoworkAny-macOS-arm64-internal-portable.zip`。Gatekeeper 可能在应用启动前拦截未公证包，因此应用内无法提前显示此提示。请在 ZIP 的 `README.txt` 和发布说明中保留以下步骤：首次在另一台 Mac 打开时，在 Finder 对 `CoworkAny.app` 按住 Control 键点击或右键，选择“打开”；如果仍被拦截，打开“系统设置 → 隐私与安全性 → 安全性”，点击 CoworkAny.app 旁的“仍要打开”（Open Anyway）并确认，再次右键选择“打开”。“仍要打开”通常只在最近一次拦截后出现。仅在确认 ZIP 来源可信时执行。该 ZIP 不应作为公开下载版本，也不能替代 Developer ID 发布包。
 
 ## 发布流程
 

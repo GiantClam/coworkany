@@ -27,11 +27,61 @@ function semanticTuple(value: { sourceNodeKey: string; sourcePortId: string; tar
   return [value.sourceNodeKey, value.sourcePortId, value.targetNodeKey, value.targetPortId, value.inputName ?? ""].map((entry) => `${entry.length}:${entry}`).join("|");
 }
 
+/**
+ * Older versions represented a still-image composition as an external
+ * video_generate node. Migrate only the unambiguous shape emitted by the
+ * character-swap template: subtitle binding + image + audio, with no video
+ * asset inputs. Ordinary AI video workflows remain unchanged.
+ */
+function migrateStillVideoComposition(nodes: WorkflowDefinitionNodeV2[], edges: WorkflowDefinitionEdgeV2[]) {
+  const migratedKeys = new Set<string>();
+  const nextNodes = nodes.map((node) => {
+    if (node.type !== "video_generate" || node.config.requiresSubtitleBinding !== true) return node;
+    const incoming = edges.filter((edge) => edge.targetNodeKey === node.nodeKey);
+    const hasImage = incoming.some((edge) => ["image", "images", "referenceImages"].includes(edge.targetPortId));
+    const hasAudio = incoming.some((edge) => ["audio", "audios", "referenceAudios"].includes(edge.targetPortId));
+    const hasSubtitle = incoming.some((edge) => edge.targetPortId === "subtitle");
+    const hasVideo = incoming.some((edge) => ["video", "videos", "referenceVideos"].includes(edge.targetPortId));
+    if (!hasImage || !hasAudio || !hasSubtitle || hasVideo) return node;
+    migratedKeys.add(node.nodeKey);
+    const oldConfig = node.config;
+    const config = Object.fromEntries(Object.entries(oldConfig).filter(([key]) => [
+      "outputFormat", "subtitleMode", "fitMode", "fit", "width", "height", "fps", "ffmpegPath", "ffprobePath", "burnSubtitles",
+    ].includes(key)));
+    return {
+      ...node,
+      type: "video_compose" as const,
+      config: {
+        outputFormat: "mp4",
+        subtitleMode: oldConfig.burnSubtitles === false ? "none" : "burn_in",
+        fitMode: oldConfig.fitMode === "cover" || oldConfig.fit === "crop" ? "cover" : "contain",
+        ...config,
+      },
+    };
+  });
+  if (!migratedKeys.size) return { nodes, edges };
+  const nextEdges = edges.flatMap((edge) => {
+    if (!migratedKeys.has(edge.targetNodeKey)) return [edge];
+    if (["text", "prompt"].includes(edge.targetPortId)) return [];
+    const targetPortId = ["image", "images", "referenceImages"].includes(edge.targetPortId)
+      ? "image"
+      : ["audio", "audios", "referenceAudios"].includes(edge.targetPortId)
+        ? "audio"
+        : edge.targetPortId === "subtitle" ? "subtitle" : edge.targetPortId;
+    return [{ ...edge, targetPortId }];
+  });
+  return { nodes: nextNodes, edges: nextEdges };
+}
+
 export function migrateWorkflowDefinitionToCurrent(input: LegacyWorkflowDefinition | WorkflowDefinitionEnvelope, options?: number | WorkflowDefinitionMigrationOptions): WorkflowDefinitionEnvelope {
   if ((input as WorkflowDefinitionEnvelope).schemaVersion === CURRENT_WORKFLOW_SCHEMA_VERSION) {
     const current = input as WorkflowDefinitionEnvelope;
     const resolvedOptions = normalizeOptions(options);
-    const canonical = canonicalizeWorkflowDefinition({ ...current, schemaVersion: CURRENT_WORKFLOW_SCHEMA_VERSION, revision: Number.isInteger(current.revision) && current.revision > 0 ? current.revision : resolvedOptions.revision ?? 1, nodes: current.nodes.map((node) => ({ ...node, config: node.config ? JSON.parse(JSON.stringify(node.config)) : {} })), edges: current.edges.map((edge) => ({ ...edge })) });
+    const migrated = migrateStillVideoComposition(
+      current.nodes.map((node) => ({ ...node, config: node.config ? JSON.parse(JSON.stringify(node.config)) : {} })),
+      current.edges.map((edge) => ({ ...edge })),
+    );
+    const canonical = canonicalizeWorkflowDefinition({ ...current, schemaVersion: CURRENT_WORKFLOW_SCHEMA_VERSION, revision: Number.isInteger(current.revision) && current.revision > 0 ? current.revision : resolvedOptions.revision ?? 1, nodes: migrated.nodes, edges: migrated.edges });
     return { ...canonical, definitionHash: hashWorkflowDefinition(canonical) };
   }
   const legacy = input as LegacyWorkflowDefinition;
@@ -58,7 +108,8 @@ export function migrateWorkflowDefinitionToCurrent(input: LegacyWorkflowDefiniti
   const revision = Number.isInteger(resolvedOptions.revision) && Number(resolvedOptions.revision) > 0
     ? Number(resolvedOptions.revision)
     : Number.isInteger(legacy.revision) && Number(legacy.revision) > 0 ? Number(legacy.revision) : 1;
-  const canonical = canonicalizeWorkflowDefinition({ schemaVersion: CURRENT_WORKFLOW_SCHEMA_VERSION, revision, definitionHash: "", nodes, edges });
+  const migrated = migrateStillVideoComposition(nodes, edges);
+  const canonical = canonicalizeWorkflowDefinition({ schemaVersion: CURRENT_WORKFLOW_SCHEMA_VERSION, revision, definitionHash: "", nodes: migrated.nodes, edges: migrated.edges });
   return { ...canonical, definitionHash: hashWorkflowDefinition(canonical) };
 }
 

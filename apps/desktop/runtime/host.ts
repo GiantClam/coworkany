@@ -4,7 +4,7 @@ import { existsSync, statSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import { buildOpenCodeCommand, createOpenCodeEventParser, type OpenCodeRuntimeEvent } from "@coworkany/runtime-contracts/opencode";
-import { createBailianImageAdapter, createBailianVideoAdapter, createHttpMediaAdapter, createMiniMaxAudioAdapter, createMiniMaxVideoAdapter, createOpenAICompatibleImageAdapter, createRunningHubAdapter, createRunningHubWorkflowAdapter, downloadMediaOutputs, IMAGE_GENERATION_REQUEST_TIMEOUT_MS, listMiniMaxVoices, runMediaJob, uploadRunningHubMediaAsset, type MediaProviderId, type MediaProviderAdapter } from "@coworkany/media-runtime";
+import { createBailianImageAdapter, createBailianVideoAdapter, createHttpMediaAdapter, createMiniMaxAudioAdapter, createMiniMaxVideoAdapter, createOpenAICompatibleImageAdapter, createRunningHubAdapter, createRunningHubAiAppAdapter, createRunningHubWorkflowAdapter, downloadMediaOutputs, IMAGE_GENERATION_REQUEST_TIMEOUT_MS, listMiniMaxVoices, runMediaJob, uploadRunningHubMediaAsset, type MediaProviderId, type MediaProviderAdapter } from "@coworkany/media-runtime";
 import { executeWorkflow, migrateWorkflowDefinitionToCurrent, type WorkflowArtifactPort, type WorkflowCapabilityPort, type WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
 import { OpenCodeServeClient } from "./opencode-serve";
 import { createRpcReader, writeRpcResponse, writeRpcServiceRequest } from "./rpc";
@@ -35,6 +35,32 @@ let openCodeConfigWriteQueue: Promise<void> = Promise.resolve();
 let skillWorkspaceQueue: Promise<void> = Promise.resolve();
 let stagedSkillSourceKey = "";
 
+function defaultWorkspacePath() {
+  const runtimeRoot = process.env.OPENCODE_RUNTIME_DIR?.trim();
+  if (runtimeRoot) return join(runtimeRoot, "projects");
+  const home = process.env.HOME?.trim();
+  if (home) return join(home, "Library", "Application Support", "CoworkAny", "projects");
+  return join(process.cwd(), "projects");
+}
+
+/**
+ * Older packaged macOS launches could pass the app name as the workspace
+ * (`/CoworkAny`) when the process was started with `/` as its cwd. OpenCode
+ * then tries to create that root directory and fails before a session exists.
+ * Keep user-selected paths intact, but recover this known placeholder inside
+ * the host so both release and development launches use the local data root.
+ */
+function workspacePathFromPayload(value: unknown) {
+  const candidate = typeof value === "string" ? value.trim() : "";
+  if (!candidate || candidate === "/CoworkAny" || candidate === "CoworkAny") return candidate ? defaultWorkspacePath() : candidate;
+  // A stale packaged config can carry a relative or removed workspace. The
+  // desktop service writes artifacts under its configured project root, so a
+  // missing path must be normalized before it reaches the native service
+  // (which correctly refuses to canonicalize non-existent roots).
+  if (process.env.OPENCODE_RUNTIME_DIR?.trim() && !existsSync(candidate)) return defaultWorkspacePath();
+  return candidate;
+}
+
 function isAvailableWorkflowLocalFile(localPath: string) {
   try {
     return isAbsolute(localPath) && statSync(localPath).isFile();
@@ -43,13 +69,28 @@ function isAvailableWorkflowLocalFile(localPath: string) {
   }
 }
 
-function localPathFromWorkflowValue(value: unknown): string | undefined {
-  if (typeof value === "string" && isAbsolute(value)) return value;
+function localPathFromWorkflowValue(value: unknown, workspacePath?: string): string | undefined {
+  if (typeof value === "string") {
+    if (isAbsolute(value)) return value;
+    if (workspacePath && /^(?:\.?[\\/]?artifacts[\\/])/u.test(value.trim())) {
+      const workspaceRoot = resolve(workspacePath);
+      const candidate = resolve(workspaceRoot, value);
+      if (candidate.startsWith(`${workspaceRoot}${sep}`)) return candidate;
+    }
+    return undefined;
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   if (typeof record.url === "string" || typeof record.uri === "string" || typeof record.remoteUrl === "string") return undefined;
   const localPath = record.localPath;
-  return typeof localPath === "string" && isAbsolute(localPath) ? localPath : undefined;
+  if (typeof localPath === "string" && isAbsolute(localPath)) return localPath;
+  const relativePath = record.relativePath;
+  if (workspacePath && typeof relativePath === "string" && relativePath.trim() && !isAbsolute(relativePath)) {
+    const workspaceRoot = resolve(workspacePath);
+    const candidate = resolve(workspaceRoot, relativePath);
+    if (candidate.startsWith(`${workspaceRoot}${sep}`)) return candidate;
+  }
+  return undefined;
 }
 
 async function resolveRegisteredWorkflowInputs(
@@ -66,7 +107,7 @@ async function resolveRegisteredWorkflowInputs(
     const output: unknown[] = [];
     for (const value of values) {
       cancellation.throwIfCancelled();
-      const localPath = localPathFromWorkflowValue(value);
+      const localPath = localPathFromWorkflowValue(value, providerOptions.workspacePath);
       if (!localPath) {
         output.push(value);
         continue;
@@ -89,14 +130,17 @@ async function uploadDirectRunningHubMediaReferences(
   cancellation: { readonly signal?: AbortSignal; throwIfCancelled(): void },
 ) {
   const uploaded = new Map<string, string>();
-  for (const key of ["firstFrame", "lastFrame", "referenceImages", "sourceVideo", "referenceVideos", "referenceAudios"]) {
+  for (const key of ["firstFrame", "lastFrame", "referenceImages", "sourceVideo", "referenceVideos", "referenceAudios", "subtitle"]) {
     const references = Array.isArray(localMediaReferences[key]) ? localMediaReferences[key] : [];
     for (const reference of references) {
-      const localPath = localPathFromWorkflowValue(reference);
+      const localPath = localPathFromWorkflowValue(reference, providerOptions.workspacePath);
       if (!localPath || uploaded.has(localPath)) continue;
       const asset = await uploadRunningHubMediaAsset(providerOptions, localPath, cancellation);
       if (!asset.downloadUrl) throw new Error("runninghub_media_upload_url_required");
       uploaded.set(localPath, asset.downloadUrl);
+      if (reference && typeof reference === "object" && typeof (reference as Record<string, unknown>).relativePath === "string") {
+        uploaded.set((reference as Record<string, unknown>).relativePath as string, asset.downloadUrl);
+      }
     }
   }
   if (!uploaded.size) return input;
@@ -104,10 +148,10 @@ async function uploadDirectRunningHubMediaReferences(
     if (Array.isArray(value)) return value.map(replace);
     if (typeof value === "string") return uploaded.get(value) ?? value;
     if (!value || typeof value !== "object") return value;
-    const localPath = localPathFromWorkflowValue(value);
+    const localPath = localPathFromWorkflowValue(value, providerOptions.workspacePath);
     return localPath ? uploaded.get(localPath) ?? value : value;
   };
-  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, ["firstFrameUrl", "lastFrameUrl", "imageUrls", "referenceImageUrls", "sourceVideoUrl", "referenceVideoUrls", "referenceAudioUrls"].includes(key) ? replace(value) : value]));
+  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, ["firstFrameUrl", "lastFrameUrl", "imageUrls", "referenceImageUrls", "sourceVideoUrl", "referenceVideoUrls", "referenceAudioUrls", "subtitleFile"].includes(key) ? replace(value) : value]));
 }
 
 function defaultOpenCodeExecutable() {
@@ -203,7 +247,7 @@ function resolveServiceResponse(raw: Record<string, unknown>) {
 }
 
 async function extractAttachment(command: HostCommand) {
-  const workspacePath = typeof command.payload?.workspacePath === "string" ? command.payload.workspacePath : "";
+  const workspacePath = workspacePathFromPayload(command.payload?.workspacePath);
   const relativePath = typeof command.payload?.relativePath === "string" ? command.payload.relativePath : "";
   const fileName = typeof command.payload?.fileName === "string" ? command.payload.fileName : relativePath;
   const mediaType = typeof command.payload?.mediaType === "string" ? command.payload.mediaType : "";
@@ -292,6 +336,150 @@ function localFileArtifacts(workspacePath: string, events: readonly OpenCodeRunt
   });
 }
 
+function localToolPath(config: Record<string, unknown>, configKey: string, environmentKey: string, executableName: string) {
+  const configured = typeof config[configKey] === "string" ? config[configKey].trim() : "";
+  const environment = typeof process.env[environmentKey] === "string" ? process.env[environmentKey]!.trim() : "";
+  const candidates = [
+    configured,
+    environment,
+    join(dirname(process.execPath), executableName),
+    join(dirname(process.execPath), "..", executableName),
+    join(dirname(process.execPath), "..", "Resources", executableName),
+    join(dirname(process.execPath), "..", "..", executableName),
+    join(process.cwd(), "resources", executableName),
+    process.platform === "darwin" ? join("/opt/homebrew/bin", executableName) : "",
+    process.platform === "darwin" ? join("/usr/local/bin", executableName) : "",
+  ].filter(Boolean);
+  return candidates.find((candidate) => isAbsolute(candidate) && existsSync(candidate)) ?? executableName;
+}
+
+async function runLocalMediaTool(
+  executable: string,
+  args: readonly string[],
+  runId: string,
+  nodeKey: string,
+  signal: AbortSignal | undefined,
+  onStderr: (text: string) => void,
+) {
+  if (signal?.aborted) throw new Error("video_compose_cancelled");
+  return await new Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }>((resolvePromise, rejectPromise) => {
+    const activeKey = `${runId}:${nodeKey}:video_compose`;
+    const child = spawn(executable, [...args], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, cwd: process.cwd() });
+    active.set(activeKey, child);
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      active.delete(activeKey);
+      if (killTimer) clearTimeout(killTimer);
+      signal?.removeEventListener("abort", abort);
+    };
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback();
+    };
+    const abort = () => {
+      if (settled) return;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => { if (!settled) child.kill("SIGKILL"); }, 2_000);
+      killTimer.unref?.();
+    };
+    child.stdout.on("data", (chunk: Buffer | string) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      const text = String(chunk);
+      stderr = `${stderr}${text}`.slice(-64 * 1024);
+      onStderr(text.slice(-4096));
+    });
+    child.once("error", (error) => finish(() => rejectPromise(new Error(`video_compose_spawn_failed:${error.message}`))));
+    child.once("close", (code, closeSignal) => {
+      if (signal?.aborted || closeSignal === "SIGTERM" || closeSignal === "SIGKILL") {
+        finish(() => rejectPromise(new Error("video_compose_cancelled")));
+        return;
+      }
+      finish(() => resolvePromise({ code: code ?? 1, stdout, stderr }));
+    });
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function localComposeInput(values: unknown[], workspacePath: string, role: string) {
+  for (const value of flattenWorkflowValues(values)) {
+    const localPath = localPathFromWorkflowValue(value, workspacePath);
+    if (localPath && isAvailableWorkflowLocalFile(localPath)) return localPath;
+  }
+  throw new Error(`video_compose_${role}_required`);
+}
+
+function subtitleFilterPath(path: string) {
+  return path.replaceAll("\\", "\\\\").replaceAll(":", "\\:").replaceAll("'", "\\'").replaceAll(",", "\\,");
+}
+
+async function runVideoCompose(
+  command: HostCommand,
+  runId: string,
+  nodeKey: string,
+  config: Record<string, unknown>,
+  inputs: Record<string, unknown>,
+  workspacePath: string,
+  artifactPort: WorkflowArtifactPort,
+  signal?: AbortSignal,
+) {
+  const image = localComposeInput([inputs.image, inputs.images, inputs.asset, config.image, config.imagePath], workspacePath, "image");
+  const audio = localComposeInput([inputs.audio, inputs.audios, config.audio, config.audioPath], workspacePath, "audio");
+  let subtitle: string | undefined;
+  try {
+    subtitle = localComposeInput([inputs.subtitle, inputs.subtitles, config.subtitle, config.subtitleFile, config.subtitleFilePath], workspacePath, "subtitle");
+  } catch (error) {
+    if (!String(error instanceof Error ? error.message : error).endsWith("_subtitle_required")) throw error;
+  }
+  const outputDirectory = join(workspacePath, "artifacts", runId.replace(/[^a-zA-Z0-9_-]/g, "_"), nodeKey.replace(/[^a-zA-Z0-9_-]/g, "_"));
+  await mkdir(outputDirectory, { recursive: true });
+  const outputPath = join(outputDirectory, "video-compose.mp4");
+  const ffmpeg = localToolPath(config, "ffmpegPath", "COWORKANY_FFMPEG_PATH", "ffmpeg");
+  const ffprobe = localToolPath(config, "ffprobePath", "COWORKANY_FFPROBE_PATH", "ffprobe");
+  const log = (phase: "started" | "progress" | "completed" | "failed", message: string) => emit(command, { event: "tool_event", tool: "video_compose", phase, message: message.slice(0, 64 * 1024), runId });
+  log("started", JSON.stringify({ nodeKey, image, audio, subtitle, ffmpeg, outputPath, status: "started" }));
+  let duration: number | undefined;
+  try {
+    const probe = await runLocalMediaTool(ffprobe, ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio], runId, nodeKey, signal, (text) => log("progress", JSON.stringify({ tool: "ffprobe", stderr: text })));
+    const parsed = Number.parseFloat(probe.stdout.trim());
+    if (probe.code === 0 && Number.isFinite(parsed) && parsed > 0) duration = parsed;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    log("progress", JSON.stringify({ tool: "ffprobe", warning: error instanceof Error ? error.message : String(error) }));
+  }
+  const width = Number(config.width ?? 1920);
+  const height = Number(config.height ?? 1080);
+  const fps = Number(config.fps ?? 30);
+  if (!Number.isInteger(width) || width < 16 || !Number.isInteger(height) || height < 16 || !Number.isFinite(fps) || fps <= 0 || fps > 120) throw new Error("video_compose_dimensions_invalid");
+  const fitMode = config.fitMode === "cover" || config.fit === "crop" ? "cover" : "contain";
+  const fit = fitMode === "cover" ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}` : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`;
+  const subtitleMode = config.subtitleMode === "separate_track" || config.subtitleMode === "track" ? "track" : config.subtitleMode === "none" || config.burnSubtitles === false ? "none" : "burn-in";
+  const filter = subtitle && subtitleMode === "burn-in" ? `${fit},subtitles='${subtitleFilterPath(subtitle)}',format=yuv420p` : `${fit},format=yuv420p`;
+  const args = ["-y", "-hide_banner", "-loglevel", "warning", "-loop", "1", "-framerate", String(fps), "-i", image, "-i", audio];
+  if (subtitle && subtitleMode === "track") args.push("-i", subtitle);
+  args.push("-map", "0:v:0", "-map", "1:a:0", "-vf", filter, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart");
+  if (subtitle && subtitleMode === "track") args.push("-map", "2:0", "-c:s", "mov_text");
+  args.push("-shortest");
+  if (duration) args.push("-t", duration.toFixed(3));
+  args.push(outputPath);
+  const result = await runLocalMediaTool(ffmpeg, args, runId, nodeKey, signal, (text) => log("progress", JSON.stringify({ tool: "ffmpeg", stderr: text })));
+  if (result.code !== 0 || !isAvailableWorkflowLocalFile(outputPath)) {
+    log("failed", JSON.stringify({ status: "failed", exitCode: result.code, stderr: result.stderr.slice(-8192) }));
+    throw new Error(`video_compose_ffmpeg_failed:${result.code}`);
+  }
+  const outputBytes = await readFile(outputPath);
+  const relativeOutput = relativePath(resolve(workspacePath), outputPath).replaceAll("\\", "/");
+  const metadata = { relativePath: relativeOutput, localPath: outputPath, mimeType: "video/mp4", byteLength: outputBytes.byteLength, bytes: outputBytes.byteLength, sha256: createHash("sha256").update(new Uint8Array(outputBytes)).digest("hex") };
+  const registration = await artifactPort.register({ relativePath: relativeOutput, mimeType: metadata.mimeType, byteLength: metadata.byteLength, sha256: metadata.sha256 });
+  const artifact = { ...metadata, artifactId: registration.artifactId, registered: true };
+  log("completed", JSON.stringify({ status: "succeeded", artifact }));
+  return { artifacts: [artifact], asset: artifact, video: [artifact], status: "succeeded" };
+}
+
 async function emitFinalFileArtifacts(command: HostCommand, runId: string, workspacePath: string, events: readonly OpenCodeRuntimeEvent[], allowArtifacts: boolean) {
   if (!allowArtifacts) return;
   // Emit only after the model turn has completed. Repeated writes are
@@ -338,7 +526,7 @@ async function runOpenCode(command: HostCommand, session?: { readonly workspaceP
   const activeProvider = provider ?? session?.provider;
   if (!(activeProvider?.model?.trim() || modelHint?.trim())) return fail(command, "text_provider_model_required", "Configure a text Provider and model before sending.");
   const executable = typeof command.payload?.executable === "string" ? command.payload.executable : defaultOpenCodeExecutable();
-  const workspacePath = session?.workspacePath ?? (typeof command.payload?.workspacePath === "string" ? command.payload.workspacePath : process.cwd());
+  const workspacePath = session?.workspacePath ?? (workspacePathFromPayload(command.payload?.workspacePath) || process.cwd());
   const configDirectory = await prepareSkillWorkspace(workspacePath);
   const agentName = await preparedAgentName(configDirectory, agentId);
   const environment = await createOpenCodeEnvironment(configDirectory, provider, modelHint, agentId);
@@ -433,6 +621,47 @@ async function runDirectTextCapability(command: HostCommand, executorId: string,
   const text = readTextResponse(payload);
   emit(command, { event: "text_delta", delta: text, runId: command.runId ?? "" });
   return { text, executorId };
+}
+
+async function runRunningHubAudioTranscription(command: HostCommand, runId: string, nodeKey: string, config: Record<string, unknown>, inputs: Record<string, unknown>, workspacePath: string, signal?: AbortSignal, resumeProviderTaskId?: string) {
+  const providerProfiles = readProviderMap(command.payload?.providers);
+  const configuredProvider = command.payload?.provider && typeof command.payload.provider === "object" ? command.payload.provider as Record<string, unknown> : undefined;
+  const providerId = typeof config.provider === "string" && config.provider.trim() ? config.provider.trim() : typeof config.selectedProviderId === "string" && config.selectedProviderId.trim() ? config.selectedProviderId.trim() : typeof configuredProvider?.id === "string" ? configuredProvider.id : "";
+  const provider = providerProfiles[providerId] ?? readProvider(configuredProvider);
+  if (!provider || provider.source?.trim().toLowerCase() !== "runninghub") throw new Error("runninghub_audio_transcription_provider_required");
+  const workflows = provider.workflows?.filter((workflow) => workflow.capability === "audio_transcription") ?? [];
+  const requestedWorkflow = typeof config.selectedModelId === "string" && config.selectedModelId.trim() ? config.selectedModelId.trim() : typeof config.model === "string" ? config.model.trim() : "";
+  const registration = workflows.find((workflow) => workflow.id === requestedWorkflow || workflow.remoteWorkflowId === requestedWorkflow) ?? (workflows.length === 1 ? workflows[0] : undefined);
+  if (!registration || registration.request?.kind !== "ai-app") throw new Error("runninghub_audio_transcription_registration_required");
+  const providerOptions = { provider: (provider.id ?? providerId) as MediaProviderId, baseUrl: provider.baseUrl ?? "https://www.runninghub.cn", apiKey: provider.apiKey ?? "", fetchImpl: fetch, workspacePath };
+  const inputSource = { ...config, ...inputs };
+  const resolvedInputs = await resolveRegisteredWorkflowInputs(registration, inputSource, providerOptions, { signal, throwIfCancelled() { if (signal?.aborted) throw new Error("media_cancelled"); } });
+  const adapter = createRunningHubAiAppAdapter({ ...providerOptions, appId: registration.remoteWorkflowId, bindings: registration.nodeBindings, submitPath: registration.request.submitPath, queryPath: registration.request.queryPath });
+  const idempotencyKey = `${runId}:${nodeKey}:1`;
+  emit(command, { event: "tool_event", tool: "media:audio_transcription", phase: "started", message: JSON.stringify({ provider: providerOptions.provider, model: registration.remoteWorkflowId, executorId: "audio_transcription", nodeKey, idempotencyKey, status: "queued" }), runId });
+  let task: Awaited<ReturnType<typeof runMediaJob>>;
+  try {
+    task = await retryTransientMediaJob(() => runMediaJob(adapter, { provider: providerOptions.provider, modelId: registration.remoteWorkflowId, input: resolvedInputs, idempotencyKey }, { signal, throwIfCancelled() { if (signal?.aborted) throw new Error("media_cancelled"); } }, {
+      pollIntervalMs: 1000,
+      timeoutMs: 30 * 60 * 1000,
+      ...(resumeProviderTaskId ? { initialTask: { providerTaskId: resumeProviderTaskId, status: "queued", outputs: [] } } : {}),
+      onSubmitted: async (submitted) => emit(command, { event: "tool_event", tool: "media:audio_transcription", phase: "started", message: JSON.stringify({ provider: providerOptions.provider, model: registration.remoteWorkflowId, executorId: "audio_transcription", nodeKey, providerTaskId: submitted.providerTaskId, idempotencyKey, status: submitted.status === "succeeded" ? "submitted" : submitted.status }), runId }),
+      onUpdate: async (updated) => emit(command, { event: "tool_event", tool: "media:audio_transcription", phase: "progress", message: JSON.stringify({ provider: providerOptions.provider, model: registration.remoteWorkflowId, executorId: "audio_transcription", nodeKey, providerTaskId: updated.providerTaskId, idempotencyKey, status: updated.status === "succeeded" ? "submitted" : updated.status, providerStatus: updated.providerStatus, ...(updated.error ? { error: updated.error } : {}) }), runId }),
+    }));
+  } catch (error) {
+    const status = signal?.aborted || (error instanceof Error && error.message === "media_cancelled") ? "cancelled" : "failed";
+    emit(command, { event: "tool_event", tool: "media:audio_transcription", phase: "failed", message: JSON.stringify({ provider: providerOptions.provider, model: registration.remoteWorkflowId, executorId: "audio_transcription", nodeKey, providerTaskId: resumeProviderTaskId, idempotencyKey, status, stage: "provider_request", error: error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180) }), runId });
+    throw error;
+  }
+  if (task.status !== "succeeded") {
+    emit(command, { event: "tool_event", tool: "media:audio_transcription", phase: "failed", message: JSON.stringify({ provider: providerOptions.provider, model: registration.remoteWorkflowId, executorId: "audio_transcription", nodeKey, providerTaskId: task.providerTaskId, idempotencyKey, status: task.status, ...(task.providerStatus ? { providerStatus: task.providerStatus } : {}), ...(task.error ? { error: task.error } : {}) }), runId });
+    throw new Error(`runninghub_audio_transcription_${task.status}${task.error ? `:${task.error}` : ""}`);
+  }
+  const text = task.outputs.map((output) => typeof output.text === "string" ? output.text.trim() : "").filter(Boolean).join("\n\n");
+  if (!text) throw new Error("runninghub_audio_transcription_empty_result");
+  emit(command, { event: "tool_event", tool: "media:audio_transcription", phase: "completed", message: JSON.stringify({ provider: providerOptions.provider, model: registration.remoteWorkflowId, executorId: "audio_transcription", nodeKey, providerTaskId: task.providerTaskId, idempotencyKey, status: "succeeded" }), runId });
+  emit(command, { event: "text_delta", delta: text, runId });
+  return { text, providerTaskId: task.providerTaskId, status: task.status };
 }
 
 function enrichUsageEvent(event: OpenCodeRuntimeEvent, provider: ProviderConfig | undefined, modelHint: string | undefined): OpenCodeRuntimeEvent {
@@ -687,7 +916,9 @@ async function stageSkillWorkspace(workspacePath: string) {
   // every serve start. Pin this deployment for the host lifetime: upgrading
   // on a session boundary can replace files underneath another active task.
   const runtimeConfigRoot = process.env.COWORKANY_OPENCODE_CONFIG_DIR
-    ?? join(process.env.LOCALAPPDATA ?? process.env.TEMP ?? process.cwd(), "CoworkAny", "opencode-config");
+    ?? (process.env.OPENCODE_RUNTIME_DIR?.trim()
+      ? join(process.env.OPENCODE_RUNTIME_DIR, "opencode-config")
+      : join(process.env.LOCALAPPDATA ?? process.env.TEMP ?? process.cwd(), "CoworkAny", "opencode-config"));
   const configDirectory = join(runtimeConfigRoot, "config");
   if (stagedSkillSourceKey) return configDirectory;
   const sourceMarker = async (root: string | undefined) => {
@@ -757,7 +988,7 @@ async function stageSkillWorkspace(workspacePath: string) {
 async function runWorkflow(command: HostCommand) {
   const definition = command.payload?.definition;
   if (!definition || typeof definition !== "object") return fail(command, "invalid_workflow", "workflow definition is required");
-  const runId = command.runId ?? randomUUID(); const workspacePath = typeof command.payload?.workspacePath === "string" ? command.payload.workspacePath : process.cwd();
+  const runId = command.runId ?? randomUUID(); const workspacePath = workspacePathFromPayload(command.payload?.workspacePath) || process.cwd();
   respond(command, { runId });
   const normalizedDefinition = migrateWorkflowDefinitionToCurrent(definition as WorkflowDefinitionEnvelope);
   const controller = new AbortController(); workflowControllers.set(runId, controller);
@@ -783,7 +1014,7 @@ async function runWorkflow(command: HostCommand) {
         };
       }
       if (executorId === "collect" || executorId === "output") return inputs;
-      if (executorId === "product_store") return storeWorkflowArtifacts(workspacePath, runId, nodeKey, config, inputs, artifactPort, (method, payload) => requestService(method, payload, signal));
+      if (executorId === "product_store") return storeWorkflowArtifacts(workspacePath, runId, nodeKey, config, inputs, artifactPort);
       if (executorId === "foreach") {
         const inputPort = typeof config.inputPortId === "string" && config.inputPortId.startsWith("asset") ? "asset" : "image";
         const source = inputs[`items.${inputPort}`] ?? inputs[`${inputPort}s`] ?? inputs[inputPort];
@@ -791,11 +1022,15 @@ async function runWorkflow(command: HostCommand) {
         return inputPort === "asset" ? { assets: values, asset: values } : { images: values, image: values };
       }
       if (executorId === "file_create") {
-        const output = await createFileArtifact(workspacePath, runId, nodeKey, config, inputs, (method, payload) => requestService(method, payload, signal));
+        const output = await createFileArtifact(workspacePath, runId, nodeKey, config, inputs);
         const extension = output.artifact.relativePath.toLowerCase().split(".").pop() ?? "bin";
-        const mimeType = extension === "md" ? "text/markdown" : extension === "txt" ? "text/plain" : "application/octet-stream";
+        const mimeType = extension === "md" ? "text/markdown" : extension === "txt" ? "text/plain" : extension === "srt" ? "application/x-subrip" : "application/octet-stream";
         const registration = await artifactPort.register({ relativePath: output.artifact.relativePath, mimeType, byteLength: output.artifact.bytes, sha256: output.artifact.sha256 });
-        return { ...output, artifact: { ...output.artifact, artifactId: registration.artifactId, registered: true } };
+        const artifact = { ...output.artifact, artifactId: registration.artifactId, mimeType, registered: true };
+        // Keep the file-create result usable as a downstream media asset. The
+        // artifact remains relative and portable; the host resolves it only
+        // when a provider binding explicitly requests an upload.
+        return { ...output, artifact, asset: artifact };
       }
       if (executorId === "knowledge_retrieve") {
         const indexPath = typeof config.indexPath === "string" ? config.indexPath : typeof command.payload?.indexPath === "string" ? command.payload.indexPath : "";
@@ -816,7 +1051,9 @@ async function runWorkflow(command: HostCommand) {
         const artifact = { artifactId: registration.artifactId, localPath: result.localPath, relativePath: result.relativePath, mimeType: result.mimeType, byteLength: result.byteLength, sha256: result.sha256 };
         return { artifacts: [artifact], ...(executorId === "video_process" ? { video: [artifact], videos: [artifact] } : { audio: [artifact], audios: [artifact] }) };
       }
+      if (executorId === "video_compose") return runVideoCompose(command, runId, nodeKey, config, inputs, workspacePath, artifactPort, signal);
       if (["image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate"].includes(executorId)) return runMediaCapability(command, runId, nodeKey, executorId, config, inputs, workspacePath, signal);
+      if (executorId === "agent_execute" && config.operation === "audio_transcription") return runRunningHubAudioTranscription(command, runId, nodeKey, config, inputs, workspacePath, signal);
       if (["writer", "llm_generate"].includes(executorId)) {
         const configuredTextProvider = readProvider(command.payload?.provider);
         // Keep fixture/local OpenCode workflows on the session path when no
@@ -843,6 +1080,8 @@ async function runWorkflow(command: HostCommand) {
       if (["image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate"].includes(executorId)) {
         return runMediaCapability(command, runId, nodeKey, executorId, config, inputs, workspacePath, signal, providerTaskId);
       }
+      if (executorId === "video_compose") return runVideoCompose(command, runId, nodeKey, config, inputs, workspacePath, artifactPort, signal);
+      if (executorId === "agent_execute" && config.operation === "audio_transcription") return runRunningHubAudioTranscription(command, runId, nodeKey, config, inputs, workspacePath, signal, providerTaskId);
       throw new Error(`workflow_recovery_unsupported:${executorId}`);
     } };
   const ports = createDesktopWorkflowPorts({ runId, emit: (event) => emit(command, event), requestService: (method, payload) => requestService(method, payload, controller.signal), capability });
@@ -887,7 +1126,7 @@ function assetLibraryFileName(config: Record<string, unknown>, nodeKey: string) 
   return safeName.includes(".") ? safeName : `${safeName}.md`;
 }
 
-async function storeWorkflowArtifacts(workspacePath: string, runId: string, nodeKey: string, config: Record<string, unknown>, inputs: Record<string, unknown>, artifactPort: WorkflowArtifactPort, writeService: (method: "runtime.artifact.write", payload: Record<string, unknown>) => Promise<Record<string, unknown>>) {
+async function storeWorkflowArtifacts(workspacePath: string, runId: string, nodeKey: string, config: Record<string, unknown>, inputs: Record<string, unknown>, artifactPort: WorkflowArtifactPort) {
   const artifacts: Array<Record<string, unknown>> = [];
   const registeredPaths = new Set<string>();
   const register = async (artifact: { readonly relativePath: string; readonly mimeType: string; readonly byteLength: number; readonly sha256: string }) => {
@@ -901,7 +1140,11 @@ async function storeWorkflowArtifacts(workspacePath: string, runId: string, node
     const relativePath = join("artifacts", runId.replace(/[^a-zA-Z0-9_-]/g, "_"), nodeKey.replace(/[^a-zA-Z0-9_-]/g, "_"), assetLibraryFileName(config, nodeKey)).replaceAll("\\", "/");
     const content = text.join("\n\n");
     const mimeType = fileArtifactMimeType(relativePath);
-    const written = await writeService("runtime.artifact.write", { relativePath, mimeType, content, workspacePath });
+    const target = resolve(workspacePath, relativePath);
+    if (!target.startsWith(`${resolve(workspacePath)}${sep}`)) throw new Error("runtime_artifact_path_escape");
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content, "utf8");
+    const written = { relativePath, mimeType, byteLength: Buffer.byteLength(content, "utf8"), sha256: createHash("sha256").update(content).digest("hex") };
     await register({
       relativePath: typeof written.relativePath === "string" ? written.relativePath : relativePath,
       mimeType: typeof written.mimeType === "string" ? written.mimeType : mimeType,
@@ -917,15 +1160,19 @@ async function storeWorkflowArtifacts(workspacePath: string, runId: string, node
   return { stored: true, artifacts, artifactIds: artifacts.map((artifact) => artifact.artifactId) };
 }
 
-async function createFileArtifact(workspacePath: string, runId: string, nodeKey: string, config: Record<string, unknown>, inputs: Record<string, unknown>, writeService: (method: "runtime.artifact.write", payload: Record<string, unknown>) => Promise<Record<string, unknown>>) {
+async function createFileArtifact(workspacePath: string, runId: string, nodeKey: string, config: Record<string, unknown>, inputs: Record<string, unknown>) {
   const directory = join("artifacts", runId.replace(/[^a-zA-Z0-9_-]/g, "_"));
   const requested = typeof config.fileName === "string" && config.fileName.trim() ? config.fileName.trim() : `${nodeKey}.md`;
   const safeName = requested.replace(/[\\/]/g, "_").replace(/\.\.+/g, "_").replace(/[^a-zA-Z0-9._ -]/g, "_").slice(0, 160) || `${nodeKey}.md`;
   const content = typeof inputs.text === "string" ? inputs.text : JSON.stringify(inputs, null, 2);
   const relativePath = `${directory}/${safeName}`;
   const extension = safeName.toLowerCase().split(".").pop() ?? "bin";
-  const mimeType = extension === "md" ? "text/markdown" : extension === "txt" ? "text/plain" : extension === "json" ? "application/json" : "application/octet-stream";
-  const result = await writeService("runtime.artifact.write", { relativePath, mimeType, content, workspacePath });
+  const mimeType = extension === "md" ? "text/markdown" : extension === "txt" ? "text/plain" : extension === "srt" ? "application/x-subrip" : extension === "json" ? "application/json" : "application/octet-stream";
+  const target = resolve(workspacePath, relativePath);
+  if (!target.startsWith(`${resolve(workspacePath)}${sep}`)) throw new Error("runtime_artifact_path_escape");
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, content, "utf8");
+  const result = { relativePath, mimeType, byteLength: Buffer.byteLength(content, "utf8"), sha256: createHash("sha256").update(content).digest("hex") };
   return { artifact: { relativePath: typeof result.relativePath === "string" ? result.relativePath : relativePath, bytes: Number(result.byteLength ?? Buffer.byteLength(content, "utf8")), sha256: typeof result.sha256 === "string" ? result.sha256 : "" }, text: content };
 }
 
@@ -1021,6 +1268,12 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   // an endpoint nor a registered workflow still fails with an actionable
   // configuration error.
   if (providerKind.includes("runninghub") && workflowCapability && !registeredWorkflow && !configuredEndpoint) throw new Error(`runninghub_workflow_registration_required:${workflowCapability}`);
+  if (config.requiresSubtitleBinding === true && (!registeredWorkflow || !registeredWorkflow.nodeBindings.some((binding) => ["subtitle", "subtitleFile"].includes(binding.inputId) && (binding.valueType === "file" || binding.valueType === "file_list")))) {
+    throw new Error("runninghub_video_subtitle_binding_required");
+  }
+  if (config.requiresCharacterImageBindings === true && (!registeredWorkflow || !registeredWorkflow.nodeBindings.some((binding) => binding.inputId === "referenceImage" && binding.valueType === "file") || !registeredWorkflow.nodeBindings.some((binding) => binding.inputId === "characterImage" && binding.valueType === "file"))) {
+    throw new Error("runninghub_image_character_bindings_required");
+  }
   const registeredWorkflowAdapter = providerKind.includes("runninghub") && registeredWorkflow && (registeredWorkflow.capability === "image" || registeredWorkflow.capability === "video" || registeredWorkflow.capability === "digital_human" || registeredWorkflow.capability === "video_enhance" || registeredWorkflow.capability === "audio")
     ? createRunningHubWorkflowAdapter({ ...providerOptions, workflowId: registeredWorkflow.remoteWorkflowId, bindings: registeredWorkflow.nodeBindings, queryPath: typeof config.queryEndpoint === "string" ? config.queryEndpoint : profile?.queryEndpoint ?? "/openapi/v2/query" })
     : undefined;
@@ -1079,6 +1332,19 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
     }
     if (registeredWorkflow.capability === "video_enhance" && registeredInputSource.sourceVideoUrl === undefined) {
       registeredInputSource.sourceVideoUrl = registeredInputSource.videos ?? registeredInputSource.video ?? localMediaReferences.sourceVideo;
+    }
+    if (registeredWorkflow.capability === "image") {
+      const imageReferences = registeredInputSource.referenceImageUrls ?? registeredInputSource.referenceImages ?? registeredInputSource.images;
+      if (registeredInputSource.referenceImages === undefined && imageReferences !== undefined) registeredInputSource.referenceImages = imageReferences;
+      if (registeredInputSource.referenceImage === undefined && Array.isArray(imageReferences)) registeredInputSource.referenceImage = imageReferences[0];
+      if (registeredInputSource.characterImage === undefined && Array.isArray(imageReferences)) registeredInputSource.characterImage = imageReferences[1];
+    }
+    if (registeredWorkflow.capability === "video") {
+      if (registeredInputSource.referenceImages === undefined) registeredInputSource.referenceImages = registeredInputSource.referenceImageUrls ?? registeredInputSource.images;
+      if (registeredInputSource.referenceVideos === undefined) registeredInputSource.referenceVideos = registeredInputSource.referenceVideoUrls;
+      if (registeredInputSource.referenceAudio === undefined) registeredInputSource.referenceAudio = registeredInputSource.referenceAudios ?? registeredInputSource.referenceAudioUrls;
+      if (registeredInputSource.sourceVideo === undefined) registeredInputSource.sourceVideo = registeredInputSource.sourceVideoUrl;
+      if (registeredInputSource.subtitle === undefined) registeredInputSource.subtitle = registeredInputSource.subtitleFile;
     }
     const registeredInputs = await resolveRegisteredWorkflowInputs(registeredWorkflow, registeredInputSource, providerOptions, cancellation);
     Object.assign(providerInput, registeredInputs);
@@ -1184,7 +1450,7 @@ async function resumeMediaRun(command: HostCommand) {
   if (!providerTaskId) return fail(command, "media_resume_task_missing", "providerTaskId is required");
   respond(command, { runId, resumed: true, providerTaskId });
   try {
-    const workspacePath = typeof command.payload?.workspacePath === "string" ? command.payload.workspacePath : process.cwd();
+    const workspacePath = workspacePathFromPayload(command.payload?.workspacePath) || process.cwd();
     const result = await runMediaCapability(command, runId, nodeKey, executorId, config, {}, workspacePath, undefined, providerTaskId);
     for (const artifact of Array.isArray(result.artifacts) ? result.artifacts : []) emit(command, { event: "tool_event", tool: `artifact:${nodeKey}`, phase: "completed", message: JSON.stringify(artifact), runId });
     emit(command, { event: "done", runId });
@@ -1240,7 +1506,7 @@ const hostReader = createRpcReader(process.stdin, (raw) => {
   if (command.type === "attachment.extract") return void extractAttachment(command);
   if (command.type === "session.create") {
     const conversationId = typeof command.payload?.conversationId === "string" ? command.payload.conversationId : "";
-    const workspacePath = typeof command.payload?.workspacePath === "string" ? command.payload.workspacePath : "";
+    const workspacePath = workspacePathFromPayload(command.payload?.workspacePath);
     if (!conversationId || !workspacePath) return fail(command, "invalid_session", "conversationId and workspacePath are required");
     const provider = readProvider(command.payload?.provider);
     return void (async () => {
@@ -1259,7 +1525,7 @@ const hostReader = createRpcReader(process.stdin, (raw) => {
   }
   if (command.type === "session.attach") {
     const conversationId = typeof command.payload?.conversationId === "string" ? command.payload.conversationId : "";
-    const workspacePath = typeof command.payload?.workspacePath === "string" ? command.payload.workspacePath : "";
+    const workspacePath = workspacePathFromPayload(command.payload?.workspacePath);
     const requestedSessionId = typeof command.payload?.sessionId === "string" ? command.payload.sessionId : "";
     if (!conversationId || !workspacePath || !requestedSessionId) return fail(command, "invalid_session", "conversationId, workspacePath and sessionId are required");
     const provider = readProvider(command.payload?.provider);

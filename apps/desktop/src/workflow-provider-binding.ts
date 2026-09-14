@@ -22,6 +22,7 @@ const PROVIDER_NODE_TYPES = new Set<WorkflowNodeType>([
 ]);
 
 function runningHubWorkflowCapabilityForNode(node: WorkflowDefinitionEnvelope["nodes"][number]) {
+  if (node.type === "agent_execute" && node.config.operation === "audio_transcription") return "audio_transcription" as const;
   if (node.type === "image_generate") return "image" as const;
   if (node.type === "digital_human") return "digital_human" as const;
   if (node.type === "video_generate") return node.config.featureId === "video-enhance" ? "video_enhance" as const : "video" as const;
@@ -53,6 +54,8 @@ export function bindWorkflowProviderDefaults(definition: WorkflowDefinitionEnvel
       const selectedProfile = selectedProviderId ? config.providers?.[selectedProviderId] : undefined;
       const provider = selectedProfile && supportsProviderCapability(selectedProfile, capability)
         ? providerForId(config, selectedProviderId)
+        : selectedProfile && node.type === "agent_execute" && node.config.operation === "audio_transcription" && selectedProfile.source?.trim().toLowerCase() === "runninghub" && selectedProfile.workflows?.some((workflow) => workflow.capability === "audio_transcription")
+          ? providerForId(config, selectedProviderId)
         : providerForCapability(config, capability);
       const workflowCapability = runningHubWorkflowCapabilityForNode(node);
       const registeredWorkflows = isRunningHubProvider(provider) && workflowCapability

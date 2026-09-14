@@ -52,6 +52,16 @@ test("marks raw local reference paths as workflow attachments", () => {
   assert.deepEqual(input.referenceImageUrls, ["C:\\media\\raw-reference.png"]);
 });
 
+test("keeps character replacement image roles distinct for registered workflows", () => {
+  const input = buildMediaCapabilityInput("image_generate", {}, {
+    referenceImage: [{ url: "https://files.example.test/background.png" }],
+    characterImage: [{ url: "https://files.example.test/person.png" }],
+  });
+  assert.deepEqual(input.referenceImageUrls, ["https://files.example.test/background.png", "https://files.example.test/person.png"]);
+  assert.equal(input.referenceImage, "https://files.example.test/background.png");
+  assert.equal(input.characterImage, "https://files.example.test/person.png");
+});
+
 test("preserves local video image roles for provider-specific data-url conversion", () => {
   const input = buildMediaCapabilityInput("video_generate", {}, {
     images: [{ fileName: "first.png", mimeType: "image/png", localPath: "C:\\media\\first.png" }],
@@ -142,6 +152,24 @@ test("keeps a connected video prompt when an older node is still marked text-to-
   assert.equal(input.firstFrameUrl, "https://example.test/first.png");
   assert.equal(input.featureId, "text-to-video");
   assert.equal(input.mode, "auto");
+});
+
+test("joins multiple text edges so ASR text reaches the video provider prompt", () => {
+  const input = buildMediaCapabilityInput("video_generate", { prompt: "Render subtitles" }, {
+    text: ["Create motion from the image", "1\n00:00:00,000 --> 00:00:01,000\nHello"],
+  });
+  assert.equal(input.prompt, "Create motion from the image\n\n1\n00:00:00,000 --> 00:00:01,000\nHello\n\nRender subtitles");
+});
+
+test("preserves the generated subtitle artifact as a video provider input", () => {
+  const input = buildMediaCapabilityInput("video_generate", {}, {
+    subtitle: [{ relativePath: "artifacts/run/subtitles.srt", mimeType: "application/x-subrip" }],
+  });
+  assert.equal(input.subtitleFile, "artifacts/run/subtitles.srt");
+  assert.deepEqual(input.localMediaReferences, {
+    firstFrame: [], lastFrame: [], referenceImages: [], sourceVideo: [], referenceVideos: [], referenceAudios: [],
+    subtitle: [{ relativePath: "artifacts/run/subtitles.srt", mimeType: "application/x-subrip" }],
+  });
 });
 
 test("keeps workflow local file paths out of node metadata and exposes them only as runtime attachments", () => {

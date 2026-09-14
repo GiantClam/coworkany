@@ -1,7 +1,8 @@
 import { hashWorkflowText } from "@coworkany/workflow-core";
 
-export type RunningHubWorkflowCapability = "image" | "video" | "digital_human" | "video_enhance" | "audio";
-export type RunningHubWorkflowSourceKind = "url" | "manual" | "runninghub-api-json" | "comfyui-api-json" | "comfyui-ui-json";
+export type RunningHubWorkflowCapability = "image" | "video" | "digital_human" | "video_enhance" | "audio" | "audio_transcription";
+export type RunningHubWorkflowSourceKind = "url" | "manual" | "runninghub-api-json" | "runninghub-ai-app" | "comfyui-api-json" | "comfyui-ui-json";
+export type RunningHubWorkflowRequestKind = "workflow" | "ai-app";
 export type RunningHubWorkflowFieldType = "text" | "textarea" | "number" | "integer" | "boolean" | "select" | "image" | "image_list" | "video" | "audio" | "file" | "json";
 
 export type RunningHubWorkflowInputField = {
@@ -31,7 +32,7 @@ export type RunningHubNodeBinding = {
 
 export type RunningHubWorkflowOutputField = {
   readonly id: string;
-  readonly type: "image" | "video" | "audio" | "file" | "json";
+  readonly type: "text" | "image" | "video" | "audio" | "file" | "json";
   readonly nodeId?: string;
   readonly fieldName?: string;
   readonly required?: boolean;
@@ -46,6 +47,7 @@ export type RunningHubWorkflowRegistration = {
   readonly version: number;
   readonly definitionHash: string;
   readonly source: { readonly kind: RunningHubWorkflowSourceKind; readonly url?: string; readonly importedAt: string };
+  readonly request?: { readonly kind: RunningHubWorkflowRequestKind; readonly submitPath?: string; readonly queryPath?: string };
   readonly inputSchema: readonly RunningHubWorkflowInputField[];
   readonly nodeBindings: readonly RunningHubNodeBinding[];
   readonly outputSchema: readonly RunningHubWorkflowOutputField[];
@@ -68,8 +70,9 @@ const text = (value: unknown) => typeof value === "string" && value.trim() ? val
 const normalizeId = (value: string) => value.trim().replace(/[^a-zA-Z0-9_.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80) || "input";
 
 export function runningHubWorkflowIdFromUrl(value: string): string | undefined {
-  const match = value.trim().match(/\/workflow\/([a-zA-Z0-9_-]+)/u);
-  return match?.[1] ?? (/^[a-zA-Z0-9_-]{4,}$/u.test(value.trim()) ? value.trim() : undefined);
+  const trimmed = value.trim();
+  const match = trimmed.match(/\/workflow\/([a-zA-Z0-9_-]+)/u) ?? trimmed.match(/\/(?:api-detail|ai-app)\/(\d+)/u) ?? trimmed.match(/\/run\/ai-app\/(\d+)/u);
+  return match?.[1] ?? (/^[a-zA-Z0-9_-]{4,}$/u.test(trimmed) ? trimmed : undefined);
 }
 
 function sourceKindFor(value: RecordValue): RunningHubWorkflowSourceKind {
@@ -85,7 +88,8 @@ function nodeEntries(value: RecordValue): Array<[string, RecordValue]> {
 function fieldTypeFor(node: RecordValue, fieldName: string, value: unknown): RunningHubWorkflowFieldType | undefined {
   const key = fieldName.toLowerCase();
   const classType = text(node.class_type)?.toLowerCase() ?? "";
-  if (/image|mask|reference|avatar|frame/u.test(key) || /loadimage/u.test(classType)) return /reference|images|frames/u.test(key) ? "image_list" : "image";
+  if (/subtitle|caption|srt/u.test(key) || /subtitle|caption|srt/u.test(classType)) return "file";
+  if (/image|mask|reference|avatar|frame|character|person|subject|background/u.test(key) || /loadimage/u.test(classType)) return /images|frames/u.test(key) ? "image_list" : "image";
   if (/video|movie|source/u.test(key) || /loadvideo/u.test(classType)) return /reference|videos/u.test(key) ? "file" : "video";
   if (/audio|sound|music/u.test(key) || /loadaudio/u.test(classType)) return "audio";
   if (typeof value === "boolean") return "boolean";
@@ -97,6 +101,9 @@ function fieldTypeFor(node: RecordValue, fieldName: string, value: unknown): Run
 
 function inputIdFor(nodeId: string, node: RecordValue, fieldName: string, type: RunningHubWorkflowFieldType) {
   const key = fieldName.toLowerCase();
+  if (/subtitle|caption|srt/u.test(key)) return "subtitle";
+  if (/character|person|subject/u.test(key)) return "characterImage";
+  if (/reference[_-]?image|background/u.test(key)) return "referenceImage";
   if (/prompt|positive|text|script|instruction/u.test(key)) return "prompt";
   if (/negative/u.test(key)) return "negativePrompt";
   if (type === "image_list" || /reference[_-]?images|images/u.test(key)) return "referenceImages";
@@ -140,7 +147,7 @@ export function parseRunningHubWorkflowJson(raw: unknown, options: { readonly re
         ...(multiple ? { multiple: true, maxItems: inputId === "referenceImages" ? 9 : 3 } : {}),
         ...(existing?.defaultValue === undefined && value !== undefined ? { defaultValue: value } : existing?.defaultValue !== undefined ? { defaultValue: existing.defaultValue } : {}),
       });
-      bindings.push({ inputId, nodeId, fieldName, valueType: type === "image" || type === "image_list" || type === "video" || type === "audio" ? (multiple ? "file_list" : "file") : "literal", transform: type === "number" || type === "integer" ? "number" : type === "boolean" ? "boolean" : "string" });
+      bindings.push({ inputId, nodeId, fieldName, valueType: type === "file" || type === "image" || type === "image_list" || type === "video" || type === "audio" ? (multiple ? "file_list" : "file") : "literal", transform: type === "number" || type === "integer" ? "number" : type === "boolean" ? "boolean" : "string" });
     }
   }
   if (!bindings.length) warnings.push("no_editable_workflow_inputs_detected");
@@ -149,10 +156,44 @@ export function parseRunningHubWorkflowJson(raw: unknown, options: { readonly re
   return { remoteWorkflowId: options.remoteWorkflowId, sourceKind: options.sourceKind ?? sourceKindFor(raw), inputSchema, nodeBindings: bindings, outputSchema: [{ id: "output", type: capabilityFromInputs(inputSchema) === "image" ? "image" : capabilityFromInputs(inputSchema) === "audio" ? "audio" : "video" }], definitionHash: hashWorkflowText(canonical), warnings };
 }
 
-export function createRunningHubWorkflowRegistration(input: RunningHubWorkflowImport & { readonly id: string; readonly remoteWorkflowId: string; readonly name: string; readonly capability?: RunningHubWorkflowCapability; readonly source?: { readonly kind: RunningHubWorkflowSourceKind; readonly url?: string } }): RunningHubWorkflowRegistration {
+export function createRunningHubWorkflowRegistration(input: RunningHubWorkflowImport & { readonly id: string; readonly remoteWorkflowId: string; readonly name: string; readonly capability?: RunningHubWorkflowCapability; readonly source?: { readonly kind: RunningHubWorkflowSourceKind; readonly url?: string }; readonly request?: { readonly kind: RunningHubWorkflowRequestKind; readonly submitPath?: string; readonly queryPath?: string } }): RunningHubWorkflowRegistration {
   if (!input.remoteWorkflowId.trim()) throw new Error("runninghub_workflow_id_required");
   const capability = input.capability ?? capabilityFromInputs(input.inputSchema);
-  return { id: input.id, remoteWorkflowId: input.remoteWorkflowId.trim(), name: input.name.trim() || input.id, capability, version: 1, definitionHash: input.definitionHash, source: { kind: input.source?.kind ?? input.sourceKind, ...(input.source?.url ? { url: input.source.url } : {}), importedAt: new Date().toISOString() }, inputSchema: input.inputSchema, nodeBindings: input.nodeBindings, outputSchema: input.outputSchema, validation: { status: "unknown" } };
+  return { id: input.id, remoteWorkflowId: input.remoteWorkflowId.trim(), name: input.name.trim() || input.id, capability, version: 1, definitionHash: input.definitionHash, source: { kind: input.source?.kind ?? input.sourceKind, ...(input.source?.url ? { url: input.source.url } : {}), importedAt: new Date().toISOString() }, ...(input.request ? { request: input.request } : {}), inputSchema: input.inputSchema, nodeBindings: input.nodeBindings, outputSchema: input.outputSchema, validation: { status: "unknown" } };
+}
+
+export function createRunningHubAudioTranscriptionRegistration(input: {
+  readonly id: string;
+  readonly appId: string;
+  readonly name: string;
+  readonly sourceUrl?: string;
+  readonly inputNodeId?: string;
+  readonly inputFieldName?: string;
+  readonly submitPath?: string;
+  readonly queryPath?: string;
+}): RunningHubWorkflowRegistration {
+  const remoteWorkflowId = input.appId.trim();
+  const nodeId = input.inputNodeId?.trim() || "2";
+  const fieldName = input.inputFieldName?.trim() || "audio";
+  if (!remoteWorkflowId) throw new Error("runninghub_ai_app_id_required");
+  const inputSchema: RunningHubWorkflowInputField[] = [{ id: "audio", label: "音频文件", type: "audio", required: true, accept: ["audio/*"] }];
+  const nodeBindings: RunningHubNodeBinding[] = [{ inputId: "audio", nodeId, fieldName, valueType: "file", required: true }];
+  const outputSchema: RunningHubWorkflowOutputField[] = [{ id: "transcript", type: "text", required: true }];
+  const request = { kind: "ai-app" as const, submitPath: input.submitPath?.trim() || `/openapi/v2/run/ai-app/${encodeURIComponent(remoteWorkflowId)}`, queryPath: input.queryPath?.trim() || "/openapi/v2/query" };
+  return createRunningHubWorkflowRegistration({
+    id: input.id,
+    remoteWorkflowId,
+    name: input.name,
+    capability: "audio_transcription",
+    sourceKind: "runninghub-ai-app",
+    inputSchema,
+    nodeBindings,
+    outputSchema,
+    definitionHash: hashWorkflowText(JSON.stringify({ remoteWorkflowId, inputSchema, nodeBindings, outputSchema, request })),
+    warnings: [],
+    request,
+    source: { kind: "runninghub-ai-app", ...(input.sourceUrl?.trim() ? { url: input.sourceUrl.trim() } : {}) },
+  });
 }
 
 type LegacyRunningHubWorkflowIds = {

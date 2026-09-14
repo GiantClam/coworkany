@@ -566,9 +566,11 @@ test("workflow-host executes a v2 local file workflow and streams node lifecycle
     assert.equal(events.some((event) => event.tool === "artifact:file"), true);
     const serviceMethods = frames.filter((frame) => frame.type === "service_request").map((frame) => frame.method);
     assert.equal(serviceMethods[0], "workflow.repository.create");
-    for (const method of ["workflow.repository.update_status", "workflow.event.append", "runtime.artifact.write", "workflow.artifact.register"]) {
+    for (const method of ["workflow.repository.update_status", "workflow.event.append", "workflow.artifact.register"]) {
       assert.equal(serviceMethods.includes(method), true, method);
     }
+    assert.equal(serviceMethods.includes("runtime.artifact.write"), false);
+    assert.equal(readFileSync(join(workspace, "artifacts", runId, "hello.md"), "utf8"), "hello");
   } finally {
     child.kill();
     await rm(workspace, { recursive: true, force: true });

@@ -13,6 +13,13 @@ function firstNonEmptyString(...values: unknown[]) {
   return values.find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim();
 }
 
+function joinedText(...values: unknown[]) {
+  const parts = values.flatMap((value) => Array.isArray(value) ? value : [value])
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+  return parts.length ? [...new Set(parts)].join("\n\n") : undefined;
+}
+
 function firstUrl(value: unknown) {
   if (typeof value === "string" && value.trim()) return value.trim();
   if (!Array.isArray(value)) return undefined;
@@ -31,6 +38,7 @@ function isLocalPath(value: unknown): value is string {
 export type MediaAssetReference = {
   readonly url?: string;
   readonly localPath?: string;
+  readonly relativePath?: string;
   readonly fileName?: string;
   readonly mimeType?: string;
   readonly byteLength?: number;
@@ -50,14 +58,16 @@ function collectMediaReferences(value: unknown, references: MediaAssetReference[
   const record = value as Record<string, unknown>;
   const localPath = typeof record.localPath === "string" && record.localPath.trim() ? record.localPath.trim() : undefined;
   const url = firstNonEmptyString(record.url, record.uri, record.remoteUrl);
-  if (localPath || url) references.push({
+  const relativePath = !localPath && !url && typeof record.relativePath === "string" && record.relativePath.trim() ? record.relativePath.trim() : undefined;
+  if (localPath || url || relativePath) references.push({
     ...(url ? { url } : {}),
     ...(localPath ? { localPath } : {}),
+    ...(relativePath ? { relativePath } : {}),
     ...(typeof record.fileName === "string" ? { fileName: record.fileName } : {}),
     ...(typeof record.mimeType === "string" ? { mimeType: record.mimeType } : {}),
     ...(typeof record.byteLength === "number" ? { byteLength: record.byteLength } : {}),
   });
-  if (!localPath && !url) {
+  if (!localPath && !url && !relativePath) {
     for (const item of Object.values(record)) collectMediaReferences(item, references);
   }
   return references;
@@ -74,7 +84,7 @@ function omitLocalPaths(value: unknown): unknown {
 function uniqueReferences(references: readonly MediaAssetReference[]) {
   const keys = new Set<string>();
   return references.filter((reference) => {
-    const key = reference.localPath ?? reference.url ?? `${reference.fileName ?? ""}:${reference.mimeType ?? ""}:${reference.byteLength ?? ""}`;
+    const key = reference.localPath ?? reference.url ?? reference.relativePath ?? `${reference.fileName ?? ""}:${reference.mimeType ?? ""}:${reference.byteLength ?? ""}`;
     if (!key || keys.has(key)) return false;
     keys.add(key);
     return true;
@@ -95,6 +105,10 @@ function hasMediaReferences(...values: unknown[]) {
 
 function urlsFor(value: unknown) {
   return uniqueReferences(collectMediaReferences(value)).flatMap((reference) => reference.url ? [reference.url] : []);
+}
+
+function firstReferenceValue(reference: MediaAssetReference | undefined) {
+  return reference?.url ?? reference?.localPath ?? reference?.relativePath;
 }
 
 function assertMaximum(role: string, references: readonly MediaAssetReference[], maximum: number) {
@@ -139,24 +153,38 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
   const safeInputs = omitLocalPaths(inputs) as Record<string, unknown>;
   const request = Object.fromEntries(Object.entries({ ...safeConfig, ...safeInputs }).filter(([key]) => !TRANSPORT_CONFIG_KEYS.has(key))) as Record<string, unknown>;
   if (localAttachments.length) request.localAttachments = localAttachments;
-  const prompt = firstNonEmptyString(inputs.text, config.prompt, config.script, config.text);
+  // Multiple text edges are collected as an array by workflow-core. Preserve
+  // both the node instruction and generated ASR text instead of silently
+  // dropping the array and falling back to config.prompt.
+  const prompt = joinedText(inputs.text, config.prompt, config.script, config.text);
   if (prompt) request.prompt = prompt;
 
   if (executorId === "image_generate") {
-    const referenceInput = inputs.referenceImages ?? inputs.images ?? inputs.image;
-    const references = uniqueReferences(collectMediaReferences(referenceInput));
+    const referenceRoleInput = inputs.referenceImage;
+    const characterRoleInput = inputs.characterImage;
+    const referenceInput = referenceRoleInput ?? inputs.referenceImages ?? inputs.images ?? inputs.image;
+    const referenceRole = uniqueReferences(collectMediaReferences(referenceRoleInput));
+    const characterRole = uniqueReferences(collectMediaReferences(characterRoleInput));
+    const references = uniqueReferences([...referenceRole, ...characterRole, ...collectMediaReferences(referenceInput)]);
     assertMaximum("image.reference", references, 9);
     const inputImageUrl = firstNonEmptyString(config.inputImageUrl, inputs.inputImageUrl);
     const maskImageUrl = firstNonEmptyString(config.maskImageUrl, inputs.maskImageUrl);
     const referenceImageUrls = [...new Set([
       ...urlsFor(referenceInput),
+      ...urlsFor(characterRoleInput),
       ...references.flatMap((reference) => !reference.url && reference.localPath ? [reference.localPath] : []),
       ...(inputImageUrl ? [inputImageUrl] : []),
     ])];
     delete request.referenceImages;
+    delete request.referenceImage;
+    delete request.characterImage;
     delete request.inputImageUrl;
     if (referenceImageUrls.length) request.referenceImageUrls = referenceImageUrls;
     if (maskImageUrl) request.maskImageUrl = maskImageUrl;
+    const referenceImageValue = firstReferenceValue(referenceRole[0]);
+    const characterImageValue = firstReferenceValue(characterRole[0]);
+    if (referenceImageValue) request.referenceImage = referenceImageValue;
+    if (characterImageValue) request.characterImage = characterImageValue;
     const size = firstNonEmptyString(config.size, config.imageSize);
     const quality = firstNonEmptyString(config.quality, config.imageQuality);
     const background = firstNonEmptyString(config.background, config.imageBackground);
@@ -209,6 +237,7 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     const sourceVideo = preferredMediaReferences(inputs["video.source"], inputs.videos, inputs.video, ...(referenceMode ? [] : [config.sourceVideoUrl, config.videos, config.video]));
     const referenceVideos = preferredMediaReferences(inputs["video.reference"], inputs.referenceVideos, config.referenceVideoUrls, config.referenceVideos, config.videoUrls, ...(referenceMode ? [config.sourceVideoUrl] : []));
     const referenceAudios = preferredMediaReferences(inputs["audio.reference"], inputs.referenceAudios, config.referenceAudioUrls, config.referenceAudios, config.audioUrls, config.audioUrl);
+    const subtitleFiles = preferredMediaReferences(inputs.subtitle, inputs.subtitles, config.subtitleFile, config.subtitleFileUrl);
     assertMaximum("image.first_frame", firstFrame, 1);
     assertMaximum("image.last_frame", lastFrame, 1);
     // Keep the shared input normalizer at the largest supported direct-provider
@@ -220,6 +249,7 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     assertMaximum("video.source", sourceVideo, 1);
     assertMaximum("video.reference", referenceVideos, 5);
     assertMaximum("audio.reference", referenceAudios, 5);
+    assertMaximum("subtitle", subtitleFiles, 1);
     const mode = firstNonEmptyString(config.mode) ?? "auto";
     if (mode === "first-last-frame" && (!firstFrame.length || !lastFrame.length)) throw new Error("workflow_media_role_required:first-last-frame");
     if (mode === "video-edit" && !sourceVideo.length) throw new Error("workflow_media_role_required:video.source");
@@ -232,13 +262,15 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     const sourceVideoUrl = firstNonEmptyString(sourceVideo[0]?.url, sourceVideo[0]?.localPath);
     const referenceVideoUrls = referenceVideos.flatMap((reference) => reference.url ? [reference.url] : reference.localPath ? [reference.localPath] : []);
     const referenceAudioUrls = referenceAudios.flatMap((reference) => reference.url ? [reference.url] : reference.localPath ? [reference.localPath] : []);
+    const subtitleFile = firstReferenceValue(subtitleFiles[0]);
     if (referenceImageUrls.length) request.referenceImageUrls = referenceImageUrls;
     if (imageUrls.length) request.imageUrls = imageUrls;
     if (sourceVideoUrl) request.sourceVideoUrl = sourceVideoUrl;
     if (referenceVideoUrls.length) request.referenceVideoUrls = referenceVideoUrls;
     if (referenceAudioUrls.length) request.referenceAudioUrls = referenceAudioUrls;
+    if (subtitleFile) request.subtitleFile = subtitleFile;
     const localMediaReferences = {
-      firstFrame: firstFrame.filter((reference) => reference.localPath), lastFrame: lastFrame.filter((reference) => reference.localPath), referenceImages: [...referenceImages, ...imageInputs].filter((reference) => reference.localPath), sourceVideo: sourceVideo.filter((reference) => reference.localPath), referenceVideos: referenceVideos.filter((reference) => reference.localPath), referenceAudios: referenceAudios.filter((reference) => reference.localPath),
+      firstFrame: firstFrame.filter((reference) => reference.localPath), lastFrame: lastFrame.filter((reference) => reference.localPath), referenceImages: [...referenceImages, ...imageInputs].filter((reference) => reference.localPath), sourceVideo: sourceVideo.filter((reference) => reference.localPath), referenceVideos: referenceVideos.filter((reference) => reference.localPath), referenceAudios: referenceAudios.filter((reference) => reference.localPath), subtitle: subtitleFiles,
     };
     if (Object.values(localMediaReferences).some((references) => references.length)) request.localMediaReferences = localMediaReferences;
   }

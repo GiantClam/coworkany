@@ -44,6 +44,13 @@ def repair_python_relocation(destination):
                 subprocess.run(["install_name_tool", "-change", dependency, replacement, str(binary)], check=True)
                 subprocess.run(["codesign", "--force", "--sign", "-", str(binary)], check=True)
 
+    # Relocation may modify the interpreter inside the nested Python.app.
+    # Re-seal that bundle after the edits or macOS taskgated terminates it
+    # with SIGKILL (Code Signature Invalid) when launched by the desktop app.
+    python_app = python_root / "Resources" / "Python.app"
+    if python_app.is_dir():
+        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(python_app)], check=True)
+
 
 def prepare(url, expected_hash, destination):
     if not url.startswith("https://") or not re.fullmatch(r"[a-fA-F0-9]{64}", expected_hash):

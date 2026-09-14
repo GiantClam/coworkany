@@ -1,4 +1,5 @@
 import { hashWorkflowDefinition, type WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
+import type { DesktopProviderConfig } from "./provider-config";
 
 type DesktopVideoProvider = {
   readonly id: string;
@@ -67,6 +68,68 @@ export function buildProductIntroVideoWorkflowDefinition(provider: DesktopVideoP
       { edgeKey: "outro-stitch", sourceNodeKey: "outro", sourcePortId: "video", targetNodeKey: "video-stitch", targetPortId: "videos" },
       { edgeKey: "video-stitch-output", sourceNodeKey: "video-stitch", sourcePortId: "video", targetNodeKey: "output", targetPortId: "videos" },
       { edgeKey: "output-asset-library", sourceNodeKey: "output", sourcePortId: "videos", targetNodeKey: "asset-library", targetPortId: "videos" },
+    ],
+  };
+  return { ...definition, definitionHash: hashWorkflowDefinition(definition) };
+}
+
+type TemplateProvider = Pick<DesktopProviderConfig, "id" | "model" | "baseUrl">;
+
+function providerConfig(provider: TemplateProvider) {
+  return {
+    selectedProviderId: provider.id ?? "",
+    selectedModelId: provider.model ?? "",
+    provider: provider.id ?? "",
+    model: provider.model ?? "",
+    ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
+  };
+}
+
+/** Builds a local image replacement, ASR, subtitle, and FFmpeg composition workflow. */
+export function buildCharacterSwapVideoWorkflowDefinition(
+  providers: { readonly image: TemplateProvider; readonly audio: TemplateProvider; readonly video?: TemplateProvider },
+  locale: "zh" | "en" = "zh",
+): WorkflowDefinitionEnvelope {
+  const copy = locale === "en"
+    ? {
+      input: "Replacement and subtitle instructions", reference: "Reference image", character: "Character image", audio: "Audio track", replace: "Replace character in reference", asr: "ASR subtitles", subtitle: "Subtitle file", video: "Compose subtitled video", output: "Final outputs", store: "Save final artifacts", prompt: "Replace the person in the reference image with the person from the character image. Preserve the reference background, composition, lighting, and style.",
+    }
+    : {
+      input: "替换与字幕说明", reference: "参考图", character: "人物图", audio: "音频文件", replace: "替换参考图中的人物", asr: "ASR 转字幕", subtitle: "字幕文件", video: "合成带字幕视频", output: "最终输出", store: "保存最终产物", prompt: "将人物图中的人物替换到参考图中，保留参考图的背景、构图、光影和整体风格。",
+    };
+  const image = providerConfig(providers.image);
+  const audio = providerConfig(providers.audio);
+  const definition: WorkflowDefinitionEnvelope = {
+    schemaVersion: 2,
+    revision: 1,
+    definitionHash: "",
+    nodes: [
+      { nodeKey: "prompt", type: "text_input", nodeVersion: 1, title: copy.input, positionX: 0, positionY: 0, config: { text: copy.prompt } },
+      { nodeKey: "reference-image", type: "upload", nodeVersion: 1, title: copy.reference, positionX: 0, positionY: 360, config: { uploadedFiles: [], referencedArtifactIds: [] } },
+      { nodeKey: "character-image", type: "upload", nodeVersion: 1, title: copy.character, positionX: 0, positionY: 720, config: { uploadedFiles: [], referencedArtifactIds: [] } },
+      { nodeKey: "audio", type: "upload", nodeVersion: 1, title: copy.audio, positionX: 0, positionY: 1080, config: { uploadedFiles: [], referencedArtifactIds: [] } },
+      { nodeKey: "replace", type: "image_generate", nodeVersion: 1, title: copy.replace, positionX: 480, positionY: 260, config: { ...image, prompt: copy.prompt, featureId: "image-edit", mode: "image-edit", requiresCharacterImageBindings: true } },
+      { nodeKey: "asr", type: "agent_execute", nodeVersion: 1, title: copy.asr, positionX: 480, positionY: 900, config: { ...audio, operation: "audio_transcription", prompt: "将音频转为带时间戳的 SRT 字幕文本。" } },
+      { nodeKey: "subtitle", type: "file_create", nodeVersion: 1, title: copy.subtitle, positionX: 900, positionY: 900, config: { fileName: "subtitles.srt", fileFormat: "srt" } },
+      { nodeKey: "video", type: "video_compose", nodeVersion: 1, title: copy.video, positionX: 900, positionY: 260, config: { outputFormat: "mp4", subtitleMode: "burn_in", fitMode: "contain" } },
+      { nodeKey: "output", type: "output", nodeVersion: 1, title: copy.output, positionX: 1360, positionY: 420, config: { displayName: copy.output, allowEmpty: false, requireAllSucceeded: true } },
+      { nodeKey: "store", type: "product_store", nodeVersion: 1, title: copy.store, positionX: 1780, positionY: 420, config: { fileName: "character-swap-video.md", persistToWorkLibrary: true, persistToKnowledgeBase: false } },
+    ],
+    edges: [
+      { edgeKey: "prompt-replace", sourceNodeKey: "prompt", sourcePortId: "text", targetNodeKey: "replace", targetPortId: "text" },
+      { edgeKey: "reference-replace", sourceNodeKey: "reference-image", sourcePortId: "image", targetNodeKey: "replace", targetPortId: "referenceImage" },
+      { edgeKey: "character-replace", sourceNodeKey: "character-image", sourcePortId: "image", targetNodeKey: "replace", targetPortId: "characterImage" },
+      { edgeKey: "audio-asr", sourceNodeKey: "audio", sourcePortId: "audio", targetNodeKey: "asr", targetPortId: "audio" },
+      { edgeKey: "replace-video", sourceNodeKey: "replace", sourcePortId: "image", targetNodeKey: "video", targetPortId: "image" },
+      { edgeKey: "audio-video", sourceNodeKey: "audio", sourcePortId: "audio", targetNodeKey: "video", targetPortId: "audio" },
+      { edgeKey: "asr-subtitle", sourceNodeKey: "asr", sourcePortId: "text", targetNodeKey: "subtitle", targetPortId: "text" },
+      { edgeKey: "subtitle-video", sourceNodeKey: "subtitle", sourcePortId: "asset", targetNodeKey: "video", targetPortId: "subtitle" },
+      { edgeKey: "video-output", sourceNodeKey: "video", sourcePortId: "video", targetNodeKey: "output", targetPortId: "videos" },
+      { edgeKey: "subtitle-output", sourceNodeKey: "subtitle", sourcePortId: "asset", targetNodeKey: "output", targetPortId: "assets" },
+      { edgeKey: "asr-output", sourceNodeKey: "asr", sourcePortId: "text", targetNodeKey: "output", targetPortId: "text" },
+      { edgeKey: "video-store", sourceNodeKey: "video", sourcePortId: "video", targetNodeKey: "store", targetPortId: "videos" },
+      { edgeKey: "subtitle-store", sourceNodeKey: "subtitle", sourcePortId: "asset", targetNodeKey: "store", targetPortId: "assets" },
+      { edgeKey: "audio-store", sourceNodeKey: "audio", sourcePortId: "audio", targetNodeKey: "store", targetPortId: "audios" },
     ],
   };
   return { ...definition, definitionHash: hashWorkflowDefinition(definition) };

@@ -29,7 +29,7 @@ test("probe and launch share native runtime and packaged Skill resolution", asyn
   assert.match(source, /host::skills_directory\(&app\)/u);
   assert.match(host, /let skills = skills_directory\(&app\)/u);
   assert.doesNotMatch(source, /fn system_python\(/u);
-  assert.match(source, /"native-runtime-v3"/u, "invalidate previously successful isolated-runtime probe caches");
+  assert.match(source, /"native-runtime-v4"/u, "invalidate caches created before macOS Python signature validation");
 });
 
 test("packaged Python wins over a previously discovered configured interpreter", async () => {
@@ -38,6 +38,9 @@ test("packaged Python wins over a previously discovered configured interpreter",
   const end = host.indexOf("pub(crate) fn skills_directory", start);
   const implementation = host.slice(start, end);
   assert.ok(implementation.indexOf('resource.join("dist-runtime")') < implementation.indexOf('configured_runtime_path(app, "pythonPath")'));
+  assert.match(implementation, /python_system_fallback_disabled/u);
+  assert.match(implementation, /is_app_managed_python_path/u);
+  assert.match(host, /command\.env\("PYTHONDONTWRITEBYTECODE", "1"\)/u, "signed app resources must not receive Python bytecode writes");
 });
 
 test("desktop pins OpenCode scratch state to its writable data directory", async () => {
