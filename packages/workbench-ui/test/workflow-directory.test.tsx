@@ -24,6 +24,19 @@ test("shared workflow directory renders online list, metrics, templates and rece
   assert.match(markup, /打开 Canvas/);
 });
 
+test("configurable templates remain actionable so the builder can show missing setup", () => {
+  const markup = renderToStaticMarkup(<WorkbenchWorkflowDirectory
+    locale="zh"
+    workflows={[]}
+    templates={[{ id: "character-swap-video", title: "人物替换字幕视频", description: "需要配置 Provider", status: "needs-config" }]}
+    recentRuns={[]}
+    onAction={() => undefined}
+  />);
+  assert.match(markup, /人物替换字幕视频/);
+  assert.match(markup, /使用模板/);
+  assert.doesNotMatch(markup, /disabled=""/u);
+});
+
 test("workflow directory hides unsupported destructive host actions", () => {
   const markup = renderToStaticMarkup(<WorkbenchWorkflowDirectory
     locale="zh"
