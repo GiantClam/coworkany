@@ -4,6 +4,10 @@ import tailwindcss from "@tailwindcss/postcss";
 import { resolve } from "node:path";
 
 export default defineConfig({
+  // Tauri serves packaged assets from its `tauri://localhost` protocol. Use
+  // relative URLs so the embedded WebView can resolve JS, CSS, and images in
+  // both packaged builds and the development server.
+  base: "./",
   plugins: [react()],
   resolve: { alias: [
     { find: "@coworkany/workbench-ui/styles.css", replacement: resolve(__dirname, "../../packages/workbench-ui/src/styles.css") },
