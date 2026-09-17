@@ -89,6 +89,7 @@ test("shares the online editor parameter contract for desktop workflow nodes", (
   const image = workflowNodeRegistry.require("image_generate");
   const video = workflowNodeRegistry.require("video_generate");
   const compose = workflowNodeRegistry.require("video_compose");
+  const voiceSynthesis = workflowNodeRegistry.require("voice_synthesis");
   const voiceClone = workflowNodeRegistry.require("voice_clone");
   const ppt = workflowNodeRegistry.require("ppt_generate");
   const fieldIds = (definition: typeof writer) => new Set(definition.configSchema.map((field) => field.id));
@@ -99,6 +100,7 @@ test("shares the online editor parameter contract for desktop workflow nodes", (
   for (const id of ["selectedProviderId", "model", "mode", "duration", "ratio", "sound"]) assert.equal(fieldIds(video).has(id), true, id);
   for (const id of ["outputFormat", "subtitleMode", "fitMode"]) assert.equal(fieldIds(compose).has(id), true, id);
   assert.equal(fieldIds(video).has("workflowRef"), false);
+  for (const id of ["selectedProviderId", "voiceId", "model"]) assert.equal(fieldIds(voiceSynthesis).has(id), true, id);
   assert.equal(fieldIds(voiceClone).has("model"), true);
   for (const id of ["previewRuntime", "model", "pageCount", "templateId", "language", "scenario"]) assert.equal(fieldIds(ppt).has(id), true, id);
 });

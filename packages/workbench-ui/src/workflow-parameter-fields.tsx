@@ -66,6 +66,12 @@ export type WorkbenchWorkflowProviderOption = {
   label: string;
 };
 
+export type WorkbenchWorkflowDynamicOption = {
+  value: string;
+  label: string;
+  description?: string;
+};
+
 export type WorkbenchWorkflowParameterFieldsProps = {
   locale: "zh" | "en";
   node: WorkflowDefinitionNodeV2;
@@ -75,6 +81,10 @@ export type WorkbenchWorkflowParameterFieldsProps = {
   /** A selected remote workflow is represented by the model selector, so do not expose its internal reference separately. */
   hideWorkflowReference?: boolean;
   providerOptions?: readonly WorkbenchWorkflowProviderOption[];
+  voiceOptions?: readonly WorkbenchWorkflowDynamicOption[];
+  agentOptions?: readonly WorkbenchWorkflowDynamicOption[];
+  voiceOptionsLoading?: boolean;
+  voiceOptionsError?: string | null;
   onUpdate: (key: string, value: WorkflowParameterValue) => void;
   className?: string;
 };
@@ -113,7 +123,7 @@ function renderMediaField(field: WorkbenchMediaField, node: WorkflowDefinitionNo
  * asset, agent, and dataset pickers as extensions while standard controls
  * remain identical wherever a workflow definition is edited.
  */
-export function WorkbenchWorkflowParameterFields({ locale, node, modelOptions = [], modelLabel, hideWorkflowReference = false, providerOptions = [], onUpdate, className = "" }: WorkbenchWorkflowParameterFieldsProps) {
+export function WorkbenchWorkflowParameterFields({ locale, node, modelOptions = [], modelLabel, hideWorkflowReference = false, providerOptions = [], voiceOptions = [], agentOptions = [], voiceOptionsLoading = false, voiceOptionsError = null, onUpdate, className = "" }: WorkbenchWorkflowParameterFieldsProps) {
   const fields = workflowNodeRegistry.get(node.type)?.configSchema ?? [];
   const workflowVideoMode = typeof node.config.mode === "string" ? node.config.mode : "text-to-video";
   const workflowVideoFeatureId = workflowVideoMode === "image-to-video" || workflowVideoMode === "reference-to-video" || workflowVideoMode === "video-edit"
@@ -134,6 +144,7 @@ export function WorkbenchWorkflowParameterFields({ locale, node, modelOptions = 
   const visibleFields = fields.filter((field) => isVisible(field, node.config)
     && !(field.id === "selectedProviderId" && modelOptions.length > 0 && providerOptions.length === 0)
     && !(hideWorkflowReference && field.id === "workflowRef")
+    && !(node.type === "agent_execute" && node.config.operation === "audio_transcription" && field.id === "agentId")
     // A selected model's parameter schema owns the common generation fields.
     // Do not render the legacy duration/ratio/prompt defaults beside it.
     && !(node.type === "video_generate" && dynamicVideoFieldIds.has(field.id))
@@ -149,15 +160,28 @@ export function WorkbenchWorkflowParameterFields({ locale, node, modelOptions = 
     const textarea = field.rendererId === "textarea" || ["prompt", "script", "text", "query", "systemPrompt", "scenePrompt"].includes(field.id);
     const modelSelect = (field.id === "model" || field.id === "selectedModelId") && modelOptions.length > 0;
     const providerSelect = field.id === "selectedProviderId" && providerOptions.length > 0;
+    const dynamicOptions = field.id === "voiceId" ? voiceOptions : field.id === "agentId" ? agentOptions : [];
+    const dynamicSelect = field.id === "voiceId" || field.id === "agentId";
     const label = modelSelect && modelLabel ? modelLabel : schemaLabel;
-    const controlType = modelSelect || providerSelect || field.rendererId === "select" ? "select" : field.rendererId === "toggle" || field.valueType === "boolean" ? "toggle" : textarea ? "textarea" : "input";
+    const controlType = modelSelect || providerSelect || dynamicSelect || field.rendererId === "select" ? "select" : field.rendererId === "toggle" || field.valueType === "boolean" ? "toggle" : textarea ? "textarea" : "input";
     if (field.rendererId === "asset" || field.rendererId === "agent" || field.rendererId === "dataset" || field.rendererId === "custom") {
       return <div key={field.id} className="workflow-editor-readonly"><span>{label}</span><small>{locale === "zh" ? "请通过相应的工作区选择此配置。" : "Select this configuration in its workspace."}</small></div>;
     }
     return (
       <label key={field.id} className={`workflow-editor-field workflow-editor-field-${controlType}`} data-field-id={field.id}>
         <span>{label}</span>
-        {modelSelect ? (
+        {dynamicSelect ? (
+          <>
+            <select aria-label={label} title={label} value={String(value)} onChange={(event) => onUpdate(field.id, event.target.value)} disabled={field.id === "voiceId" && voiceOptionsLoading}>
+              <option value="">{voiceOptionsLoading && field.id === "voiceId" ? (locale === "zh" ? "正在加载音色…" : "Loading voices…") : locale === "zh" ? `选择${field.id === "voiceId" ? "音色" : "智能体"}` : `Select ${field.id === "voiceId" ? "a voice" : "an agent"}`}</option>
+              {String(value) && !dynamicOptions.some((option) => option.value === String(value)) ? <option value={String(value)}>{String(value)}</option> : null}
+              {dynamicOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            {field.id === "voiceId" && voiceOptionsError ? <small className="muted" role="status">{voiceOptionsError}</small> : null}
+            {field.id === "voiceId" && !voiceOptionsLoading && !voiceOptionsError && !dynamicOptions.length ? <small className="muted" role="status">{locale === "zh" ? "当前 Provider 暂无音色" : "No voices for this Provider"}</small> : null}
+            {field.id === "agentId" && !dynamicOptions.length ? <small className="muted" role="status">{locale === "zh" ? "智能体中心暂无 Agent" : "No Agents in Agent Center"}</small> : null}
+          </>
+        ) : modelSelect ? (
           <select aria-label={label} title={label} value={String(value)} onChange={(event) => onUpdate(field.id, event.target.value)}>
             {modelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>

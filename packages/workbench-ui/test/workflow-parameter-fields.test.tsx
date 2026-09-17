@@ -78,6 +78,59 @@ test("keeps workflow parameter labels in the selected locale", () => {
   assert.doesNotMatch(markup, />Model</u);
 });
 
+test("renders Provider-scoped voices as a selector and retains legacy voice IDs", () => {
+  const markup = renderToStaticMarkup(
+    <WorkbenchWorkflowParameterFields
+      locale="en"
+      node={{ nodeKey: "voice-1", type: "voice_synthesis", nodeVersion: 1, title: "Voice", positionX: 0, positionY: 0, config: { selectedProviderId: "audio-main", voiceId: "legacy-voice" } }}
+      providerOptions={[{ value: "audio-main", label: "Audio provider" }]}
+      voiceOptions={[{ value: "provider-voice", label: "Provider voice" }]}
+      onUpdate={() => undefined}
+    />,
+  );
+
+  assert.match(markup, /<select[^>]*aria-label="Voice"/);
+  assert.match(markup, /Provider voice/);
+  assert.match(markup, /value="legacy-voice"/);
+});
+
+test("renders Agent Center options as a selector and hides the selector for ASR", () => {
+  const agentMarkup = renderToStaticMarkup(
+    <WorkbenchWorkflowParameterFields
+      locale="zh"
+      node={{ nodeKey: "agent-1", type: "agent_execute", nodeVersion: 1, title: "Agent", positionX: 0, positionY: 0, config: { operation: "agent", agentId: "agency-design-ui" } }}
+      agentOptions={[{ value: "agency-design-ui", label: "UI 设计师" }]}
+      onUpdate={() => undefined}
+    />,
+  );
+  const asrMarkup = renderToStaticMarkup(
+    <WorkbenchWorkflowParameterFields
+      locale="zh"
+      node={{ nodeKey: "asr-1", type: "agent_execute", nodeVersion: 1, title: "ASR", positionX: 0, positionY: 0, config: { operation: "audio_transcription" } }}
+      agentOptions={[{ value: "agency-design-ui", label: "UI 设计师" }]}
+      onUpdate={() => undefined}
+    />,
+  );
+
+  assert.match(agentMarkup, /<select[^>]*aria-label="智能体"/);
+  assert.match(agentMarkup, /UI 设计师/);
+  assert.doesNotMatch(asrMarkup, />智能体</u);
+});
+
+test("shows a localized voice loading state", () => {
+  const markup = renderToStaticMarkup(
+    <WorkbenchWorkflowParameterFields
+      locale="zh"
+      node={{ nodeKey: "voice-1", type: "voice_synthesis", nodeVersion: 1, title: "Voice", positionX: 0, positionY: 0, config: {} }}
+      voiceOptionsLoading
+      onUpdate={() => undefined}
+    />,
+  );
+
+  assert.match(markup, /正在加载音色/u);
+  assert.match(markup, /disabled=""/);
+});
+
 test("localizes workflow select options without changing their persisted values", () => {
   const markup = renderToStaticMarkup(
     <WorkbenchWorkflowParameterFields
