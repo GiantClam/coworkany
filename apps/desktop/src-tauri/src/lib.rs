@@ -932,7 +932,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console
 #[serde(rename_all = "camelCase")]
 struct LocalWorkflowFile {
     file_name: String,
-    local_path: String,
+    relative_path: String,
     mime_type: String,
     byte_length: u64,
 }
@@ -949,31 +949,44 @@ fn workflow_file_mime_type(path: &Path) -> &'static str {
     }
 }
 
-fn workflow_files_from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Vec<LocalWorkflowFile> {
-    paths
-        .into_iter()
-        .filter_map(|path| {
-            let metadata = fs::metadata(&path).ok()?;
-            if !metadata.is_file() { return None; }
-            Some(LocalWorkflowFile {
-                file_name: path.file_name()?.to_string_lossy().to_string(),
-                local_path: path.to_string_lossy().to_string(),
-                mime_type: workflow_file_mime_type(&path).to_string(),
-                byte_length: metadata.len(),
-            })
-        })
-        .take(8)
-        .collect()
+fn workflow_files_from_paths(app: &tauri::AppHandle, paths: impl IntoIterator<Item = PathBuf>) -> Result<Vec<LocalWorkflowFile>, String> {
+    let root = project_root(app)?;
+    let mut copied_files = Vec::new();
+    for path in paths.into_iter().take(1) {
+        let metadata = fs::metadata(&path).map_err(|error| format!("workflow_file_unavailable: {error}"))?;
+        if !metadata.is_file() { continue; }
+        if metadata.len() > MAX_ATTACHMENT_BYTES as u64 { return Err("workflow_file_too_large".to_string()); }
+        let file_name = path.file_name().and_then(|value| value.to_str()).ok_or_else(|| "workflow_file_name_invalid".to_string())?;
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|error| error.to_string())?.as_nanos();
+        let relative_path = attachment_relative_path(file_name, stamp);
+        let target = root.join(&relative_path);
+        if let Some(parent) = target.parent() { fs::create_dir_all(parent).map_err(|error| format!("workflow_file_copy_failed: {error}"))?; }
+        let partial = attachment_partial_target(&target);
+        fs::copy(&path, &partial).map_err(|error| format!("workflow_file_copy_failed: {error}"))?;
+        let copied = fs::metadata(&partial).map_err(|error| format!("workflow_file_copy_failed: {error}"))?;
+        if copied.len() != metadata.len() {
+            let _ = fs::remove_file(&partial);
+            return Err("workflow_file_copy_size_mismatch".to_string());
+        }
+        fs::rename(&partial, &target).map_err(|error| format!("workflow_file_copy_failed: {error}"))?;
+        copied_files.push(LocalWorkflowFile {
+            file_name: file_name.to_string(),
+            relative_path,
+            mime_type: workflow_file_mime_type(&path).to_string(),
+            byte_length: metadata.len(),
+        });
+    }
+    Ok(copied_files)
 }
 
 #[tauri::command]
-fn pick_workflow_files() -> Result<Vec<LocalWorkflowFile>, String> {
+fn pick_workflow_files(app: tauri::AppHandle) -> Result<Vec<LocalWorkflowFile>, String> {
     #[cfg(windows)]
     {
         let script = r#"
 Add-Type -AssemblyName System.Windows.Forms
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
-$dialog.Multiselect = $true
+$dialog.Multiselect = $false
 $dialog.Filter = 'Supported files|*.png;*.jpg;*.jpeg;*.webp;*.gif;*.mp4;*.mov;*.webm;*.mp3;*.wav;*.m4a;*.ogg;*.pdf;*.txt;*.md;*.doc;*.docx;*.csv;*.json;*.ppt;*.pptx|All files|*.*'
 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.FileNames | ForEach-Object { [Console]::Out.WriteLine($_) } }
 "#;
@@ -983,11 +996,11 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.
             .output()
             .map_err(|error| format!("workflow_file_picker_spawn_failed: {error}"))?;
         if !output.status.success() { return Err(format!("workflow_file_picker_failed:{}", output.status.code().unwrap_or(-1))); }
-        let files = workflow_files_from_paths(String::from_utf8_lossy(&output.stdout)
+        let files = workflow_files_from_paths(&app, String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(|line| PathBuf::from(line.trim())));
-        return Ok(files);
+        return files;
     }
     #[cfg(target_os = "macos")]
     {
@@ -996,12 +1009,8 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.
         // relying on a shell-specific GUI utility (such as `zenity`).
         let script = r#"
 try
-    set chosenFiles to choose file with prompt "Choose workflow files" with multiple selections allowed
-    set outputText to ""
-    repeat with chosenFile in chosenFiles
-        set outputText to outputText & (POSIX path of chosenFile) & linefeed
-    end repeat
-    return outputText
+    set chosenFile to choose file with prompt "Choose workflow file"
+    return POSIX path of chosenFile
 on error number -128
     return ""
 end try
@@ -1018,11 +1027,11 @@ end try
                 format!("workflow_file_picker_failed: {detail}")
             });
         }
-        let files = workflow_files_from_paths(String::from_utf8_lossy(&output.stdout)
+        let files = workflow_files_from_paths(&app, String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(|line| PathBuf::from(line.trim())));
-        return Ok(files);
+        return files;
     }
     #[cfg(all(not(windows), not(target_os = "macos")))]
     {
@@ -1071,7 +1080,38 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console
         fs::write(&target, content.as_bytes()).map_err(|error| format!("workflow_export_write_failed: {error}"))?;
         return Ok(Some(target));
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        // Tauri does not bundle a native dialog plugin. AppleScript keeps the
+        // save location user-selected and grants the signed app access to it.
+        let script = r#"
+try
+    set defaultName to system attribute "COWORKANY_WORKFLOW_EXPORT_NAME"
+    set targetFile to choose file name with prompt "Export workflow JSON" default name defaultName
+    return POSIX path of targetFile
+on error number -128
+    return ""
+end try
+"#;
+        let output = Command::new("/usr/bin/osascript")
+            .env("COWORKANY_WORKFLOW_EXPORT_NAME", &file_name)
+            .args(["-e", script])
+            .output()
+            .map_err(|error| format!("workflow_export_dialog_spawn_failed: {error}"))?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if detail.is_empty() {
+                format!("workflow_export_dialog_failed:{}", output.status.code().unwrap_or(-1))
+            } else {
+                format!("workflow_export_dialog_failed: {detail}")
+            });
+        }
+        let target = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if target.is_empty() { return Ok(None); }
+        fs::write(&target, content.as_bytes()).map_err(|error| format!("workflow_export_write_failed: {error}"))?;
+        return Ok(Some(target));
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let _ = (content, file_name);
         Ok(None)
@@ -1101,6 +1141,19 @@ fn workflow_output_file_name(suggested_name: &str, mime_type: &str) -> String {
         _ => "txt",
     };
     format!("{}.{}", if sanitized.is_empty() { "workflow-output" } else { sanitized.as_str() }, extension)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_workflow_output_save_script() -> &'static str {
+    r#"
+try
+    set defaultName to system attribute "COWORKANY_WORKFLOW_OUTPUT_NAME"
+    set targetFile to choose file name with prompt "Save workflow output" default name defaultName
+    return POSIX path of targetFile
+on error number -128
+    return ""
+end try
+"#
 }
 
 #[tauri::command]
@@ -1153,7 +1206,27 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console
         fs::write(&target, bytes).map_err(|error| format!("workflow_output_write_failed: {error}"))?;
         return Ok(Some(target));
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("/usr/bin/osascript")
+            .env("COWORKANY_WORKFLOW_OUTPUT_NAME", &suggested_name)
+            .args(["-e", macos_workflow_output_save_script()])
+            .output()
+            .map_err(|error| format!("workflow_output_dialog_spawn_failed: {error}"))?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if detail.is_empty() {
+                format!("workflow_output_dialog_failed:{}", output.status.code().unwrap_or(-1))
+            } else {
+                format!("workflow_output_dialog_failed: {detail}")
+            });
+        }
+        let target = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if target.is_empty() { return Ok(None); }
+        fs::write(&target, bytes).map_err(|error| format!("workflow_output_write_failed: {error}"))?;
+        return Ok(Some(target));
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let _ = (bytes, suggested_name);
         Ok(None)
@@ -1471,6 +1544,8 @@ fn adjacent_instance_lock_path(data_root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    #[cfg(target_os = "macos")]
+    use super::macos_workflow_output_save_script;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -1755,6 +1830,15 @@ mod tests {
         assert_eq!(workflow_export_file_name("../../campaign"), "campaign.json");
         assert_eq!(workflow_export_file_name("<invalid>"), "invalid.json");
         assert_eq!(workflow_export_file_name("..."), "coworkany-workflow.json");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn workflow_output_download_uses_the_macos_save_dialog() {
+        let script = macos_workflow_output_save_script();
+        assert!(script.contains("choose file name"));
+        assert!(script.contains("COWORKANY_WORKFLOW_OUTPUT_NAME"));
+        assert!(script.contains("POSIX path of targetFile"));
     }
 
     #[cfg(windows)]

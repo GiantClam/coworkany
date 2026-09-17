@@ -1,4 +1,4 @@
-import { access, chmod, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
@@ -15,6 +15,10 @@ const source = {
   opencode: process.env.COWORKANY_MAC_OPENCODE_RUNTIME_DIR,
   python: process.env.COWORKANY_MAC_PYTHON_RUNTIME_DIR,
   font: process.env.COWORKANY_MAC_FONT_PATH,
+  ffmpeg: process.env.COWORKANY_MAC_FFMPEG_PATH,
+  ffprobe: process.env.COWORKANY_MAC_FFPROBE_PATH,
+  staticFfmpeg: process.env.COWORKANY_MAC_STATIC_FFMPEG_PATH,
+  staticFfprobe: process.env.COWORKANY_MAC_STATIC_FFPROBE_PATH,
 };
 
 async function removeOutput(path) {
@@ -51,6 +55,125 @@ async function copyRuntimeDirectory(name, destination, executable) {
     filter: item => name !== "python" || (!item.includes("/__pycache__/") && !item.endsWith(".pyc")),
   });
   await access(join(destination, executable), constants.X_OK).catch(() => { throw new Error(`macos_runtime_${name}_executable_missing:${join(destination, executable)}`); });
+}
+
+async function copyMediaRuntime() {
+  // Prefer explicitly supplied static binaries. Homebrew's default builds are
+  // dynamically linked to /opt/homebrew and cannot run on a clean customer Mac.
+  const ffmpeg = await requiredPath("ffmpeg", source.staticFfmpeg ?? source.ffmpeg);
+  const ffprobe = await requiredPath("ffprobe", source.staticFfprobe ?? source.ffprobe);
+  await mkdir(join(output, "media"), { recursive: true });
+  await cp(ffmpeg, join(output, "media/ffmpeg"), { dereference: true });
+  await cp(ffprobe, join(output, "media/ffprobe"), { dereference: true });
+  await chmod(join(output, "media/ffmpeg"), 0o755);
+  await chmod(join(output, "media/ffprobe"), 0o755);
+  await bundleMediaMachODependencies([join(output, "media/ffmpeg"), join(output, "media/ffprobe")]);
+}
+
+function machODependencies(outputText) {
+  return outputText
+    .split("\n")
+    .slice(1)
+    .map(line => line.trim().split(" (", 1)[0])
+    .filter(Boolean);
+}
+
+function isSystemMachODependency(path) {
+  return path.startsWith("/System/") || path.startsWith("/usr/lib/") || path.startsWith("/System/Library/");
+}
+
+async function readMachODependencies(path) {
+  const { stdout } = await execFileAsync("/usr/bin/otool", ["-L", path], { encoding: "utf8" }).catch(() => ({ stdout: "" }));
+  return machODependencies(stdout);
+}
+
+async function readMachORpaths(path) {
+  const { stdout } = await execFileAsync("/usr/bin/otool", ["-l", path], { encoding: "utf8" }).catch(() => ({ stdout: "" }));
+  return stdout
+    .split("\n")
+    .map(line => line.trim().match(/^path (.+?) \(offset /u)?.[1])
+    .filter(Boolean);
+}
+
+async function resolveMachODependency(file, dependency) {
+  const candidates = [];
+  if (dependency.startsWith("/")) candidates.push(dependency);
+  if (dependency.startsWith("@loader_path/")) candidates.push(join(dirname(file), dependency.slice("@loader_path/".length)));
+  if (dependency.startsWith("@rpath/")) {
+    const suffix = dependency.slice("@rpath/".length);
+    for (const rpath of await readMachORpaths(file)) {
+      const expanded = rpath
+        .replaceAll("@loader_path", dirname(file))
+        .replaceAll("@executable_path", dirname(file));
+      candidates.push(join(expanded, suffix));
+    }
+  }
+  for (const candidate of candidates) {
+    const resolved = await realpath(candidate).catch(() => null);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+/**
+ * Homebrew's ffmpeg is dynamically linked to /opt/homebrew. Copy its complete
+ * non-system dependency closure into the portable runtime and rewrite every
+ * install name to @loader_path-relative paths. Without this, the app's
+ * runtime probe correctly reports media=false on a customer Mac that does not
+ * have Homebrew installed, which blocks workflow submission entirely.
+ */
+async function bundleMediaMachODependencies(entrypoints) {
+  const mediaRoot = join(output, "media");
+  const libraryRoot = join(mediaRoot, "lib");
+  await mkdir(libraryRoot, { recursive: true });
+  const sourceToBundled = new Map();
+  const bundledToSource = new Map();
+  const queue = await Promise.all(entrypoints.map(async bundledPath => ({
+    bundledPath,
+    sourcePath: await realpath(bundledPath),
+  })));
+  for (const item of queue) bundledToSource.set(item.bundledPath, item.sourcePath);
+  while (queue.length) {
+    const current = queue.shift();
+    const dependencies = await readMachODependencies(current.sourcePath);
+    for (const dependency of dependencies) {
+      if (isSystemMachODependency(dependency)) continue;
+      const resolved = await resolveMachODependency(current.sourcePath, dependency);
+      if (!resolved || sourceToBundled.has(resolved)) continue;
+      const fileName = resolved.slice(resolved.lastIndexOf("/") + 1);
+      const bundled = join(libraryRoot, fileName);
+      const existing = [...sourceToBundled.values()].find(value => value === bundled);
+      if (existing && existing !== resolved) throw new Error(`macos_media_dependency_name_collision:${fileName}`);
+      await cp(resolved, bundled, { dereference: true });
+      sourceToBundled.set(resolved, bundled);
+      bundledToSource.set(bundled, resolved);
+      queue.push({ bundledPath: bundled, sourcePath: resolved });
+    }
+  }
+
+  const bundledFiles = [...sourceToBundled.entries()].map(([sourcePath, bundledPath]) => ({ sourcePath, bundledPath }));
+  for (const file of [...entrypoints, ...bundledFiles.map(item => item.bundledPath)]) {
+    const sourceFile = bundledToSource.get(file) ?? file;
+    for (const dependency of await readMachODependencies(file)) {
+      const resolved = await resolveMachODependency(sourceFile, dependency);
+      const bundled = resolved ? sourceToBundled.get(resolved) : undefined;
+      if (!bundled) continue;
+      const relativeTarget = relative(dirname(file), bundled).replaceAll("\\", "/");
+      await execFileAsync("/usr/bin/install_name_tool", ["-change", dependency, `@loader_path/${relativeTarget}`, file]);
+    }
+    if (!file.endsWith(".dylib")) continue;
+    const { stdout } = await execFileAsync("/usr/bin/otool", ["-D", file], { encoding: "utf8" }).catch(() => ({ stdout: "" }));
+    const id = stdout.split("\n").map(line => line.trim()).find(Boolean);
+    if (id) await execFileAsync("/usr/bin/install_name_tool", ["-id", `@loader_path/${file.slice(file.lastIndexOf("/") + 1)}`, file]);
+  }
+  // install_name_tool invalidates the original Mach-O code signatures. Sign
+  // each relocated media binary before the app bundle is assembled; the outer
+  // package step will sign the containing app recursively as well.
+  await Promise.all([...entrypoints, ...bundledFiles.map(item => item.bundledPath)].map(file =>
+    execFileAsync("/usr/bin/codesign", ["--force", "--sign", "-", file]),
+  ));
+  await Promise.all(bundledFiles.map(({ bundledPath }) => chmod(bundledPath, 0o755)));
+  console.log(JSON.stringify({ status: "media-dependencies-bundled", count: bundledFiles.length }));
 }
 
 async function listPythonMachOFiles(rootPath) {
@@ -199,6 +322,7 @@ await copyRuntimeDirectory("node", join(output, "node"), "node");
 await copyRuntimeDirectory("opencode", join(output, "opencode"), "opencode");
 await copyRuntimeDirectory("python", join(output, "python"), "python3");
 await repairPythonMachODependencies();
+await copyMediaRuntime();
 const font = await requiredPath("font", source.font);
 await mkdir(join(output, "fonts"), { recursive: true });
 await cp(font, join(output, "fonts/NotoSansCJKsc-Regular.otf"), { dereference: true });
@@ -226,9 +350,10 @@ const manifest = {
     font: "runtime/fonts/NotoSansCJKsc-Regular.otf",
     lancedb: "runtime/lancedb/node_modules/@lancedb/lancedb/dist/index.js",
     embedding: "runtime/embedding/local-hash-384-v1.json",
+    media: { ffmpeg: "runtime/media/ffmpeg", ffprobe: "runtime/media/ffprobe" },
   },
   distribution: "bundled-signed-only",
 };
 await writeFile(join(output, "runtime-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-const files = await Promise.all(["node/node", "opencode/opencode", "python/python3", "fonts/NotoSansCJKsc-Regular.otf"].map(async relativePath => ({ relativePath, bytes: (await stat(join(output, relativePath))).size })));
+const files = await Promise.all(["node/node", "opencode/opencode", "python/python3", "media/ffmpeg", "media/ffprobe", "fonts/NotoSansCJKsc-Regular.otf"].map(async relativePath => ({ relativePath, bytes: (await stat(join(output, relativePath))).size })));
 console.log(JSON.stringify({ status: "staged", target: "macos-arm64", output, files, lancedbPackages }));

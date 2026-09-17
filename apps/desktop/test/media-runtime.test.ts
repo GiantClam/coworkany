@@ -64,6 +64,11 @@ test("desktop host emits terminal media attempt events for recovery idempotency"
   assert.match(app, /status === "succeeded"[\s\S]*record_usage/);
   assert.match(host, /task\.usage/);
   assert.match(host, /status: "download_failed"/);
+  assert.match(host, /text-like outputs/);
+  assert.match(host, /output\.outputType/);
+  assert.match(host, /\\\.\(\?:txt\|srt\|vtt\|json\)/);
+  assert.match(host, /function normalizeSubtitleText/);
+  assert.match(host, /SRT blocks expected by FFmpeg/);
   assert.match(host, /!artifacts\.length && executorId !== "voice_clone"/);
   assert.match(host, /tempDirectory/);
   assert.match(host, /const persistedArtifacts = artifacts\.map/);
@@ -148,6 +153,8 @@ test("desktop video capabilities select shared MiniMax, Bailian and RunningHub c
   assert.match(host, /stage: "provider_request"/);
   assert.match(host, /stage: "result_download"/);
   assert.match(host, /const mediaDownloadFetch = providerKind\.includes\("minimax"\) && apiKey/);
+  assert.match(host, /join\(dirname\(process\.execPath\), "\.\.", "media", executableName\)/);
+  assert.match(host, /fontsdir=/);
   assert.match(host, /inputs\.coverImage/);
   assert.match(host, /attached_pic/);
   assert.match(host, /buildMediaCapabilityInput\(executorId, config, inputs\)/);

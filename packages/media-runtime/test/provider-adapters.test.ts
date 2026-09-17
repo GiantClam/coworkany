@@ -163,7 +163,7 @@ test("OpenAI-compatible image adapter sends reference images through the edits e
   assert.equal(form.get("model"), "gpt-image-2");
   assert.equal(form.get("prompt"), "Re-style the reference image");
   assert.equal(form.get("output_format"), "png");
-  assert.equal((form.get("image") as File).type, "image/png");
+  assert.equal((form.get("image[]") as File).type, "image/png");
 });
 
 test("OpenAI-compatible image adapter reads a validated workflow-local reference", async () => {
@@ -181,7 +181,7 @@ test("OpenAI-compatible image adapter reads a validated workflow-local reference
     assert.equal(task.status, "succeeded");
     const form = request?.body as FormData;
     assert.equal(form.get("model"), "gpt-image-2");
-    assert.equal((form.get("image") as File).name, "reference.png");
+    assert.equal((form.get("image[]") as File).name, "reference.png");
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -205,7 +205,7 @@ test("OpenAI-compatible image adapter sends a separate mask file for local edits
   } }, cancellation());
   assert.equal(task.status, "succeeded");
   const form = request?.body as FormData;
-  assert.equal((form.get("image") as File).type, "image/png");
+  assert.equal((form.get("image[]") as File).type, "image/png");
   assert.equal((form.get("mask") as File).type, "image/png");
 });
 
@@ -286,7 +286,7 @@ test("PPTOKEN image edits use curl multipart transport for reference images", as
   const task = await adapter.execute({
     provider: "pptoken" as MediaProviderId,
     modelId: "gpt-image-2",
-    input: { prompt: "edit with a reference", referenceImageUrls: ["data:image/png;base64,AQID"], maskImageUrl: "data:image/png;base64,BAUG" },
+    input: { prompt: "edit with two references", referenceImageUrls: ["data:image/png;base64,AQID", "data:image/png;base64,BAUG"], maskImageUrl: "data:image/png;base64,BwgJ" },
     idempotencyKey: "curl:image-edit:1",
   }, cancellation());
   assert.equal(task.status, "succeeded");
@@ -294,9 +294,9 @@ test("PPTOKEN image edits use curl multipart transport for reference images", as
   assert.equal(args[args.indexOf("-X") + 1], "POST");
   assert.ok(args.includes("https://api.example.test/v1/images/edits"));
   assert.ok(args.includes("Idempotency-Key: curl:image-edit:1"));
-  const imageForm = args.find((value) => value.startsWith("image=@"));
-  assert.ok(imageForm);
-  assert.equal(existsSync(imageForm!.slice("image=@".length).split(";", 1)[0]), false);
+  const imageForms = args.filter((value) => value.startsWith("image[]=@"));
+  assert.equal(imageForms.length, 2);
+  for (const imageForm of imageForms) assert.equal(existsSync(imageForm.slice("image[]=@".length).split(";", 1)[0]), false);
   const maskForm = args.find((value) => value.startsWith("mask=@"));
   assert.ok(maskForm);
   assert.equal(existsSync(maskForm!.slice("mask=@".length).split(";", 1)[0]), false);

@@ -58,7 +58,7 @@ function collectMediaReferences(value: unknown, references: MediaAssetReference[
   const record = value as Record<string, unknown>;
   const localPath = typeof record.localPath === "string" && record.localPath.trim() ? record.localPath.trim() : undefined;
   const url = firstNonEmptyString(record.url, record.uri, record.remoteUrl);
-  const relativePath = !localPath && !url && typeof record.relativePath === "string" && record.relativePath.trim() ? record.relativePath.trim() : undefined;
+  const relativePath = typeof record.relativePath === "string" && record.relativePath.trim() ? record.relativePath.trim() : undefined;
   if (localPath || url || relativePath) references.push({
     ...(url ? { url } : {}),
     ...(localPath ? { localPath } : {}),
@@ -141,18 +141,23 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     lastFrameUrl: hasInputLastFrame ? undefined : config.lastFrameUrl,
   };
   const localAttachments = [...new Set([
-    ...uniqueReferences(collectMediaReferences(localAttachmentSource)).flatMap((reference) => reference.localPath && !reference.url ? [reference.localPath] : []),
-    ...configMediaSources.flatMap((value) => uniqueReferences(collectMediaReferences(value)).flatMap((reference) => reference.localPath && !reference.url ? [reference.localPath] : [])),
+    ...uniqueReferences(collectMediaReferences(localAttachmentSource)).flatMap((reference) => (reference.localPath || reference.relativePath) && !reference.url ? [reference.localPath ?? reference.relativePath!] : []),
+    ...configMediaSources.flatMap((value) => uniqueReferences(collectMediaReferences(value)).flatMap((reference) => (reference.localPath || reference.relativePath) && !reference.url ? [reference.localPath ?? reference.relativePath!] : [])),
     ...[
       hasInputImage ? undefined : config.inputImageUrl,
       hasInputFirstFrame ? undefined : config.firstFrameUrl,
       hasInputLastFrame ? undefined : config.lastFrameUrl,
     ].filter(isLocalPath).map((value) => value.trim()),
   ])];
+  const localValidationPaths = [...new Set([
+    ...uniqueReferences(collectMediaReferences(localAttachmentSource)).flatMap((reference) => reference.url && (reference.localPath || reference.relativePath) ? [reference.localPath ?? reference.relativePath!] : []),
+    ...configMediaSources.flatMap((value) => uniqueReferences(collectMediaReferences(value)).flatMap((reference) => reference.url && (reference.localPath || reference.relativePath) ? [reference.localPath ?? reference.relativePath!] : [])),
+  ])];
   const safeConfig = omitLocalPaths(config) as Record<string, unknown>;
   const safeInputs = omitLocalPaths(inputs) as Record<string, unknown>;
   const request = Object.fromEntries(Object.entries({ ...safeConfig, ...safeInputs }).filter(([key]) => !TRANSPORT_CONFIG_KEYS.has(key))) as Record<string, unknown>;
   if (localAttachments.length) request.localAttachments = localAttachments;
+  if (localValidationPaths.length) request.localValidationPaths = localValidationPaths;
   // Multiple text edges are collected as an array by workflow-core. Preserve
   // both the node instruction and generated ASR text instead of silently
   // dropping the array and falling back to config.prompt.
@@ -172,7 +177,7 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     const referenceImageUrls = [...new Set([
       ...urlsFor(referenceInput),
       ...urlsFor(characterRoleInput),
-      ...references.flatMap((reference) => !reference.url && reference.localPath ? [reference.localPath] : []),
+      ...references.flatMap((reference) => !reference.url && (reference.localPath || reference.relativePath) ? [firstReferenceValue(reference)!] : []),
       ...(inputImageUrl ? [inputImageUrl] : []),
     ])];
     delete request.referenceImages;
@@ -270,7 +275,13 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     if (referenceAudioUrls.length) request.referenceAudioUrls = referenceAudioUrls;
     if (subtitleFile) request.subtitleFile = subtitleFile;
     const localMediaReferences = {
-      firstFrame: firstFrame.filter((reference) => reference.localPath), lastFrame: lastFrame.filter((reference) => reference.localPath), referenceImages: [...referenceImages, ...imageInputs].filter((reference) => reference.localPath), sourceVideo: sourceVideo.filter((reference) => reference.localPath), referenceVideos: referenceVideos.filter((reference) => reference.localPath), referenceAudios: referenceAudios.filter((reference) => reference.localPath), subtitle: subtitleFiles,
+      firstFrame: firstFrame.filter((reference) => reference.localPath || reference.relativePath),
+      lastFrame: lastFrame.filter((reference) => reference.localPath || reference.relativePath),
+      referenceImages: [...referenceImages, ...imageInputs].filter((reference) => reference.localPath || reference.relativePath),
+      sourceVideo: sourceVideo.filter((reference) => reference.localPath || reference.relativePath),
+      referenceVideos: referenceVideos.filter((reference) => reference.localPath || reference.relativePath),
+      referenceAudios: referenceAudios.filter((reference) => reference.localPath || reference.relativePath),
+      subtitle: subtitleFiles.filter((reference) => reference.localPath || reference.relativePath),
     };
     if (Object.values(localMediaReferences).some((references) => references.length)) request.localMediaReferences = localMediaReferences;
   }

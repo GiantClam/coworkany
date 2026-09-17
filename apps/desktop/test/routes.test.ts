@@ -1191,6 +1191,8 @@ test("desktop workflow builder keeps the Canvas full-screen with movable side pa
   assert.match(appSource, /className="desktop-workflow-node-editor"/);
   assert.match(appSource, /DesktopWorkflowUploadEditor/);
   assert.match(appSource, /pick_workflow_files/);
+  assert.match(appSource, /onChange\(selected\.slice\(0, 1\)\)/);
+  assert.match(appSource, /Choose file/);
   assert.match(appSource, /desktop_file_selection_unavailable/);
   assert.match(appSource, /仅记录本机地址，运行时按 Provider 上传/);
   assert.match(appSource, /isTauriBridgeAvailable/);
@@ -1243,6 +1245,8 @@ test("desktop workflow actions use the current canvas definition and do not requ
   assert.match(appSource, /exportCurrentWorkflow\(definition\)/);
   assert.match(appSource, /currentWorkflowDefinition\(definitionOverride\)/);
   assert.match(appSource, /save_workflow_export/);
+  assert.match(appSource, /if \(savedPath\) \{[\s\S]*return true;/);
+  assert.doesNotMatch(appSource, /return Boolean\(savedPath\)/);
 });
 
 test("desktop workflow palette appends repeated node types from the latest canvas state", () => {

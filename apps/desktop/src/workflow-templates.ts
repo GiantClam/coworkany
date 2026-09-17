@@ -9,6 +9,13 @@ type DesktopVideoProvider = {
 
 type DesktopLocale = "zh" | "en";
 
+/** Reads the user-facing prompt from canonical and legacy workflow inputs. */
+export function workflowPromptFromDefinition(definition: WorkflowDefinitionEnvelope): string {
+  const inputNode = definition.nodes.find((node) => node.nodeKey === "input" && node.type === "text_input")
+    ?? definition.nodes.find((node) => node.type === "text_input");
+  return typeof inputNode?.config.text === "string" ? inputNode.config.text : "";
+}
+
 function localized(locale: DesktopLocale, zh: string, en: string) {
   return locale === "zh" ? zh : en;
 }
@@ -104,7 +111,7 @@ export function buildCharacterSwapVideoWorkflowDefinition(
     revision: 1,
     definitionHash: "",
     nodes: [
-      { nodeKey: "prompt", type: "text_input", nodeVersion: 1, title: copy.input, positionX: 0, positionY: 0, config: { text: copy.prompt } },
+      { nodeKey: "input", type: "text_input", nodeVersion: 1, title: copy.input, positionX: 0, positionY: 0, config: { text: copy.prompt } },
       { nodeKey: "reference-image", type: "upload", nodeVersion: 1, title: copy.reference, positionX: 0, positionY: 360, config: { uploadedFiles: [], referencedArtifactIds: [] } },
       { nodeKey: "character-image", type: "upload", nodeVersion: 1, title: copy.character, positionX: 0, positionY: 720, config: { uploadedFiles: [], referencedArtifactIds: [] } },
       { nodeKey: "audio", type: "upload", nodeVersion: 1, title: copy.audio, positionX: 0, positionY: 1080, config: { uploadedFiles: [], referencedArtifactIds: [] } },
@@ -116,7 +123,7 @@ export function buildCharacterSwapVideoWorkflowDefinition(
       { nodeKey: "store", type: "product_store", nodeVersion: 1, title: copy.store, positionX: 1780, positionY: 420, config: { fileName: "character-swap-video.md", persistToWorkLibrary: true, persistToKnowledgeBase: false } },
     ],
     edges: [
-      { edgeKey: "prompt-replace", sourceNodeKey: "prompt", sourcePortId: "text", targetNodeKey: "replace", targetPortId: "text" },
+      { edgeKey: "prompt-replace", sourceNodeKey: "input", sourcePortId: "text", targetNodeKey: "replace", targetPortId: "text" },
       { edgeKey: "reference-replace", sourceNodeKey: "reference-image", sourcePortId: "image", targetNodeKey: "replace", targetPortId: "referenceImage" },
       { edgeKey: "character-replace", sourceNodeKey: "character-image", sourcePortId: "image", targetNodeKey: "replace", targetPortId: "characterImage" },
       { edgeKey: "audio-asr", sourceNodeKey: "audio", sourcePortId: "audio", targetNodeKey: "asr", targetPortId: "audio" },

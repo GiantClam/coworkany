@@ -44,6 +44,15 @@ test("passes local workflow images to the compatible image adapter as references
   assert.deepEqual(input.referenceImageUrls, ["C:\\media\\reference.png"]);
 });
 
+test("passes relative workflow image paths to the compatible image adapter as references", () => {
+  const input = buildMediaCapabilityInput("image_generate", {}, {
+    referenceImage: [{ fileName: "reference.jpeg", mimeType: "image/jpeg", relativePath: "attachments/reference.jpeg" }],
+    characterImage: [{ fileName: "character.webp", mimeType: "image/webp", relativePath: "attachments/character.webp" }],
+  });
+  assert.deepEqual(input.referenceImageUrls, ["attachments/reference.jpeg", "attachments/character.webp"]);
+  assert.deepEqual(input.localAttachments, ["attachments/reference.jpeg", "attachments/character.webp"]);
+});
+
 test("marks raw local reference paths as workflow attachments", () => {
   const input = buildMediaCapabilityInput("image_generate", {}, {
     referenceImages: ["C:\\media\\raw-reference.png"],
@@ -82,12 +91,22 @@ test("maps the canonical first-frame role input to the video provider field", ()
   assert.deepEqual(input.localAttachments, ["C:\\media\\canonical-first.png"]);
 });
 
-test("prefers a provider URL when an upstream artifact also has a local cache path", () => {
+test("retains local cache paths when an upstream artifact also has a provider URL", () => {
   const input = buildMediaCapabilityInput("image_generate", {}, {
     referenceImages: [{ url: "https://files.example.test/reference.png", localPath: "C:\\media\\reference.png" }],
   });
   assert.deepEqual(input.referenceImageUrls, ["https://files.example.test/reference.png"]);
   assert.equal("localAttachments" in input, false);
+  assert.deepEqual(input.localValidationPaths, ["C:\\media\\reference.png"]);
+});
+
+test("retains relative local paths alongside provider URLs for host validation", () => {
+  const input = buildMediaCapabilityInput("image_generate", {}, {
+    referenceImages: [{ url: "https://files.example.test/reference.png", relativePath: "attachments/reference.png" }],
+  });
+  assert.deepEqual(input.referenceImageUrls, ["https://files.example.test/reference.png"]);
+  assert.equal("localAttachments" in input, false);
+  assert.deepEqual(input.localValidationPaths, ["attachments/reference.png"]);
 });
 
 test("tracks local frame paths configured directly on a video node", () => {

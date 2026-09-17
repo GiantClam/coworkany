@@ -33,7 +33,7 @@ import { writerImageArtifactsForArticle } from "./writer-preview";
 import { replayPersistedRunToConversationMessage } from "./conversation-run-replay";
 import { WorkflowOutputPreview } from "./workflow-output-view";
 import { createRunningHubAudioTranscriptionRegistration, createRunningHubWorkflowRegistration, migrateLegacyRunningHubWorkflows, parseRunningHubWorkflowJson, runningHubWorkflowIdFromUrl, type RunningHubWorkflowCapability, type RunningHubWorkflowRegistration, type RunningHubWorkflowRequestKind } from "./runninghub-workflow";
-import { buildCharacterSwapVideoWorkflowDefinition } from "./workflow-templates";
+import { buildCharacterSwapVideoWorkflowDefinition, workflowPromptFromDefinition } from "./workflow-templates";
 import { promptRequestsArtifact } from "./artifact-intent";
 import { filterAssetLibraryItems, type AssetLibraryTab } from "./asset-library-filter";
 import { ConversationMemoryCache } from "./conversation-cache";
@@ -850,7 +850,7 @@ export function buildLocalMediaWorkflowDefinition(kind: "video" | "audio", local
   return { ...definition, definitionHash: hashWorkflowDefinition(definition) };
 }
 
-export function buildProductPromotionWorkflowDefinition(videoProvider: Pick<DesktopProviderConfig, "id" | "model" | "baseUrl">, audioProvider: Pick<DesktopProviderConfig, "id" | "model" | "baseUrl">, locale: "zh" | "en" = "zh"): WorkflowDefinitionEnvelope {
+export function buildProductPromotionWorkflowDefinition(videoProvider: Pick<DesktopProviderConfig, "id" | "model" | "baseUrl">, audioProvider: Pick<DesktopProviderConfig, "id" | "model" | "baseUrl">, imageProvider: Pick<DesktopProviderConfig, "id" | "model" | "baseUrl">, locale: "zh" | "en" = "zh"): WorkflowDefinitionEnvelope {
   const textTitle = locale === "en" ? "Product promotion script" : "产品宣传文案";
   const definition: WorkflowDefinitionEnvelope = {
     schemaVersion: 2, revision: 1, definitionHash: "",
@@ -864,7 +864,9 @@ export function buildProductPromotionWorkflowDefinition(videoProvider: Pick<Desk
       { nodeKey: "subtitle", type: "video_process", nodeVersion: 1, title: locale === "en" ? "Add subtitles" : "添加字幕", positionX: 1224, positionY: 360, config: { operation: "subtitle", subtitleFormat: "srt", ratio: "16:9", width: 1280, height: 720, fps: 30 } },
       { nodeKey: "voice", type: "voice_synthesis", nodeVersion: 1, title: locale === "en" ? "Voiceover" : "语音合成", positionX: 816, positionY: 0, config: { text: locale === "en" ? "Use the product promotion script as the voiceover." : "使用产品宣传文案生成配音。", provider: audioProvider.id, model: audioProvider.model, baseUrl: audioProvider.baseUrl } },
       { nodeKey: "mux", type: "video_process", nodeVersion: 1, title: locale === "en" ? "Add voice to video" : "添加语音到视频", positionX: 1632, positionY: 360, config: { operation: "mux" } },
-      { nodeKey: "output", type: "output", nodeVersion: 1, title: locale === "en" ? "Final product video" : "产品宣传成片", positionX: 2040, positionY: 360, config: {} },
+      { nodeKey: "cover-image", type: "image_generate", nodeVersion: 1, title: locale === "en" ? "Generate cover image" : "生成封面图片", positionX: 816, positionY: 720, config: { prompt: locale === "en" ? "Create a polished 16:9 product-promotion cover image from the product script. Make the product the visual focus, use clear commercial composition, leave readable negative space for a headline, and do not add text or watermarks." : "根据产品宣传文案生成一张精致的 16:9 宣传视频封面。突出产品主体，采用清晰的商业构图，为标题预留干净留白；不要生成文字或水印。", mode: "text-to-image", provider: imageProvider.id, model: imageProvider.model, baseUrl: imageProvider.baseUrl } },
+      { nodeKey: "compose", type: "video_compose", nodeVersion: 1, title: locale === "en" ? "Embed cover in final video" : "将封面写入最终视频", positionX: 2040, positionY: 360, config: { outputFormat: "mp4", subtitleMode: "none", fitMode: "contain" } },
+      { nodeKey: "output", type: "output", nodeVersion: 1, title: locale === "en" ? "Final product video" : "产品宣传成片", positionX: 2448, positionY: 360, config: {} },
     ],
     edges: [
       { edgeKey: "script-video", sourceNodeKey: "script", sourcePortId: "text", targetNodeKey: "generated-video", targetPortId: "text" },
@@ -877,9 +879,12 @@ export function buildProductPromotionWorkflowDefinition(videoProvider: Pick<Desk
       { edgeKey: "stitch-subtitle", sourceNodeKey: "stitch", sourcePortId: "video", targetNodeKey: "subtitle", targetPortId: "videos" },
       { edgeKey: "subtitle-mux", sourceNodeKey: "subtitle", sourcePortId: "video", targetNodeKey: "mux", targetPortId: "videos" },
       { edgeKey: "voice-mux", sourceNodeKey: "voice", sourcePortId: "audio", targetNodeKey: "mux", targetPortId: "audios" },
-      { edgeKey: "mux-output", sourceNodeKey: "mux", sourcePortId: "video", targetNodeKey: "output", targetPortId: "videos" },
+      { edgeKey: "script-cover-image", sourceNodeKey: "script", sourcePortId: "text", targetNodeKey: "cover-image", targetPortId: "text" },
+      { edgeKey: "mux-compose", sourceNodeKey: "mux", sourcePortId: "video", targetNodeKey: "compose", targetPortId: "videos" },
+      { edgeKey: "cover-image-compose", sourceNodeKey: "cover-image", sourcePortId: "image", targetNodeKey: "compose", targetPortId: "coverImage" },
+      { edgeKey: "compose-output", sourceNodeKey: "compose", sourcePortId: "video", targetNodeKey: "output", targetPortId: "videos" },
     ],
-    metadata: { description: locale === "en" ? "Generate a 5-second digital human product intro, append three uploaded clips in order, add subtitles and voiceover, then export the final video." : "生成 5 秒数字人产品介绍，依次拼接三个上传视频，添加字幕和语音，输出产品宣传成片。", status: "draft" },
+    metadata: { description: locale === "en" ? "Generate a 5-second digital human product intro, append three uploaded clips in order, add subtitles and voiceover, generate a cover image, and embed that cover in the final video." : "生成 5 秒数字人产品介绍，依次拼接三个上传视频，添加字幕和语音，生成封面图片并写入最终产品宣传成片。", status: "draft" },
   };
   return { ...definition, definitionHash: hashWorkflowDefinition(definition) };
 }
@@ -1474,7 +1479,7 @@ function DesktopWorkflowUploadEditor({ node, locale, onSelectFiles, onChange }: 
   const [previewError, setPreviewError] = useState(false);
   const localFilesAvailable = isTauriBridgeAvailable();
   const files = Array.isArray(node.config.uploadedFiles)
-    ? node.config.uploadedFiles.filter((item): item is WorkflowLocalFile => Boolean(item && typeof item === "object" && typeof (item as WorkflowLocalFile).fileName === "string" && (typeof (item as WorkflowLocalFile).localPath === "string" || typeof (item as WorkflowLocalFile).relativePath === "string")))
+    ? node.config.uploadedFiles.filter((item): item is WorkflowLocalFile => Boolean(item && typeof item === "object" && typeof (item as WorkflowLocalFile).fileName === "string" && (typeof (item as WorkflowLocalFile).localPath === "string" || typeof (item as WorkflowLocalFile).relativePath === "string"))).slice(0, 1)
     : [];
   const previewFile = files.find((file) => file.mimeType.startsWith("image/") || file.mimeType.startsWith("video/"));
   useEffect(() => {
@@ -1506,7 +1511,7 @@ function DesktopWorkflowUploadEditor({ node, locale, onSelectFiles, onChange }: 
     setError(null);
     try {
       const selected = await onSelectFiles();
-      if (selected.length) onChange([...files, ...selected].slice(0, 8));
+      if (selected.length) onChange(selected.slice(0, 1));
     } catch (selectionError) {
       const message = localFileUploadErrorCode(selectionError);
       setError(message === "tauri_bridge_unavailable" || message === "desktop_file_selection_unavailable"
@@ -1518,7 +1523,7 @@ function DesktopWorkflowUploadEditor({ node, locale, onSelectFiles, onChange }: 
   };
   const fileKind = (file: WorkflowLocalFile) => file.mimeType.startsWith("image/") ? "IMG" : file.mimeType.startsWith("video/") ? "VID" : file.mimeType.startsWith("audio/") ? "AUD" : file.mimeType.includes("pdf") ? "PDF" : file.mimeType.includes("presentation") ? "PPT" : "FILE";
   return <div className="workflow-upload-editor" data-node-no-drag="true">
-    <div className="workflow-upload-toolbar"><div><strong>{locale === "zh" ? "本地文件" : "Local files"}</strong><small>{localFilesAvailable ? (locale === "zh" ? "仅记录本机地址，运行时按 Provider 上传" : "Paths stay local; the Provider receives files only when the workflow runs") : (locale === "zh" ? "请从桌面客户端打开以添加文件" : "Open in the desktop client to add files")}</small></div><button type="button" className="workflow-upload-button" disabled={busy || !localFilesAvailable} title={localFilesAvailable ? undefined : (locale === "zh" ? "本地文件选择仅支持桌面客户端" : "Local file selection is available only in the desktop app")} onClick={() => void handleSelect()}>{busy ? (locale === "zh" ? "读取中…" : "Reading…") : (locale === "zh" ? "选择文件" : "Choose files")}</button></div>
+    <div className="workflow-upload-toolbar"><div><strong>{locale === "zh" ? "本地文件" : "Local file"}</strong><small>{localFilesAvailable ? (locale === "zh" ? "仅记录本机地址，运行时按 Provider 上传" : "Paths stay local; the Provider receives files only when the workflow runs") : (locale === "zh" ? "请从桌面客户端打开以添加文件" : "Open in the desktop client to add files")}</small></div><button type="button" className="workflow-upload-button" disabled={busy || !localFilesAvailable} title={localFilesAvailable ? undefined : (locale === "zh" ? "本地文件选择仅支持桌面客户端" : "Local file selection is available only in the desktop app")} onClick={() => void handleSelect()}>{busy ? (locale === "zh" ? "读取中…" : "Reading…") : (locale === "zh" ? "选择文件" : "Choose file")}</button></div>
     {previewFile ? <div className="workflow-upload-media-preview" data-node-media="true">{previewSource ? previewFile.mimeType.startsWith("image/") ? <img src={previewSource} alt={previewFile.fileName} /> : <video controls preload="metadata" src={previewSource} /> : <div className="workflow-upload-preview-pending"><span>{fileKind(previewFile)}</span><small>{previewError ? (locale === "zh" ? "预览不可用，仍可在工作流中使用该文件" : "Preview unavailable; the file remains available to this workflow") : (locale === "zh" ? "正在加载完整预览…" : "Loading full preview…")}</small></div>}</div> : null}
     {files.length ? <div className={`workflow-upload-list ${previewFile ? "has-media-preview" : "documents-only"}`}>{files.map((file, index) => <div className="workflow-upload-item" key={`${file.localPath ?? file.relativePath ?? file.fileName}-${index}`}><span className="workflow-upload-file-icon" aria-hidden="true">{fileKind(file)}</span><div><strong title={file.localPath ?? file.relativePath ?? file.fileName}>{file.fileName}</strong><small>{file.mimeType} · {Math.max(1, Math.ceil(file.byteLength / 1024))} KB</small></div><button type="button" data-node-no-drag="true" aria-label={locale === "zh" ? `移除 ${file.fileName}` : `Remove ${file.fileName}`} onClick={() => onChange(files.filter((_, fileIndex) => fileIndex !== index))}>×</button></div>)}</div> : <small className="workflow-upload-empty">{locale === "zh" ? "尚未选择文件" : "No files selected"}</small>}
     {error ? <small className="workflow-upload-error" role="alert">{error}</small> : null}
@@ -1919,7 +1924,7 @@ function DesktopWorkflowBuilderSurface(props: WorkflowBuilderSurfaceProps) {
 function DesktopWorkflowWorkspace({ route, onBack, prompt: _prompt, onPromptChange: _onPromptChange, runStatus: _runStatus, activeRunId: _activeRunId, onRun: _onRun, onRerun: providedOnRerun, onContinue: providedOnContinue, onCancel, lastRunStatus, savedWorkflows, workflowAction, onWorkflowAction, definition, onDefinitionChange, workflowMetadata: initialWorkflowMetadata, onWorkflowMetaChange, onSave, onExport, onImport, model, models, modelForNode, modelsForNode, providersForNode, agentOptions, loadVoicesForProvider, reasoningEffort, skillId, onModelChange, onReasoningChange, onSkillChange = onReasoningChange, providerConfiguredForNode, providerSourceForNode, onSelectWorkflowFiles, nodeExecutionSnapshots, locale }: DesktopWorkflowWorkspaceProps & { locale: "zh" | "en" }) {
   const [selectedNodeKey, setSelectedNodeKey] = useState("capability");
   const [localDefinition, setLocalDefinition] = useState<WorkflowDefinitionEnvelope>(() => definition ? normalizeWorkflowDefinitionLayout(definition) : buildWorkflowDefinition("", workflowAction, { id: "local", model: "" }, {}, locale));
-  const [workflowEditorPrompt, setWorkflowEditorPrompt] = useState(() => String(localDefinition.nodes.find((node) => node.nodeKey === "input")?.config.text ?? ""));
+  const [workflowEditorPrompt, setWorkflowEditorPrompt] = useState(() => workflowPromptFromDefinition(localDefinition));
   const prompt = workflowEditorPrompt;
   const activeRunId = _activeRunId;
   const runStatus = _runStatus;
@@ -1959,7 +1964,7 @@ function DesktopWorkflowWorkspace({ route, onBack, prompt: _prompt, onPromptChan
     const normalized = normalizeWorkflowDefinitionLayout(definition);
     localDefinitionRef.current = normalized;
     setLocalDefinition(normalized);
-    setWorkflowEditorPrompt(String(normalized.nodes.find((node) => node.nodeKey === "input")?.config.text ?? ""));
+    setWorkflowEditorPrompt(workflowPromptFromDefinition(normalized));
     historyRef.current = { past: [], future: [] };
     historyCoalesceRef.current = null;
     setHistoryState({ canUndo: false, canRedo: false });
@@ -1987,8 +1992,7 @@ function DesktopWorkflowWorkspace({ route, onBack, prompt: _prompt, onPromptChan
     localDefinitionRef.current = snapshot;
     setLocalDefinition(snapshot);
     setSelectedNodeKey((current) => snapshot.nodes.some((node) => node.nodeKey === current) ? current : snapshot.nodes[0]?.nodeKey ?? "input");
-    const inputText = snapshot.nodes.find((node) => node.nodeKey === "input")?.config.text;
-    if (typeof inputText === "string") setWorkflowEditorPrompt(inputText);
+    setWorkflowEditorPrompt(workflowPromptFromDefinition(snapshot));
     onDefinitionChange(snapshot);
   };
   const undoWorkflow = () => {
@@ -4091,7 +4095,7 @@ export function App() {
     { id: "image-campaign", title: locale === "zh" ? "营销图片批量生成" : "Campaign image generation", description: locale === "zh" ? "以 Canvas 编排文案与图片生成节点；未配置图片 Provider 时保持可见。" : "Compose copy and image generation on Canvas; remains visible until an image provider is configured.", status: isMediaProviderConfigured(providerForCapability(config, "image")) ? "ready" : "needs-config" },
     { id: "video-ffmpeg-transform", title: locale === "zh" ? "FFmpeg 视频变换" : "FFmpeg video transform", description: locale === "zh" ? "上传本地视频，使用 FFmpeg 调整为 16:9、1280×720、30 FPS。" : "Upload a local video and transform it to 16:9, 1280×720 at 30 FPS with FFmpeg.", status: "ready" },
     { id: "audio-ffmpeg-trim", title: locale === "zh" ? "FFmpeg 音频裁剪" : "FFmpeg audio trim", description: locale === "zh" ? "上传本地音频，使用 FFmpeg 裁剪前两秒并输出纯音频。" : "Upload a local audio file and trim the first two seconds to a pure audio output with FFmpeg.", status: "ready" },
-    { id: "product-promotion-video", title: locale === "zh" ? "产品宣传视频流水线" : "Product promotion video pipeline", description: locale === "zh" ? "文生 5 秒数字人视频，依次拼接操作、结果和片尾视频，添加字幕与语音。" : "Generate a 5-second digital human video, append operation, result, and outro clips, then add subtitles and voiceover.", status: isMediaProviderConfigured(providerForCapability(config, "video")) && isMediaProviderConfigured(providerForCapability(config, "audio")) ? "ready" : "needs-config" },
+    { id: "product-promotion-video", title: locale === "zh" ? "产品宣传视频流水线" : "Product promotion video pipeline", description: locale === "zh" ? "文生 5 秒数字人视频，依次拼接操作、结果和片尾视频，添加字幕与语音，并生成封面写入成片。" : "Generate a 5-second digital human video, append operation, result, and outro clips, add subtitles and voiceover, then generate and embed the cover.", status: isMediaProviderConfigured(providerForCapability(config, "video")) && isMediaProviderConfigured(providerForCapability(config, "audio")) && isMediaProviderConfigured(providerForCapability(config, "image")) ? "ready" : "needs-config" },
     { id: "character-swap-video", title: locale === "zh" ? "人物替换字幕视频" : "Character replacement video", description: locale === "zh" ? "参考图与人物图替换，音频 ASR 生成字幕，再通过本地 FFmpeg 合成。" : "Replace a character in a reference image, transcribe the audio, then compose the result with local FFmpeg.", status: isMediaProviderConfigured(providerForCapability(config, "image")) && supportsCharacterSwapImageProvider(providerForCapability(config, "image")) && isMediaProviderConfigured(audioTranscriptionProvider) && audioTranscriptionWorkflowCount === 1 ? "ready" : "needs-config" },
   ], [activeModel, audioTranscriptionProvider, audioTranscriptionWorkflowCount, config, locale]);
   const workflowDirectoryRuns = useMemo<WorkbenchWorkflowDirectoryRun[]>(() => runs.flatMap((run) => {
@@ -4982,7 +4986,12 @@ export function App() {
         ? (await workbenchClient.workflows.list()).find((workflow) => workflow.definition.definitionHash === definitionHash)
         : undefined;
       const currentDefinition = workflowOnly ? currentWorkflowDefinition() : undefined;
-      const retryDefinition = saved?.definition ?? metadata?.workflowDefinition ?? currentDefinition;
+      // A workflow-only retry is initiated from the currently edited canvas. Prefer that
+      // definition so prompt/config changes invalidate the old checkpoints and rerun the
+      // affected generation nodes instead of silently reusing their previous outputs.
+      const retryDefinition = workflowOnly
+        ? currentDefinition
+        : saved?.definition ?? metadata?.workflowDefinition ?? currentDefinition;
       if (workflowOnly && retryDefinition) {
         const completed: Record<string, Record<string, unknown>> = {};
         for (const node of detail.nodes) {
@@ -5220,13 +5229,11 @@ export function App() {
     // user does not reopen the old external-video node on another machine.
     savedWorkflowHashRef.current = saved && !needsMigrationSave ? hashWorkflowDefinition(sanitizeWorkflowDefinitionForStorage(normalizedDefinition)) : null;
     savedWorkflowPresentationHashRef.current = saved ? hashWorkflowPresentation(normalizedDefinition, saved.name) : null;
-    const input = normalizedDefinition.nodes.find((node) => node.nodeKey === "input");
     const capability = normalizedDefinition.nodes.find((node) => node.nodeKey !== "input" && node.type !== "output");
-    const inputConfig = input?.config && typeof input.config === "object" ? input.config as Record<string, unknown> : {};
     const metadata = definition.metadata ?? {};
     const savedTitle = saved?.name ?? (locale === "zh" ? "未命名工作流" : "Untitled workflow");
     setWorkflowMetadata({ title: savedTitle, description: typeof metadata.description === "string" ? metadata.description : "", status: metadata.status === "live" || metadata.status === "archived" ? metadata.status : (saved ? "live" : "draft") });
-    const nextPrompt = typeof inputConfig.text === "string" ? inputConfig.text : "";
+    const nextPrompt = workflowPromptFromDefinition(normalizedDefinition);
     if (capability && workflowActionsBase.some((item) => item.id === capability.type)) setWorkflowAction(capability.type as WorkflowAction);
     setWorkflowPrompt(nextPrompt);
     setWorkflowDefinition(normalizedDefinition);
@@ -5388,7 +5395,7 @@ export function App() {
         return;
       }
       if (action.id === "product-promotion-video") {
-        await createWorkflowFromTemplate(buildProductPromotionWorkflowDefinition(providerForCapability(config, "video"), providerForCapability(config, "audio"), locale), locale === "zh" ? "产品宣传视频流水线" : "Product promotion video pipeline");
+        await createWorkflowFromTemplate(buildProductPromotionWorkflowDefinition(providerForCapability(config, "video"), providerForCapability(config, "audio"), providerForCapability(config, "image"), locale), locale === "zh" ? "产品宣传视频流水线" : "Product promotion video pipeline");
         return;
       }
       if (action.id === "character-swap-video") {
@@ -5472,8 +5479,11 @@ export function App() {
     if (isTauriBridgeAvailable()) {
       try {
         const savedPath = await tauriBridge.invoke<string | null>("save_workflow_export", { content, suggestedName: fileName });
-        if (savedPath) setRunStatus(locale === "zh" ? `工作流 JSON 已导出到 ${savedPath}` : `Workflow JSON exported to ${savedPath}`);
-        return Boolean(savedPath);
+        if (savedPath) {
+          setRunStatus(locale === "zh" ? `工作流 JSON 已导出到 ${savedPath}` : `Workflow JSON exported to ${savedPath}`);
+          return true;
+        }
+        // Some desktop platforms intentionally return no native path; use the browser download fallback.
       } catch {
         // Browser preview does not have the desktop command; fall through to its download path.
       }
@@ -5552,10 +5562,7 @@ export function App() {
       if (isWorkflowRun ? workflowKeyForStatus === workflowCanvasKeyRef.current : true) (isWorkflowRun ? setWorkflowRunStatus : setRunStatus)(status);
     };
     if (attachmentsPreparing) { workflowKey && workflowLaunchLocksRef.current.delete(workflowKey); setDomainStatus(locale === "zh" ? "正在读取附件，请稍候…" : "Preparing attachments…"); return; }
-    const workflowInput = isWorkflowDefinition(workflowOverride)
-      ? workflowOverride.nodes.find((node) => node.nodeKey === "input")?.config.text
-      : undefined;
-    const workflowInputPrompt = typeof workflowInput === "string" ? workflowInput : "";
+    const workflowInputPrompt = isWorkflowDefinition(workflowOverride) ? workflowPromptFromDefinition(workflowOverride) : "";
     const rawPrompt = promptOverride ?? (isWorkflowRun ? (workflowInputPrompt || workflowPrompt) : prompt);
     const basePrompt = rawPrompt.trim();
     const attachmentContext = attachments.length ? (locale === "zh" ? `\n\n本地附件（已复制到当前项目目录）：\n${attachments.map((attachment) => `- ${attachment.relativePath ?? attachment.name} (${attachment.mediaType}, ${attachment.size} bytes)${attachment.text ? `\n  文件正文：\n${attachment.text}${attachment.truncated ? "\n  [正文已截断]" : ""}` : "\n  请使用本地文件工具读取该附件内容。"}`).join("\n")}` : `\n\nLocal attachments copied into the current project:\n${attachments.map((attachment) => `- ${attachment.relativePath ?? attachment.name} (${attachment.mediaType}, ${attachment.size} bytes)${attachment.text ? `\n  Extracted content:\n${attachment.text}${attachment.truncated ? "\n  [Content truncated]" : ""}` : "\n  Use the local file tools to read this attachment."}`).join("\n")}`) : "";

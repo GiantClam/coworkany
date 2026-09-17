@@ -72,7 +72,7 @@ function isAvailableWorkflowLocalFile(localPath: string) {
 function localPathFromWorkflowValue(value: unknown, workspacePath?: string): string | undefined {
   if (typeof value === "string") {
     if (isAbsolute(value)) return value;
-    if (workspacePath && /^(?:\.?[\\/]?artifacts[\\/])/u.test(value.trim())) {
+    if (workspacePath && /^(?:\.?[\\/]|(?:artifacts|attachments)[\\/])/u.test(value.trim())) {
       const workspaceRoot = resolve(workspacePath);
       const candidate = resolve(workspaceRoot, value);
       if (candidate.startsWith(`${workspaceRoot}${sep}`)) return candidate;
@@ -81,7 +81,6 @@ function localPathFromWorkflowValue(value: unknown, workspacePath?: string): str
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  if (typeof record.url === "string" || typeof record.uri === "string" || typeof record.remoteUrl === "string") return undefined;
   const localPath = record.localPath;
   if (typeof localPath === "string" && isAbsolute(localPath)) return localPath;
   const relativePath = record.relativePath;
@@ -91,6 +90,24 @@ function localPathFromWorkflowValue(value: unknown, workspacePath?: string): str
     if (candidate.startsWith(`${workspaceRoot}${sep}`)) return candidate;
   }
   return undefined;
+}
+
+function assertWorkflowLocalFile(value: unknown, workspacePath: string) {
+  const localPath = localPathFromWorkflowValue(value, workspacePath);
+  if (localPath && !isAvailableWorkflowLocalFile(localPath)) throw new Error(`workflow_local_file_missing:${localPath}`);
+  return localPath;
+}
+
+function assertUploadedFileMaterial(value: unknown, workspacePath: string) {
+  const localPath = assertWorkflowLocalFile(value, workspacePath);
+  if (localPath || typeof value === "string" || !value || typeof value !== "object" || Array.isArray(value)) return;
+  const record = value as Record<string, unknown>;
+  const hasRemoteReference = [record.url, record.uri, record.remoteUrl].some((item) => typeof item === "string" && item.trim().length > 0);
+  const hasFileMetadata = [record.fileName, record.mimeType, record.byteLength].some((item) => item !== undefined && item !== null && item !== "");
+  if (hasFileMetadata && !hasRemoteReference) {
+    const label = typeof record.fileName === "string" && record.fileName.trim() ? record.fileName.trim() : "unknown";
+    throw new Error(`workflow_local_file_missing:${label}`);
+  }
 }
 
 async function resolveRegisteredWorkflowInputs(
@@ -344,6 +361,8 @@ function localToolPath(config: Record<string, unknown>, configKey: string, envir
     environment,
     join(dirname(process.execPath), executableName),
     join(dirname(process.execPath), "..", executableName),
+    join(dirname(process.execPath), "..", "media", executableName),
+    join(dirname(process.execPath), "media", executableName),
     join(dirname(process.execPath), "..", "Resources", executableName),
     join(dirname(process.execPath), "..", "..", executableName),
     join(process.cwd(), "resources", executableName),
@@ -427,6 +446,15 @@ function subtitleFilterPath(path: string) {
   return path.replaceAll("\\", "\\\\").replaceAll(":", "\\:").replaceAll("'", "\\'").replaceAll(",", "\\,");
 }
 
+function localFontsDirectory() {
+  const candidates = [
+    join(dirname(process.execPath), "..", "fonts"),
+    join(dirname(process.execPath), "fonts"),
+    join(process.cwd(), "resources", "fonts"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? "";
+}
+
 async function runVideoCompose(
   command: HostCommand,
   runId: string,
@@ -469,7 +497,8 @@ async function runVideoCompose(
   const fitMode = config.fitMode === "cover" || config.fit === "crop" ? "cover" : "contain";
   const fit = fitMode === "cover" ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}` : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`;
   const subtitleMode = config.subtitleMode === "separate_track" || config.subtitleMode === "track" ? "track" : config.subtitleMode === "none" || config.burnSubtitles === false ? "none" : "burn-in";
-  const subtitleFilter = subtitle ? `subtitles='${subtitleFilterPath(subtitle)}'` : "";
+  const fontsDirectory = subtitle && subtitleMode === "burn-in" ? localFontsDirectory() : "";
+  const subtitleFilter = subtitle ? `subtitles='${subtitleFilterPath(subtitle)}'${fontsDirectory ? `:fontsdir='${subtitleFilterPath(fontsDirectory)}':force_style='FontName=Noto Sans CJK SC'` : ""}` : "";
   const needsBaseComposition = !sourceVideo || Boolean(audio) || Boolean(subtitle);
   let composedVideoPath = sourceVideo;
   if (needsBaseComposition) {
@@ -708,7 +737,28 @@ async function runRunningHubAudioTranscription(command: HostCommand, runId: stri
     emit(command, { event: "tool_event", tool: "media:audio_transcription", phase: "failed", message: JSON.stringify({ provider: providerOptions.provider, model: registration.remoteWorkflowId, executorId: "audio_transcription", nodeKey, providerTaskId: task.providerTaskId, idempotencyKey, status: task.status, ...(task.providerStatus ? { providerStatus: task.providerStatus } : {}), ...(task.error ? { error: task.error } : {}) }), runId });
     throw new Error(`runninghub_audio_transcription_${task.status}${task.error ? `:${task.error}` : ""}`);
   }
-  const text = task.outputs.map((output) => typeof output.text === "string" ? output.text.trim() : "").filter(Boolean).join("\n\n");
+  const inlineText = task.outputs.map((output) => typeof output.text === "string" ? output.text.trim() : "").filter(Boolean);
+  // RunningHub ASR Apps commonly expose the transcript as a downloadable
+  // `.srt` result (`url`) instead of putting it in `results[].text`.
+  // Resolve those text artifacts before declaring the transcription empty.
+  const linkedText: string[] = [];
+  for (const output of task.outputs) {
+    if (inlineText.length || typeof output.url !== "string" || !output.url.trim()) continue;
+    // RunningHub returns preview images alongside the transcript file. Only
+    // download text-like outputs; decoding a PNG as UTF-8 produces a huge,
+    // misleading "transcript" and can make the UI appear frozen.
+    const url = output.url.trim();
+    const outputType = typeof output.outputType === "string" ? output.outputType.trim().toLowerCase() : "";
+    const isTextOutput = /(?:text|txt|srt|vtt|json)/u.test(outputType) || /\.(?:txt|srt|vtt|json)(?:$|[?#])/iu.test(url);
+    if (!isTextOutput) continue;
+    const response = await fetch(url, { signal });
+    if (!response.ok) continue;
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (contentType && !/(?:text\/|json|subrip|vtt)/u.test(contentType)) continue;
+    const body = (await response.text()).trim();
+    if (body) linkedText.push(body);
+  }
+  const text = [...inlineText, ...linkedText].join("\n\n");
   if (!text) throw new Error("runninghub_audio_transcription_empty_result");
   emit(command, { event: "tool_event", tool: "media:audio_transcription", phase: "completed", message: JSON.stringify({ provider: providerOptions.provider, model: registration.remoteWorkflowId, executorId: "audio_transcription", nodeKey, providerTaskId: task.providerTaskId, idempotencyKey, status: "succeeded" }), runId });
   emit(command, { event: "text_delta", delta: text, runId });
@@ -1048,7 +1098,9 @@ async function runWorkflow(command: HostCommand) {
       if (executorId === "text_input") return { text: typeof config.text === "string" ? config.text : "" };
       if (executorId === "upload") {
         const uploadedFiles = Array.isArray(config.uploadedFiles) ? config.uploadedFiles : [];
+        if (uploadedFiles.length > 1) throw new Error("workflow_upload_multiple_files_not_supported");
         const referencedArtifactIds = Array.isArray(config.referencedArtifactIds) ? config.referencedArtifactIds : [];
+        for (const file of uploadedFiles) assertUploadedFileMaterial(file, workspacePath);
         const isMimeType = (value: unknown, prefix: string) => Boolean(value && typeof value === "object" && typeof (value as { mimeType?: unknown }).mimeType === "string" && (value as { mimeType: string }).mimeType.startsWith(prefix));
         const assets = [...uploadedFiles, ...referencedArtifactIds];
         const detectedStreams = await Promise.all(uploadedFiles.map(async (file) => ({ file, streams: await detectMediaStreams(file, workspacePath, signal) })));
@@ -1215,9 +1267,10 @@ async function createFileArtifact(workspacePath: string, runId: string, nodeKey:
   const directory = join("artifacts", runId.replace(/[^a-zA-Z0-9_-]/g, "_"));
   const requested = typeof config.fileName === "string" && config.fileName.trim() ? config.fileName.trim() : `${nodeKey}.md`;
   const safeName = requested.replace(/[\\/]/g, "_").replace(/\.\.+/g, "_").replace(/[^a-zA-Z0-9._ -]/g, "_").slice(0, 160) || `${nodeKey}.md`;
-  const content = typeof inputs.text === "string" ? inputs.text : JSON.stringify(inputs, null, 2);
   const relativePath = `${directory}/${safeName}`;
   const extension = safeName.toLowerCase().split(".").pop() ?? "bin";
+  const rawContent = typeof inputs.text === "string" ? inputs.text : JSON.stringify(inputs, null, 2);
+  const content = extension === "srt" ? normalizeSubtitleText(rawContent) : rawContent;
   const mimeType = extension === "md" ? "text/markdown" : extension === "txt" ? "text/plain" : extension === "srt" ? "application/x-subrip" : extension === "json" ? "application/json" : "application/octet-stream";
   const target = resolve(workspacePath, relativePath);
   if (!target.startsWith(`${resolve(workspacePath)}${sep}`)) throw new Error("runtime_artifact_path_escape");
@@ -1225,6 +1278,27 @@ async function createFileArtifact(workspacePath: string, runId: string, nodeKey:
   await writeFile(target, content, "utf8");
   const result = { relativePath, mimeType, byteLength: Buffer.byteLength(content, "utf8"), sha256: createHash("sha256").update(content).digest("hex") };
   return { artifact: { relativePath: typeof result.relativePath === "string" ? result.relativePath : relativePath, bytes: Number(result.byteLength ?? Buffer.byteLength(content, "utf8")), sha256: typeof result.sha256 === "string" ? result.sha256 : "" }, text: content };
+}
+
+function normalizeSubtitleText(content: string) {
+  // RunningHub ASR returns `(start, end) text` tuples. Convert that portable
+  // representation to the numbered SRT blocks expected by FFmpeg while
+  // preserving already-valid SRT and other text payloads.
+  const lines = content.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  const entries = lines.flatMap((line) => {
+    const match = /^\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\)\s*(.*)$/u.exec(line);
+    return match ? [{ start: Number(match[1]), end: Number(match[2]), text: match[3].trim() }] : [];
+  });
+  if (!entries.length || entries.length !== lines.length) return content;
+  const timestamp = (seconds: number) => {
+    const totalMilliseconds = Math.max(0, Math.round((Number.isFinite(seconds) ? seconds : 0) * 1000));
+    const hours = Math.floor(totalMilliseconds / 3_600_000);
+    const minutes = Math.floor((totalMilliseconds % 3_600_000) / 60_000);
+    const wholeSeconds = Math.floor((totalMilliseconds % 60_000) / 1000);
+    const milliseconds = totalMilliseconds % 1000;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(wholeSeconds).padStart(2, "0")},${String(milliseconds).padStart(3, "0")}`;
+  };
+  return entries.map((entry, index) => `${index + 1}\n${timestamp(entry.start)} --> ${timestamp(entry.end)}\n${entry.text}`).join("\n\n") + "\n";
 }
 
 type MediaCapabilityResult = { readonly artifacts?: readonly unknown[]; readonly [key: string]: unknown };
@@ -1322,7 +1396,11 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   if (config.requiresSubtitleBinding === true && (!registeredWorkflow || !registeredWorkflow.nodeBindings.some((binding) => ["subtitle", "subtitleFile"].includes(binding.inputId) && (binding.valueType === "file" || binding.valueType === "file_list")))) {
     throw new Error("runninghub_video_subtitle_binding_required");
   }
-  if (config.requiresCharacterImageBindings === true && (!registeredWorkflow || !registeredWorkflow.nodeBindings.some((binding) => binding.inputId === "referenceImage" && binding.valueType === "file") || !registeredWorkflow.nodeBindings.some((binding) => binding.inputId === "characterImage" && binding.valueType === "file"))) {
+  // Character-role bindings are a RunningHub workflow contract. Other image
+  // providers (for example pptoken/OpenAI-compatible adapters) accept local
+  // image attachments directly and must not be rejected for lacking a
+  // RunningHub registration.
+  if (providerKind.includes("runninghub") && config.requiresCharacterImageBindings === true && (!registeredWorkflow || !registeredWorkflow.nodeBindings.some((binding) => binding.inputId === "referenceImage" && binding.valueType === "file") || !registeredWorkflow.nodeBindings.some((binding) => binding.inputId === "characterImage" && binding.valueType === "file"))) {
     throw new Error("runninghub_image_character_bindings_required");
   }
   const registeredWorkflowAdapter = providerKind.includes("runninghub") && registeredWorkflow && (registeredWorkflow.capability === "image" || registeredWorkflow.capability === "video" || registeredWorkflow.capability === "digital_human" || registeredWorkflow.capability === "video_enhance" || registeredWorkflow.capability === "audio")
@@ -1349,12 +1427,17 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   const mediaInput = buildMediaCapabilityInput(executorId, config, inputs);
   if (executorId === "video_generate" && !registeredWorkflow) assertVideoMediaCapability(resolveVideoMediaCapabilities(providerKind, modelId), mediaInput);
   const localAttachments = Array.isArray(mediaInput.localAttachments) ? mediaInput.localAttachments.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [];
+  const localValidationPaths = Array.isArray(mediaInput.localValidationPaths) ? mediaInput.localValidationPaths.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [];
   const localMediaReferences = mediaInput.localMediaReferences && typeof mediaInput.localMediaReferences === "object"
     ? mediaInput.localMediaReferences as Record<string, unknown>
     : {};
+  for (const value of Object.values(localMediaReferences).flatMap(flattenWorkflowValues)) {
+    assertWorkflowLocalFile(value, workspacePath);
+  }
+  for (const localPath of localValidationPaths) assertWorkflowLocalFile(localPath, workspacePath);
   if (localAttachments.length) {
     for (const localPath of localAttachments) {
-      if (!isAvailableWorkflowLocalFile(localPath)) throw new Error(`workflow_local_file_missing:${localPath}`);
+      assertWorkflowLocalFile(localPath, workspacePath);
     }
     const runningHubRegisteredWorkflow = Boolean(providerKind.includes("runninghub") && registeredWorkflow);
     const runningHubDirectVideo = executorId === "video_generate" && providerKind.includes("runninghub") && Boolean(configuredEndpoint);
@@ -1368,6 +1451,7 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   }
   const providerInput = { ...mediaInput };
   delete providerInput.localMediaReferences;
+  delete providerInput.localValidationPaths;
   const cancellation = { signal, throwIfCancelled() { if (signal?.aborted) throw new Error("media_cancelled"); } };
   if (executorId === "video_generate" && providerKind.includes("runninghub") && !registeredWorkflow && configuredEndpoint) {
     Object.assign(providerInput, await uploadDirectRunningHubMediaReferences(providerInput, localMediaReferences, providerOptions, cancellation));

@@ -21,6 +21,24 @@ function outputKindLabel(item: WorkflowOutputItem, locale: "zh" | "en") {
   return item.kind === "text" ? "文本" : item.kind === "image" ? "图片" : item.kind === "video" ? "视频" : item.kind === "audio" ? "音频" : item.kind === "ppt" ? "演示文稿" : "文件";
 }
 
+export function formatWorkflowNodeError(message: string, locale: "zh" | "en") {
+  const trimmed = message.trim();
+  if (trimmed === "workflow_upload_multiple_files_not_supported") {
+    return locale === "zh" ? "本地文件节点仅支持一个文件。请保留一个文件后重新运行。" : "A local-file node supports one file only. Keep one file and run again.";
+  }
+  const missing = /^workflow_local_file_missing:(.*)$/u.exec(trimmed);
+  if (missing) {
+    const path = missing[1]?.trim() || (locale === "zh" ? "未命名素材" : "unnamed material");
+    return locale === "zh"
+      ? `素材缺失：${path}。请在此节点重新选择素材，或重新打包时将素材放入工作流包内。`
+      : `Missing material: ${path}. Select the file again in this node or include it when packaging the workflow.`;
+  }
+  if (trimmed === "workflow_material_required") {
+    return locale === "zh" ? "未找到素材。请在此节点选择至少一个文件。" : "No material was provided. Select at least one file in this node.";
+  }
+  return trimmed;
+}
+
 function WorkflowOutputMedia({ item, locale }: { item: WorkflowOutputItem; locale: "zh" | "en" }) {
   const preferLocalPreview = isTauriBridgeAvailable() && Boolean(item.localPath || item.relativePath);
   const [source, setSource] = useState<string | null>(preferLocalPreview ? null : item.url ?? null);
@@ -49,14 +67,16 @@ function WorkflowOutputMedia({ item, locale }: { item: WorkflowOutputItem; local
 
   if (item.kind === "text") return <pre className="workflow-output-text-preview">{item.text}</pre>;
   if (source && item.kind === "image") return <img className="workflow-output-image-preview" src={source} alt={item.label} />;
-  if (source && item.kind === "video") return <video className="workflow-output-video-preview" controls preload="metadata" src={source} />;
-  if (source && item.kind === "audio") return <audio className="workflow-output-audio-preview" controls preload="metadata" src={source} />;
+  if (source && item.kind === "video") return <video className="workflow-output-video-preview" controls preload="metadata" data-node-no-drag="true" src={source} />;
+  if (source && item.kind === "audio") return <audio className="workflow-output-audio-preview" controls preload="metadata" data-node-no-drag="true" src={source} />;
   return <div className="workflow-output-file-preview"><span>{previewError ? (locale === "zh" ? "预览不可用" : "Preview unavailable") : outputKindLabel(item, locale)}</span><strong>{item.label}</strong></div>;
 }
 
 export function WorkflowOutputPreview({ node, snapshot, locale }: { node: WorkflowCanvasNode; snapshot: WorkflowCanvasExecutionSnapshot; locale: "zh" | "en" }) {
   if (snapshot.status === "failed") {
-    const message = snapshot.errorMessage?.trim() || (locale === "zh" ? "该节点执行失败，未返回详细错误。" : "This node failed without a detailed error.");
+    const message = snapshot.errorMessage?.trim()
+      ? formatWorkflowNodeError(snapshot.errorMessage, locale)
+      : (locale === "zh" ? "该节点执行失败，未返回详细错误。" : "This node failed without a detailed error.");
     return <div className="workflow-node-error" data-node-error="true" role="alert">
       <strong>{locale === "zh" ? "节点执行失败" : "Node execution failed"}</strong>
       <span>{message}</span>

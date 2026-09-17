@@ -246,15 +246,20 @@ test("FFmpeg media workflow templates create valid upload-to-process-to-output g
   assert.deepEqual(validateWorkflowDefinition(audio), []);
 });
 
-test("product promotion template wires generation, ordered clips, subtitles, voiceover, and mux", () => {
-  const definition = buildProductPromotionWorkflowDefinition({ id: "video-main", model: "video-model", baseUrl: "https://video.example.test" }, { id: "audio-main", model: "speech-model", baseUrl: "https://audio.example.test" }, "zh");
-  assert.deepEqual(definition.nodes.map((node) => node.type), ["text_input", "video_generate", "upload", "upload", "upload", "video_process", "video_process", "voice_synthesis", "video_process", "output"]);
+test("product promotion template wires generation, ordered clips, subtitles, voiceover, and an embedded cover", () => {
+  const definition = buildProductPromotionWorkflowDefinition({ id: "video-main", model: "video-model", baseUrl: "https://video.example.test" }, { id: "audio-main", model: "speech-model", baseUrl: "https://audio.example.test" }, { id: "image-main", model: "image-model", baseUrl: "https://image.example.test" }, "zh");
+  assert.deepEqual(definition.nodes.map((node) => node.type), ["text_input", "video_generate", "upload", "upload", "upload", "video_process", "video_process", "voice_synthesis", "video_process", "image_generate", "video_compose", "output"]);
   assert.equal(definition.nodes.find((node) => node.nodeKey === "generated-video")?.config.duration, "5");
   assert.equal(definition.nodes.find((node) => node.nodeKey === "generated-video")?.config.mode, "text-to-video");
   assert.equal(definition.nodes.find((node) => node.nodeKey === "stitch")?.config.operation, "stitch");
   assert.equal(definition.nodes.find((node) => node.nodeKey === "subtitle")?.config.operation, "subtitle");
   assert.equal(definition.nodes.find((node) => node.nodeKey === "mux")?.config.operation, "mux");
+  assert.equal(definition.nodes.find((node) => node.nodeKey === "cover-image")?.config.provider, "image-main");
+  assert.equal(definition.nodes.find((node) => node.nodeKey === "compose")?.type, "video_compose");
   assert.equal(definition.edges.filter((edge) => edge.targetNodeKey === "stitch" && edge.targetPortId === "videos").length, 4);
+  assert.deepEqual(definition.edges.find((edge) => edge.edgeKey === "cover-image-compose"), { edgeKey: "cover-image-compose", sourceNodeKey: "cover-image", sourcePortId: "image", targetNodeKey: "compose", targetPortId: "coverImage" });
+  assert.deepEqual(definition.edges.find((edge) => edge.edgeKey === "mux-compose"), { edgeKey: "mux-compose", sourceNodeKey: "mux", sourcePortId: "video", targetNodeKey: "compose", targetPortId: "videos" });
+  assert.deepEqual(definition.edges.find((edge) => edge.edgeKey === "compose-output"), { edgeKey: "compose-output", sourceNodeKey: "compose", sourcePortId: "video", targetNodeKey: "output", targetPortId: "videos" });
   assert.deepEqual(validateWorkflowDefinition(definition), []);
 });
 

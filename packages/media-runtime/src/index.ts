@@ -574,7 +574,7 @@ async function curlImageEditRequest(
       "-H", "Accept: application/json",
       ...(idempotencyKey ? ["-H", `Idempotency-Key: ${idempotencyKey}`] : []),
       ...fields.flatMap(([key, value]) => ["--form-string", `${key}=${value}`]),
-      ...files.flatMap(({ filePath, contentType }) => ["--form", `image=@${filePath};type=${contentType}`]),
+      ...files.flatMap(({ filePath, contentType }) => ["--form", `image[]=@${filePath};type=${contentType}`]),
       ...(maskFile ? ["--form", `mask=@${maskFile.filePath};type=${maskFile.contentType}`] : []),
       "-w", "\n__HTTP_STATUS__:%{http_code}",
     ];
@@ -789,7 +789,7 @@ export function createOpenAICompatibleImageAdapter(options: DirectProviderOption
           const form = new FormData();
           for (const [key, value] of fields) form.set(key, value);
           for (const reference of loadedReferences) {
-            form.append("image", reference.blob, reference.fileName);
+            form.append("image[]", reference.blob, reference.fileName);
           }
           if (loadedMask) form.append("mask", loadedMask.blob, loadedMask.fileName);
           return jsonRequest(options, "/images/edits", {

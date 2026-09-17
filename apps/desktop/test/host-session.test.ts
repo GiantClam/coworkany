@@ -588,6 +588,141 @@ test("workflow-host executes a v2 local file workflow and streams node lifecycle
   }
 });
 
+test("workflow-host fails the upload node when imported file metadata has no local material", async () => {
+  const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const tsxCli = resolve(desktopRoot, "..", "..", "node_modules", "tsx", "dist", "cli.mjs");
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-missing-upload-"));
+  const child = spawn(process.execPath, [tsxCli, join(desktopRoot, "runtime", "host.ts")], { cwd: desktopRoot, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  let buffer = new Uint8Array(0);
+  const events: Record<string, unknown>[] = [];
+  let resolveDone: (() => void) | undefined;
+  const done = new Promise<void>((resolveDonePromise) => { resolveDone = resolveDonePromise; });
+  child.stdout.on("data", (chunk: Buffer) => {
+    buffer = Uint8Array.from([...buffer, ...chunk]);
+    while (true) {
+      const view = Buffer.from(buffer);
+      const separator = view.indexOf(58);
+      if (separator < 1) return;
+      const size = Number.parseInt(view.subarray(0, separator).toString("ascii"), 10);
+      const end = separator + 1 + size;
+      if (!Number.isFinite(size) || end > buffer.length) return;
+      const frame = JSON.parse(view.subarray(separator + 1, end).toString("utf8")) as Record<string, unknown>;
+      buffer = buffer.subarray(end);
+      respondToHostServiceRequest(child as ChildProcessWithoutNullStreams, frame);
+      const event = (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined;
+      if (event) events.push(event);
+      if (event?.event === "done" || event?.event === "runtime_error") resolveDone?.();
+    }
+  });
+  try {
+    const runId = `missing-upload-${randomUUID()}`;
+    child.stdin.write(encodeRpcMessage({ version: 1, requestId: randomUUID(), runId, type: "workflow.run", payload: {
+      workspacePath: workspace,
+      definition: {
+        schemaVersion: 2, revision: 1, definitionHash: "",
+        nodes: [
+          { nodeKey: "upload", type: "upload", nodeVersion: 1, title: "Upload", positionX: 0, positionY: 0, config: { uploadedFiles: [{ fileName: "missing.png", mimeType: "image/png", byteLength: 12 }] } },
+          { nodeKey: "output", type: "output", nodeVersion: 1, title: "Output", positionX: 1, positionY: 0, config: {} },
+        ],
+        edges: [{ edgeKey: "upload-output", sourceNodeKey: "upload", sourcePortId: "asset", targetNodeKey: "output", targetPortId: "assets" }],
+      },
+    } }));
+    await Promise.race([done, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("workflow_host_timeout")), 15_000))]);
+    const terminal = events.find((event) => event.event === "runtime_error");
+    assert.equal(terminal?.code, "workflow_failed");
+    assert.equal(terminal?.message, "workflow_local_file_missing:missing.png");
+    const failedNode = events.find((event) => event.tool === "workflow:node_failed");
+    const failedNodePayload = typeof failedNode?.message === "string" ? JSON.parse(failedNode.message) as Record<string, unknown> : {};
+    assert.equal(failedNodePayload.nodeKey, "upload");
+    assert.equal(failedNodePayload.message, "workflow_local_file_missing:missing.png");
+    assert.equal(events.some((event) => event.nodeKey === "output" && event.tool === "workflow:node_started"), false);
+  } finally {
+    child.kill();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("workflow-host rejects imported local-file nodes with multiple uploads", async () => {
+  const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-multiple-upload-"));
+  const child = startHost(desktopRoot);
+  try {
+    const runId = `multiple-upload-${randomUUID()}`;
+    child.child.stdin.write(encodeRpcMessage({ version: 1, requestId: randomUUID(), runId, type: "workflow.run", payload: {
+      workspacePath: workspace,
+      definition: {
+        schemaVersion: 2, revision: 1, definitionHash: "",
+        nodes: [
+          { nodeKey: "upload", type: "upload", nodeVersion: 1, title: "Upload", positionX: 0, positionY: 0, config: { uploadedFiles: [
+            { fileName: "first.png", mimeType: "image/png", byteLength: 12 },
+            { fileName: "second.png", mimeType: "image/png", byteLength: 12 },
+          ] } },
+          { nodeKey: "output", type: "output", nodeVersion: 1, title: "Output", positionX: 1, positionY: 0, config: {} },
+        ],
+        edges: [{ edgeKey: "upload-output", sourceNodeKey: "upload", sourcePortId: "asset", targetNodeKey: "output", targetPortId: "assets" }],
+      },
+    } }));
+    const terminalFrame = await child.waitFor((frame) => {
+      const event = (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined;
+      return event?.event === "runtime_error";
+    });
+    const terminal = (terminalFrame.data as Record<string, unknown>).event as Record<string, unknown>;
+    assert.equal(terminal.code, "workflow_failed");
+    assert.equal(terminal.message, "workflow_upload_multiple_files_not_supported");
+    const failedFrame = child.frames.find((frame) => {
+      const event = (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined;
+      return event?.tool === "workflow:node_failed";
+    });
+    const failedEvent = (failedFrame?.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined;
+    const failedPayload = typeof failedEvent?.message === "string" ? JSON.parse(failedEvent.message) as Record<string, unknown> : {};
+    assert.equal(failedPayload.nodeKey, "upload");
+    assert.equal(failedPayload.message, "workflow_upload_multiple_files_not_supported");
+    assert.equal(child.frames.some((frame) => {
+      const event = (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined;
+      return event?.nodeKey === "output" && event.tool === "workflow:node_started";
+    }), false);
+  } finally {
+    child.child.kill();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("workflow-host reports a missing local compose input on the compose node", async () => {
+  const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-missing-compose-"));
+  const child = startHost(desktopRoot);
+  try {
+    const runId = `missing-compose-${randomUUID()}`;
+    child.child.stdin.write(encodeRpcMessage({ version: 1, requestId: randomUUID(), runId, type: "workflow.run", payload: {
+      workspacePath: workspace,
+      definition: {
+        schemaVersion: 2, revision: 1, definitionHash: "",
+        nodes: [{ nodeKey: "compose", type: "video_compose", nodeVersion: 1, title: "Compose", positionX: 0, positionY: 0, config: {
+          image: { url: "https://files.example.test/generated.png", localPath: join(workspace, "artifacts", "missing.png"), mimeType: "image/png" },
+          audio: { url: "https://files.example.test/audio.mp3", localPath: join(workspace, "artifacts", "audio.mp3"), mimeType: "audio/mpeg" },
+        } }],
+        edges: [],
+      },
+    } }));
+    const terminal = await child.waitFor((frame) => {
+      const event = (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined;
+      return event?.event === "runtime_error" && event.runId === runId;
+    });
+    const event = (terminal.data as Record<string, unknown>).event as Record<string, unknown>;
+    assert.equal(event.message, `workflow_local_file_missing:${join(workspace, "artifacts", "missing.png")}`);
+    const failed = child.frames
+      .map((frame) => (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined)
+      .find((item) => item?.tool === "workflow:node_failed");
+    const failedPayload = typeof failed?.message === "string" ? JSON.parse(failed.message) as Record<string, unknown> : {};
+    assert.equal(failedPayload.nodeKey, "compose");
+    assert.equal(failedPayload.message, event.message);
+  } finally {
+    if (child.child.exitCode === null) child.child.kill();
+    child.child.stdin.destroy();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("workflow-host embeds the video compose cover as an attached picture", async (context) => {
   const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-video-cover-"));
@@ -667,7 +802,7 @@ test("workflow-host expands foreach items instead of passing one array to the bo
       definition: {
         schemaVersion: 2, revision: 1, definitionHash: "",
         nodes: [
-          { nodeKey: "upload", type: "upload", nodeVersion: 1, title: "Upload", positionX: 0, positionY: 0, config: { uploadedFiles: ["a", "b", "c"] } },
+          { nodeKey: "upload", type: "upload", nodeVersion: 1, title: "Upload", positionX: 0, positionY: 0, config: { uploadedFiles: [], referencedArtifactIds: ["a", "b", "c"] } },
           { nodeKey: "foreach", type: "foreach", nodeVersion: 1, title: "For Each", positionX: 1, positionY: 0, config: { inputPortId: "asset", collectNodeKey: "collect", concurrency: 2, maxIterations: 10, failurePolicy: "fail_fast" } },
           { nodeKey: "body", type: "output", nodeVersion: 1, title: "Body", positionX: 2, positionY: 0, config: {} },
           { nodeKey: "collect", type: "collect", nodeVersion: 1, title: "Collect", positionX: 3, positionY: 0, config: {} },
