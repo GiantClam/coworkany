@@ -60,15 +60,18 @@ test("local file nodes expose type-specific output ports for media workflows", (
   assert.equal(areWorkflowPortsCompatible(workflowNodeRegistry.require("file_create").outputs.find((port) => port.id === "asset")!, subtitle!), true);
 });
 
-test("video compose accepts a still image, audio, and optional subtitles", () => {
+test("video compose accepts a finished video, cover image, audio, and optional subtitles", () => {
   const compose = workflowNodeRegistry.require("video_compose");
   assert.equal(compose.executorId, "video_compose");
-  assert.deepEqual(compose.inputs.map((port) => port.id), ["image", "audio", "subtitle"]);
-  assert.equal(compose.inputs.find((port) => port.id === "image")?.valueKind, "image");
+  assert.deepEqual(compose.inputs.map((port) => port.id), ["videos", "coverImage", "audio", "subtitle"]);
+  assert.equal(compose.inputs.find((port) => port.id === "videos")?.valueKind, "video");
+  assert.equal(compose.inputs.find((port) => port.id === "coverImage")?.valueKind, "image");
+  assert.equal(compose.inputs.find((port) => port.id === "coverImage")?.role, "image.cover");
   assert.equal(compose.inputs.find((port) => port.id === "audio")?.valueKind, "audio");
   assert.equal(compose.inputs.find((port) => port.id === "subtitle")?.valueKind, "asset");
   assert.equal(compose.outputs[0]?.valueKind, "video");
-  assert.equal(areWorkflowPortsCompatible(workflowNodeRegistry.require("image_generate").outputs[0]!, compose.inputs.find((port) => port.id === "image")!), true);
+  assert.equal(areWorkflowPortsCompatible(workflowNodeRegistry.require("video_generate").outputs[0]!, compose.inputs.find((port) => port.id === "videos")!), true);
+  assert.equal(areWorkflowPortsCompatible(workflowNodeRegistry.require("image_generate").outputs[0]!, compose.inputs.find((port) => port.id === "coverImage")!), true);
   assert.equal(areWorkflowPortsCompatible(workflowNodeRegistry.require("audio_generate").outputs[0]!, compose.inputs.find((port) => port.id === "audio")!), true);
   assert.equal(areWorkflowPortsCompatible(workflowNodeRegistry.require("file_create").outputs[0]!, compose.inputs.find((port) => port.id === "subtitle")!), true);
 });

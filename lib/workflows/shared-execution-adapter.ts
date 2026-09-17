@@ -51,7 +51,7 @@ function portKind(portId: string): keyof WorkflowNodeInputBundle | null {
   const normalized = portId.replace(/^items\./, "")
   if (normalized === "text") return "text"
   if (normalized === "asset" || normalized === "assets") return "asset"
-  if (normalized === "image" || normalized === "images" || normalized === "image.reference" || normalized === "image.last_frame") return "image"
+  if (normalized === "image" || normalized === "images" || normalized === "coverImage" || normalized === "image.reference" || normalized === "image.last_frame") return "image"
   if (normalized === "video" || normalized === "videos") return "video"
   if (normalized === "audio" || normalized === "audios") return "audio"
   if (normalized === "ppt" || normalized === "presentations" || normalized === "presentation") return "ppt"

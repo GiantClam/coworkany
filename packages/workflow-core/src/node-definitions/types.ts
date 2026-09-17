@@ -12,7 +12,7 @@ export type WorkflowNodeType = (typeof WORKFLOW_NODE_TYPES)[number];
 export type WorkflowValueKind = (typeof WORKFLOW_VALUE_KINDS)[number];
 export type WorkflowLocale = "zh" | "en";
 export type WorkflowPortValueKind = WorkflowValueKind;
-export type WorkflowPortRole = "image.reference" | "image.first_frame" | "image.last_frame" | "image.mask" | "video.source" | "video.reference" | "audio.reference" | "text.prompt";
+export type WorkflowPortRole = "image.reference" | "image.first_frame" | "image.last_frame" | "image.mask" | "image.cover" | "video.source" | "video.reference" | "audio.reference" | "text.prompt";
 
 export type WorkflowPortDefinition = {
   id: string;

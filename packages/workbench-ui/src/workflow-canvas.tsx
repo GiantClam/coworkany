@@ -174,6 +174,7 @@ const mediaPortLabel = (port: WorkflowPortDefinition | undefined, locale: "zh" |
     "image.first_frame": { zh: "首帧", en: "First frame" },
     "image.last_frame": { zh: "尾帧", en: "Last frame" },
     "image.reference": { zh: "参考图", en: "Reference images" },
+    "image.cover": { zh: "封面图片", en: "Cover image" },
     "video.source": { zh: "源视频", en: "Source video" },
     "video.reference": { zh: "参考视频", en: "Reference videos" },
     "audio.reference": { zh: "参考音频", en: "Reference audio" },

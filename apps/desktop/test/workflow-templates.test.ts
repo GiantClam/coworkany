@@ -20,6 +20,7 @@ test("character swap video template wires two images, ASR, subtitle file, audio,
   assert.equal(definition.edges.find((edge) => edge.edgeKey === "character-replace")?.targetPortId, "characterImage");
   assert.equal(definition.edges.some((edge) => edge.sourceNodeKey === "asr" && edge.targetNodeKey === "subtitle"), true);
   assert.equal(definition.edges.some((edge) => edge.sourceNodeKey === "audio" && edge.targetNodeKey === "video" && edge.targetPortId === "audio"), true);
+  assert.equal(definition.edges.some((edge) => edge.sourceNodeKey === "replace" && edge.targetNodeKey === "video" && edge.targetPortId === "coverImage"), true);
   assert.equal(definition.edges.some((edge) => edge.sourceNodeKey === "subtitle" && edge.targetNodeKey === "video" && edge.targetPortId === "subtitle"), true);
   assert.match(definition.definitionHash, /^[a-f0-9]{64}$/u);
 });

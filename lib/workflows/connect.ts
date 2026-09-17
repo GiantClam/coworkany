@@ -31,6 +31,8 @@ export function getWorkflowPortLabel(locale: "zh" | "en", port: WorkflowPortDefi
     "image.first_frame": ["首帧图片", "First frame"],
     "image.last_frame": ["尾帧图片", "Last frame"],
     "image.mask": ["遮罩图片", "Mask"],
+    "image.cover": ["封面图片", "Cover image"],
+    "video.source": ["成片视频", "Source video"],
     "text.prompt": ["提示词", "Prompt"],
   }
   const role = port.role ? roleLabels[port.role] : undefined

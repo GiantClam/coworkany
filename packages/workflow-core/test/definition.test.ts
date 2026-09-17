@@ -42,7 +42,23 @@ test("migrates the legacy still-image video template to local composition", () =
   assert.equal(video?.type, "video_compose");
   assert.equal(video?.config.provider, undefined);
   assert.equal(video?.config.subtitleMode, "burn_in");
-  assert.deepEqual(migrated.edges.map((edge) => edge.targetPortId).sort(), ["audio", "image", "subtitle"]);
+  assert.deepEqual(migrated.edges.map((edge) => edge.targetPortId).sort(), ["audio", "coverImage", "subtitle"]);
+});
+
+test("migrates legacy video compose image edges to the explicit cover port", () => {
+  const input = {
+    schemaVersion: 2,
+    revision: 1,
+    definitionHash: "",
+    nodes: [
+      { nodeKey: "image", type: "image_generate", nodeVersion: 1, title: "Image", positionX: 0, positionY: 0, config: {} },
+      { nodeKey: "compose", type: "video_compose", nodeVersion: 1, title: "Compose", positionX: 1, positionY: 0, config: {} },
+    ],
+    edges: [{ edgeKey: "image-compose", sourceNodeKey: "image", sourcePortId: "image", targetNodeKey: "compose", targetPortId: "image", inputName: null }],
+  } as const;
+  const migrated = migrateWorkflowDefinitionToCurrent(input);
+  assert.equal(migrated.edges[0]?.targetPortId, "coverImage");
+  assert.equal(validateWorkflowDefinition(migrated).length, 0);
 });
 
 test("does not migrate AI video workflows with video inputs", () => {

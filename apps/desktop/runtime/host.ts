@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { cp, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import { buildOpenCodeCommand, createOpenCodeEventParser, type OpenCodeRuntimeEvent } from "@coworkany/runtime-contracts/opencode";
 import { createBailianImageAdapter, createBailianVideoAdapter, createHttpMediaAdapter, createMiniMaxAudioAdapter, createMiniMaxVideoAdapter, createOpenAICompatibleImageAdapter, createRunningHubAdapter, createRunningHubAiAppAdapter, createRunningHubWorkflowAdapter, downloadMediaOutputs, IMAGE_GENERATION_REQUEST_TIMEOUT_MS, listMiniMaxVoices, runMediaJob, uploadRunningHubMediaAsset, type MediaProviderId, type MediaProviderAdapter } from "@coworkany/media-runtime";
@@ -405,11 +405,21 @@ async function runLocalMediaTool(
   });
 }
 
-function localComposeInput(values: unknown[], workspacePath: string, role: string) {
+function optionalLocalComposeInput(values: unknown[], workspacePath: string) {
+  let missingPath: string | undefined;
   for (const value of flattenWorkflowValues(values)) {
     const localPath = localPathFromWorkflowValue(value, workspacePath);
-    if (localPath && isAvailableWorkflowLocalFile(localPath)) return localPath;
+    if (!localPath) continue;
+    if (isAvailableWorkflowLocalFile(localPath)) return localPath;
+    missingPath ??= localPath;
   }
+  if (missingPath) throw new Error(`workflow_local_file_missing:${missingPath}`);
+  return undefined;
+}
+
+function localComposeInput(values: unknown[], workspacePath: string, role: string) {
+  const localPath = optionalLocalComposeInput(values, workspacePath);
+  if (localPath) return localPath;
   throw new Error(`video_compose_${role}_required`);
 }
 
@@ -427,29 +437,30 @@ async function runVideoCompose(
   artifactPort: WorkflowArtifactPort,
   signal?: AbortSignal,
 ) {
-  const image = localComposeInput([inputs.image, inputs.images, inputs.asset, config.image, config.imagePath], workspacePath, "image");
-  const audio = localComposeInput([inputs.audio, inputs.audios, config.audio, config.audioPath], workspacePath, "audio");
-  let subtitle: string | undefined;
-  try {
-    subtitle = localComposeInput([inputs.subtitle, inputs.subtitles, config.subtitle, config.subtitleFile, config.subtitleFilePath], workspacePath, "subtitle");
-  } catch (error) {
-    if (!String(error instanceof Error ? error.message : error).endsWith("_subtitle_required")) throw error;
-  }
+  const sourceVideo = optionalLocalComposeInput([inputs.videos, inputs.video, config.video, config.videoPath], workspacePath);
+  const coverImage = optionalLocalComposeInput([inputs.coverImage, inputs.image, inputs.images, inputs.asset, config.coverImage, config.image, config.imagePath], workspacePath);
+  const audio = optionalLocalComposeInput([inputs.audio, inputs.audios, config.audio, config.audioPath], workspacePath);
+  const subtitle = optionalLocalComposeInput([inputs.subtitle, inputs.subtitles, config.subtitle, config.subtitleFile, config.subtitleFilePath], workspacePath);
+  if (!sourceVideo && !coverImage) throw new Error("video_compose_cover_image_required");
+  if (!sourceVideo && !audio) throw new Error("video_compose_audio_required");
   const outputDirectory = join(workspacePath, "artifacts", runId.replace(/[^a-zA-Z0-9_-]/g, "_"), nodeKey.replace(/[^a-zA-Z0-9_-]/g, "_"));
   await mkdir(outputDirectory, { recursive: true });
   const outputPath = join(outputDirectory, "video-compose.mp4");
+  const baseOutputPath = coverImage ? join(outputDirectory, "video-compose-base.mp4") : outputPath;
   const ffmpeg = localToolPath(config, "ffmpegPath", "COWORKANY_FFMPEG_PATH", "ffmpeg");
   const ffprobe = localToolPath(config, "ffprobePath", "COWORKANY_FFPROBE_PATH", "ffprobe");
   const log = (phase: "started" | "progress" | "completed" | "failed", message: string) => emit(command, { event: "tool_event", tool: "video_compose", phase, message: message.slice(0, 64 * 1024), runId });
-  log("started", JSON.stringify({ nodeKey, image, audio, subtitle, ffmpeg, outputPath, status: "started" }));
+  log("started", JSON.stringify({ nodeKey, sourceVideo, coverImage, audio, subtitle, ffmpeg, outputPath, status: "started" }));
   let duration: number | undefined;
-  try {
-    const probe = await runLocalMediaTool(ffprobe, ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio], runId, nodeKey, signal, (text) => log("progress", JSON.stringify({ tool: "ffprobe", stderr: text })));
-    const parsed = Number.parseFloat(probe.stdout.trim());
-    if (probe.code === 0 && Number.isFinite(parsed) && parsed > 0) duration = parsed;
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    log("progress", JSON.stringify({ tool: "ffprobe", warning: error instanceof Error ? error.message : String(error) }));
+  if (audio) {
+    try {
+      const probe = await runLocalMediaTool(ffprobe, ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio], runId, nodeKey, signal, (text) => log("progress", JSON.stringify({ tool: "ffprobe", stderr: text })));
+      const parsed = Number.parseFloat(probe.stdout.trim());
+      if (probe.code === 0 && Number.isFinite(parsed) && parsed > 0) duration = parsed;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      log("progress", JSON.stringify({ tool: "ffprobe", warning: error instanceof Error ? error.message : String(error) }));
+    }
   }
   const width = Number(config.width ?? 1920);
   const height = Number(config.height ?? 1080);
@@ -458,22 +469,62 @@ async function runVideoCompose(
   const fitMode = config.fitMode === "cover" || config.fit === "crop" ? "cover" : "contain";
   const fit = fitMode === "cover" ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}` : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`;
   const subtitleMode = config.subtitleMode === "separate_track" || config.subtitleMode === "track" ? "track" : config.subtitleMode === "none" || config.burnSubtitles === false ? "none" : "burn-in";
-  const filter = subtitle && subtitleMode === "burn-in" ? `${fit},subtitles='${subtitleFilterPath(subtitle)}',format=yuv420p` : `${fit},format=yuv420p`;
-  const args = ["-y", "-hide_banner", "-loglevel", "warning", "-loop", "1", "-framerate", String(fps), "-i", image, "-i", audio];
-  if (subtitle && subtitleMode === "track") args.push("-i", subtitle);
-  args.push("-map", "0:v:0", "-map", "1:a:0", "-vf", filter, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart");
-  if (subtitle && subtitleMode === "track") args.push("-map", "2:0", "-c:s", "mov_text");
-  args.push("-shortest");
-  if (duration) args.push("-t", duration.toFixed(3));
-  args.push(outputPath);
-  const result = await runLocalMediaTool(ffmpeg, args, runId, nodeKey, signal, (text) => log("progress", JSON.stringify({ tool: "ffmpeg", stderr: text })));
-  if (result.code !== 0 || !isAvailableWorkflowLocalFile(outputPath)) {
-    log("failed", JSON.stringify({ status: "failed", exitCode: result.code, stderr: result.stderr.slice(-8192) }));
-    throw new Error(`video_compose_ffmpeg_failed:${result.code}`);
+  const subtitleFilter = subtitle ? `subtitles='${subtitleFilterPath(subtitle)}'` : "";
+  const needsBaseComposition = !sourceVideo || Boolean(audio) || Boolean(subtitle);
+  let composedVideoPath = sourceVideo;
+  if (needsBaseComposition) {
+    const args = ["-y", "-hide_banner", "-loglevel", "warning"];
+    if (sourceVideo) args.push("-i", sourceVideo);
+    else args.push("-loop", "1", "-framerate", String(fps), "-i", localComposeInput([coverImage], workspacePath, "cover_image"));
+    let nextInputIndex = 1;
+    const audioInputIndex = audio ? nextInputIndex++ : undefined;
+    if (audio) args.push("-i", audio);
+    const subtitleInputIndex = subtitle && subtitleMode === "track" ? nextInputIndex : undefined;
+    if (subtitleInputIndex !== undefined) args.push("-i", subtitle!);
+    args.push("-map", "0:v:0");
+    if (audioInputIndex !== undefined) args.push("-map", `${audioInputIndex}:a:0`);
+    else if (sourceVideo) args.push("-map", "0:a?");
+    if (sourceVideo) {
+      if (subtitle && subtitleMode === "burn-in") args.push("-vf", `${subtitleFilter},format=yuv420p`, "-c:v", "libx264", "-pix_fmt", "yuv420p");
+      else args.push("-c:v", "copy");
+    } else {
+      const filter = subtitle && subtitleMode === "burn-in" ? `${fit},${subtitleFilter},format=yuv420p` : `${fit},format=yuv420p`;
+      args.push("-vf", filter, "-c:v", "libx264", "-pix_fmt", "yuv420p");
+    }
+    args.push("-c:a", audioInputIndex !== undefined ? "aac" : "copy", "-movflags", "+faststart");
+    if (subtitleInputIndex !== undefined) args.push("-map", `${subtitleInputIndex}:0`, "-c:s", "mov_text");
+    if (audioInputIndex !== undefined) {
+      args.push("-shortest");
+      if (duration) args.push("-t", duration.toFixed(3));
+    }
+    args.push(baseOutputPath);
+    const result = await runLocalMediaTool(ffmpeg, args, runId, nodeKey, signal, (text) => log("progress", JSON.stringify({ tool: "ffmpeg", stderr: text })));
+    if (result.code !== 0 || !isAvailableWorkflowLocalFile(baseOutputPath)) {
+      log("failed", JSON.stringify({ status: "failed", stage: "compose", exitCode: result.code, stderr: result.stderr.slice(-8192) }));
+      throw new Error(`video_compose_ffmpeg_failed:${result.code}`);
+    }
+    composedVideoPath = baseOutputPath;
+  }
+  if (!composedVideoPath) throw new Error("video_compose_video_required");
+  if (coverImage) {
+    const normalizedCoverPath = join(outputDirectory, "video-cover.jpg");
+    const normalizeCover = await runLocalMediaTool(ffmpeg, ["-y", "-hide_banner", "-loglevel", "warning", "-i", coverImage, "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "2", normalizedCoverPath], runId, nodeKey, signal, (text) => log("progress", JSON.stringify({ tool: "ffmpeg", stage: "cover", stderr: text })));
+    if (normalizeCover.code !== 0 || !isAvailableWorkflowLocalFile(normalizedCoverPath)) {
+      log("failed", JSON.stringify({ status: "failed", stage: "cover", exitCode: normalizeCover.code, stderr: normalizeCover.stderr.slice(-8192) }));
+      throw new Error(`video_compose_cover_failed:${normalizeCover.code}`);
+    }
+    const attachCover = await runLocalMediaTool(ffmpeg, ["-y", "-hide_banner", "-loglevel", "warning", "-i", composedVideoPath, "-i", normalizedCoverPath, "-map", "0:v:0", "-map", "0:a?", "-map", "0:s?", "-map_metadata", "0", "-map_chapters", "0", "-map", "1:v:0", "-c", "copy", "-disposition:v:1", "attached_pic", "-metadata:s:v:1", "title=Cover", "-metadata:s:v:1", "comment=Cover (front)", "-movflags", "+faststart", outputPath], runId, nodeKey, signal, (text) => log("progress", JSON.stringify({ tool: "ffmpeg", stage: "attach_cover", stderr: text })));
+    if (attachCover.code !== 0 || !isAvailableWorkflowLocalFile(outputPath)) {
+      log("failed", JSON.stringify({ status: "failed", stage: "attach_cover", exitCode: attachCover.code, stderr: attachCover.stderr.slice(-8192) }));
+      throw new Error(`video_compose_cover_attach_failed:${attachCover.code}`);
+    }
+    await Promise.all([rm(baseOutputPath, { force: true }), rm(normalizedCoverPath, { force: true })]);
+  } else if (composedVideoPath !== outputPath) {
+    await cp(composedVideoPath, outputPath);
   }
   const outputBytes = await readFile(outputPath);
   const relativeOutput = relativePath(resolve(workspacePath), outputPath).replaceAll("\\", "/");
-  const metadata = { relativePath: relativeOutput, localPath: outputPath, mimeType: "video/mp4", byteLength: outputBytes.byteLength, bytes: outputBytes.byteLength, sha256: createHash("sha256").update(new Uint8Array(outputBytes)).digest("hex") };
+  const metadata = { relativePath: relativeOutput, localPath: outputPath, mimeType: "video/mp4", byteLength: outputBytes.byteLength, bytes: outputBytes.byteLength, sha256: createHash("sha256").update(new Uint8Array(outputBytes)).digest("hex"), ...(coverImage ? { cover: { embedded: true, localPath: coverImage } } : {}) };
   const registration = await artifactPort.register({ relativePath: relativeOutput, mimeType: metadata.mimeType, byteLength: metadata.byteLength, sha256: metadata.sha256 });
   const artifact = { ...metadata, artifactId: registration.artifactId, registered: true };
   log("completed", JSON.stringify({ status: "succeeded", artifact }));

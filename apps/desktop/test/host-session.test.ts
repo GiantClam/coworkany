@@ -59,6 +59,17 @@ function startHost(desktopRoot: string, environment: Record<string, string | und
   return { child: child as ChildProcessWithoutNullStreams, frames, stderr, waitFor };
 }
 
+async function runBinary(executable: string, args: string[]) {
+  const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: Buffer | string) => { stdout += String(chunk); });
+  child.stderr.on("data", (chunk: Buffer | string) => { stderr += String(chunk); });
+  const [code] = await once(child, "close") as [number | null];
+  if (code !== 0) throw new Error(`${executable}_failed:${code}:${stderr}`);
+  return { stdout, stderr };
+}
+
 test("built workflow-host completes a local file workflow without network egress", async () => {
   const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-offline-network-"));
@@ -573,6 +584,58 @@ test("workflow-host executes a v2 local file workflow and streams node lifecycle
     assert.equal(readFileSync(join(workspace, "artifacts", runId, "hello.md"), "utf8"), "hello");
   } finally {
     child.kill();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("workflow-host embeds the video compose cover as an attached picture", async (context) => {
+  const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-video-cover-"));
+  const sourceVideo = join(workspace, "source.mp4");
+  const coverImage = join(workspace, "cover.jpg");
+  try {
+    try {
+      await runBinary("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=320x180:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", sourceVideo]);
+      await runBinary("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=320x180", "-frames:v", "1", coverImage]);
+    } catch (error) {
+      context.skip(`ffmpeg fixture unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    const child = startHost(desktopRoot);
+    try {
+      const runId = `video-cover-${randomUUID()}`;
+      child.child.stdin.write(encodeRpcMessage({ version: 1, requestId: randomUUID(), runId, type: "workflow.run", payload: {
+        workspacePath: workspace,
+        definition: {
+          schemaVersion: 2, revision: 1, definitionHash: "",
+          nodes: [
+            { nodeKey: "source", type: "upload", nodeVersion: 1, title: "Source", positionX: 0, positionY: 0, config: { uploadedFiles: [{ localPath: sourceVideo, fileName: "source.mp4", mimeType: "video/mp4" }], referencedArtifactIds: [] } },
+            { nodeKey: "cover", type: "upload", nodeVersion: 1, title: "Cover", positionX: 0, positionY: 1, config: { uploadedFiles: [{ localPath: coverImage, fileName: "cover.jpg", mimeType: "image/jpeg" }], referencedArtifactIds: [] } },
+            { nodeKey: "compose", type: "video_compose", nodeVersion: 1, title: "Compose", positionX: 1, positionY: 0, config: { outputFormat: "mp4", subtitleMode: "none", fitMode: "contain" } },
+          ],
+          edges: [
+            { edgeKey: "source-compose", sourceNodeKey: "source", sourcePortId: "video", targetNodeKey: "compose", targetPortId: "videos" },
+            { edgeKey: "cover-compose", sourceNodeKey: "cover", sourcePortId: "image", targetNodeKey: "compose", targetPortId: "coverImage" },
+          ],
+        },
+      } }));
+      const terminal = await child.waitFor((frame) => {
+        const event = (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined;
+        return event?.runId === runId && (event.event === "done" || event.event === "runtime_error");
+      }, 30_000);
+      const terminalEvent = (terminal.data as Record<string, unknown>).event as Record<string, unknown>;
+      assert.notEqual(terminalEvent.event, "runtime_error", String(terminalEvent.message ?? child.stderr.join("")));
+      const outputPath = join(workspace, "artifacts", runId, "compose", "video-compose.mp4");
+      const probe = JSON.parse((await runBinary("ffprobe", ["-v", "error", "-show_streams", "-of", "json", outputPath])).stdout) as { streams?: Array<{ codec_type?: string; disposition?: { attached_pic?: number } }> };
+      const videoStreams = (probe.streams ?? []).filter((stream) => stream.codec_type === "video");
+      assert.equal(videoStreams.length, 2);
+      assert.equal(videoStreams[1]?.disposition?.attached_pic, 1);
+      assert.deepEqual(await readdir(dirname(outputPath)), ["video-compose.mp4"]);
+    } finally {
+      if (child.child.exitCode === null) child.child.kill();
+      child.child.stdin.destroy();
+    }
+  } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });

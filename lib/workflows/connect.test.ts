@@ -25,6 +25,7 @@ test("workflowValueKindToInputName maps every value kind to its edge input name"
   assert.equal(workflowValueKindToInputName("video"), "videos")
   assert.equal(workflowValueKindToInputName("audio"), "audios")
   assert.equal(workflowValueKindToInputName("ppt"), "presentations")
+  assert.equal(workflowInputNameToValueKind("coverImage"), "image")
 })
 
 test("legacy connection helpers are shared workflow-core exports", () => {
@@ -75,8 +76,11 @@ test("semantic roles have explicit labels and invalid roles do not validate", ()
   const video = workflowNodeRegistry.require("video_generate")
   const firstFrame = video.inputs.find((port) => port.role === "image.first_frame")!
   const lastFrame = video.inputs.find((port) => port.role === "image.last_frame")!
+  const coverImage = workflowNodeRegistry.require("video_compose").inputs.find((port) => port.role === "image.cover")!
   assert.equal(getWorkflowPortLabel("zh", firstFrame), "首帧图片")
   assert.equal(getWorkflowPortLabel("en", lastFrame), "Last frame")
+  assert.equal(getWorkflowPortLabel("zh", coverImage), "封面图片")
+  assert.equal(getWorkflowPortLabel("en", coverImage), "Cover image")
   assert.equal(isWorkflowPortCreatable(firstFrame, { definitionV2Write: false }), false)
   assert.equal(isWorkflowPortCreatable(firstFrame, { definitionV2Write: true }), true)
   assert.equal(resolveWorkflowPortConnection("text_input", "video_generate", "text", "image.last_frame"), null)

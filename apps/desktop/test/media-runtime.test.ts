@@ -148,6 +148,8 @@ test("desktop video capabilities select shared MiniMax, Bailian and RunningHub c
   assert.match(host, /stage: "provider_request"/);
   assert.match(host, /stage: "result_download"/);
   assert.match(host, /const mediaDownloadFetch = providerKind\.includes\("minimax"\) && apiKey/);
+  assert.match(host, /inputs\.coverImage/);
+  assert.match(host, /attached_pic/);
   assert.match(host, /buildMediaCapabilityInput\(executorId, config, inputs\)/);
   assert.match(host, /const outputPort = executorId === "image_generate"/);
   assert.match(host, /\[outputPort\]: providerOutputs/);

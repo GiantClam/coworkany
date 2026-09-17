@@ -18,7 +18,7 @@ export class WorkflowDefinitionValidationError extends Error {
   constructor(issues: readonly WorkflowValidationIssue[]) { super(issues.map((issue) => issue.message).join("; ") || "Invalid workflow definition"); this.name = "WorkflowDefinitionValidationError"; this.issues = issues; }
 }
 
-const VALID_PORT_ROLES = new Set<WorkflowPortRole>(["image.reference", "image.first_frame", "image.last_frame", "image.mask", "text.prompt"]);
+const VALID_PORT_ROLES = new Set<WorkflowPortRole>(["image.reference", "image.first_frame", "image.last_frame", "image.mask", "image.cover", "video.source", "video.reference", "audio.reference", "text.prompt"]);
 const VALID_CARDINALITIES = new Set<WorkflowPortDefinition["cardinality"]>(["one", "many"]);
 const compareStrings = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);

@@ -21,6 +21,7 @@ function registeredPort(node: WorkflowDefinitionNodeV2 | undefined, inputName: s
   const fallback = direction === "inputs" ? inputPort(inputName) : outputPort(inputName);
   const definition = node ? workflowNodeRegistry.get(node.type) : null;
   if (!definition) return fallback;
+  if (direction === "inputs" && node?.type === "video_compose" && ["image", "images"].includes(fallback)) return "coverImage";
   return definition[direction].some((port) => port.id === fallback) ? fallback : definition[direction][0]?.id ?? fallback;
 }
 function semanticTuple(value: { sourceNodeKey: string; sourcePortId: string; targetNodeKey: string; targetPortId: string; inputName: string | null }) {
@@ -64,7 +65,7 @@ function migrateStillVideoComposition(nodes: WorkflowDefinitionNodeV2[], edges: 
     if (!migratedKeys.has(edge.targetNodeKey)) return [edge];
     if (["text", "prompt"].includes(edge.targetPortId)) return [];
     const targetPortId = ["image", "images", "referenceImages"].includes(edge.targetPortId)
-      ? "image"
+      ? "coverImage"
       : ["audio", "audios", "referenceAudios"].includes(edge.targetPortId)
         ? "audio"
         : edge.targetPortId === "subtitle" ? "subtitle" : edge.targetPortId;
@@ -73,14 +74,26 @@ function migrateStillVideoComposition(nodes: WorkflowDefinitionNodeV2[], edges: 
   return { nodes: nextNodes, edges: nextEdges };
 }
 
+function migrateVideoComposeCoverPorts(nodes: WorkflowDefinitionNodeV2[], edges: WorkflowDefinitionEdgeV2[]) {
+  const composeKeys = new Set(nodes.filter((node) => node.type === "video_compose").map((node) => node.nodeKey));
+  if (!composeKeys.size) return { nodes, edges };
+  return {
+    nodes,
+    edges: edges.map((edge) => composeKeys.has(edge.targetNodeKey) && ["image", "images"].includes(edge.targetPortId)
+      ? { ...edge, targetPortId: "coverImage" }
+      : edge),
+  };
+}
+
 export function migrateWorkflowDefinitionToCurrent(input: LegacyWorkflowDefinition | WorkflowDefinitionEnvelope, options?: number | WorkflowDefinitionMigrationOptions): WorkflowDefinitionEnvelope {
   if ((input as WorkflowDefinitionEnvelope).schemaVersion === CURRENT_WORKFLOW_SCHEMA_VERSION) {
     const current = input as WorkflowDefinitionEnvelope;
     const resolvedOptions = normalizeOptions(options);
-    const migrated = migrateStillVideoComposition(
+    const stillComposition = migrateStillVideoComposition(
       current.nodes.map((node) => ({ ...node, config: node.config ? JSON.parse(JSON.stringify(node.config)) : {} })),
       current.edges.map((edge) => ({ ...edge })),
     );
+    const migrated = migrateVideoComposeCoverPorts(stillComposition.nodes, stillComposition.edges);
     const canonical = canonicalizeWorkflowDefinition({ ...current, schemaVersion: CURRENT_WORKFLOW_SCHEMA_VERSION, revision: Number.isInteger(current.revision) && current.revision > 0 ? current.revision : resolvedOptions.revision ?? 1, nodes: migrated.nodes, edges: migrated.edges });
     return { ...canonical, definitionHash: hashWorkflowDefinition(canonical) };
   }
@@ -108,7 +121,8 @@ export function migrateWorkflowDefinitionToCurrent(input: LegacyWorkflowDefiniti
   const revision = Number.isInteger(resolvedOptions.revision) && Number(resolvedOptions.revision) > 0
     ? Number(resolvedOptions.revision)
     : Number.isInteger(legacy.revision) && Number(legacy.revision) > 0 ? Number(legacy.revision) : 1;
-  const migrated = migrateStillVideoComposition(nodes, edges);
+  const stillComposition = migrateStillVideoComposition(nodes, edges);
+  const migrated = migrateVideoComposeCoverPorts(stillComposition.nodes, stillComposition.edges);
   const canonical = canonicalizeWorkflowDefinition({ schemaVersion: CURRENT_WORKFLOW_SCHEMA_VERSION, revision, definitionHash: "", nodes: migrated.nodes, edges: migrated.edges });
   return { ...canonical, definitionHash: hashWorkflowDefinition(canonical) };
 }

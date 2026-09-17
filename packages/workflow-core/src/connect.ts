@@ -5,7 +5,7 @@ export { areWorkflowPortsCompatible } from "./node-definitions/registry";
 
 export type WorkflowPortConnection = { sourcePortId: string; targetPortId: string };
 export function workflowValueKindToInputName(kind: WorkflowValueKind): string { return ({ text: "text", asset: "assets", image: "images", video: "videos", audio: "audios", ppt: "presentations" })[kind]; }
-export function workflowInputNameToValueKind(inputName: string | null | undefined): WorkflowValueKind | null { return ({ text: "text", assets: "asset", asset: "asset", images: "image", image: "image", videos: "video", video: "video", audios: "audio", audio: "audio", presentations: "ppt", presentation: "ppt", ppt: "ppt" } as Record<string, WorkflowValueKind>)[inputName ?? ""] ?? null; }
+export function workflowInputNameToValueKind(inputName: string | null | undefined): WorkflowValueKind | null { return ({ text: "text", assets: "asset", asset: "asset", images: "image", image: "image", coverImage: "image", videos: "video", video: "video", audios: "audio", audio: "audio", presentations: "ppt", presentation: "ppt", ppt: "ppt" } as Record<string, WorkflowValueKind>)[inputName ?? ""] ?? null; }
 
 export function resolveWorkflowPortConnection(sourceType: WorkflowNodeType, targetType: WorkflowNodeType, sourcePortId?: string | null, targetPortId?: string | null, inputName?: string | null): WorkflowPortConnection | null {
   const sourceDefinition = workflowNodeRegistry.require(sourceType);

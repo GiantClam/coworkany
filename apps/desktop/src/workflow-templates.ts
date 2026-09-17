@@ -120,7 +120,7 @@ export function buildCharacterSwapVideoWorkflowDefinition(
       { edgeKey: "reference-replace", sourceNodeKey: "reference-image", sourcePortId: "image", targetNodeKey: "replace", targetPortId: "referenceImage" },
       { edgeKey: "character-replace", sourceNodeKey: "character-image", sourcePortId: "image", targetNodeKey: "replace", targetPortId: "characterImage" },
       { edgeKey: "audio-asr", sourceNodeKey: "audio", sourcePortId: "audio", targetNodeKey: "asr", targetPortId: "audio" },
-      { edgeKey: "replace-video", sourceNodeKey: "replace", sourcePortId: "image", targetNodeKey: "video", targetPortId: "image" },
+      { edgeKey: "replace-video", sourceNodeKey: "replace", sourcePortId: "image", targetNodeKey: "video", targetPortId: "coverImage" },
       { edgeKey: "audio-video", sourceNodeKey: "audio", sourcePortId: "audio", targetNodeKey: "video", targetPortId: "audio" },
       { edgeKey: "asr-subtitle", sourceNodeKey: "asr", sourcePortId: "text", targetNodeKey: "subtitle", targetPortId: "text" },
       { edgeKey: "subtitle-video", sourceNodeKey: "subtitle", sourcePortId: "asset", targetNodeKey: "video", targetPortId: "subtitle" },
