@@ -37,6 +37,16 @@ def archive_with_symlink():
     return buffer.getvalue()
 
 
+def archive_with_internal_parent_symlink():
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        entry = tarfile.TarInfo("./python/share/doc/python3.12/html")
+        entry.type = tarfile.SYMTYPE
+        entry.linkname = "../../../Resources/English.lproj/Documentation"
+        archive.addfile(entry)
+    return buffer.getvalue()
+
+
 class RuntimeArchiveTests(unittest.TestCase):
     def test_reseals_nested_python_app_after_relocation(self):
         with tempfile.TemporaryDirectory() as root, patch.object(runtime.subprocess, "run") as run:
@@ -68,6 +78,14 @@ class RuntimeArchiveTests(unittest.TestCase):
             output.mkdir()
             runtime.extract_runtime_archive(tarfile.open(fileobj=io.BytesIO(data), mode="r:gz"), output)
             self.assertEqual((output / "python/python3").readlink(), Path("bin/python3"))
+
+    def test_accepts_internal_parent_symlink(self):
+        data = archive_with_internal_parent_symlink()
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "output"
+            output.mkdir()
+            runtime.extract_runtime_archive(tarfile.open(fileobj=io.BytesIO(data), mode="r:gz"), output)
+            self.assertEqual((output / "python/share/doc/python3.12/html").readlink(), Path("../../../Resources/English.lproj/Documentation"))
 
     def test_rejects_archive_escape_and_missing_components(self):
         for names in [["../escaped"], ["node/node"]]:

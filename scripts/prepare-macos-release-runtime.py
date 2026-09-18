@@ -1,6 +1,7 @@
 """Fetch an approved, relocatable runtime archive; never package host installations."""
 import hashlib
 import os
+import posixpath
 from pathlib import Path
 import re
 import subprocess
@@ -16,7 +17,8 @@ def extract_runtime_archive(bundle, destination):
     members = []
     for member in bundle.getmembers():
         path = Path(member.name)
-        safe_link = member.issym() and not Path(member.linkname).is_absolute() and ".." not in Path(member.linkname).parts
+        link_target = posixpath.normpath(posixpath.join(posixpath.dirname(member.name), member.linkname))
+        safe_link = member.issym() and not Path(member.linkname).is_absolute() and link_target not in {"..", "."} and not link_target.startswith("../")
         if path.is_absolute() or ".." in path.parts or not (member.isfile() or member.isdir() or safe_link):
             raise ValueError(f"macos_runtime_archive_entry_unsafe:{member.name}")
         members.append(member)
