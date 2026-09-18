@@ -136,16 +136,21 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         .find(|path| bootstrap::font_asset_works(&path.join(platform::font_asset_name())))
         .and_then(canonical_path);
     let fonts = fonts_path.is_some();
-    let configured_lancedb = configured_runtime_path(&data, "lancedbPath");
-    let lancedb_path = ordered_runtime_candidates(
-        [data.join("runtime").join("lancedb")],
-        [resource.join("dist-runtime").join("runtime").join("lancedb"), resource.join("_up_").join("dist-runtime").join("runtime").join("lancedb")],
-        configured_lancedb,
-        std::iter::empty(),
-    )
-        .into_iter()
-        .find(|path| path.join("node_modules").join("@lancedb").join("lancedb").join("dist").join("index.js").exists())
-        .and_then(canonical_path);
+    let semantic_rag = !cfg!(all(target_os = "macos", target_arch = "x86_64"));
+    let lancedb_path = if semantic_rag {
+        let configured_lancedb = configured_runtime_path(&data, "lancedbPath");
+        ordered_runtime_candidates(
+            [data.join("runtime").join("lancedb")],
+            [resource.join("dist-runtime").join("runtime").join("lancedb"), resource.join("_up_").join("dist-runtime").join("runtime").join("lancedb")],
+            configured_lancedb,
+            std::iter::empty(),
+        )
+            .into_iter()
+            .find(|path| path.join("node_modules").join("@lancedb").join("lancedb").join("dist").join("index.js").exists())
+            .and_then(canonical_path)
+    } else {
+        None
+    };
     let lancedb = lancedb_path.is_some();
     let configured_embedding = configured_runtime_path(&data, "embeddingPath");
     let embedding_path = ordered_runtime_candidates(
@@ -163,7 +168,7 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         ("hostPath", host_path.as_ref()), ("knowledgePath", knowledge_path.as_ref()), ("skillsPath", skill_path.as_ref()), ("fontsPath", fonts_path.as_ref()),
         ("lancedbPath", lancedb_path.as_ref()), ("embeddingPath", embedding_path.as_ref()),
     ])?;
-    let result = serde_json::json!({ "ready": node && opencode && python && skills && fonts && migrations && host && knowledge && lancedb && embedding && media, "development": cfg!(debug_assertions), "node": node, "opencode": opencode, "python": python, "skills": skills, "fonts": fonts, "migrations": migrations, "host": host, "knowledge": knowledge, "lancedb": lancedb, "embedding": embedding, "media": media, "semanticRag": lancedb, "paths": { "node": node_path, "opencode": opencode_path, "python": python_path, "host": host_path, "knowledge": knowledge_path, "skills": skill_path, "fonts": fonts_path, "lancedb": lancedb_path, "embedding": embedding_path, "media": media_path } });
+    let result = serde_json::json!({ "ready": node && opencode && python && skills && fonts && migrations && host && knowledge && (!semantic_rag || lancedb) && embedding && media, "development": cfg!(debug_assertions), "node": node, "opencode": opencode, "python": python, "skills": skills, "fonts": fonts, "migrations": migrations, "host": host, "knowledge": knowledge, "lancedb": lancedb, "embedding": embedding, "media": media, "semanticRag": semantic_rag && lancedb, "paths": { "node": node_path, "opencode": opencode_path, "python": python_path, "host": host_path, "knowledge": knowledge_path, "skills": skill_path, "fonts": fonts_path, "lancedb": lancedb_path, "embedding": embedding_path, "media": media_path } });
     logs::append(&data, "runtime-probe", &format!("probe_result {}", result));
     if result.get("ready").and_then(serde_json::Value::as_bool) == Some(true) {
         write_runtime_probe_cache(&data, &runtime_probe_fingerprint(&data, &resource), &result);

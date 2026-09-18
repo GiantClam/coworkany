@@ -15,7 +15,7 @@ test("runtime readiness requires every mandatory component", () => {
   assert.equal(isRuntimeReady({ ...base, probes: base.probes.map((probe) => probe.component === "embedding" ? { ...probe, ok: false } : probe) }), false);
   assert.equal(isRuntimeReady({ ...base, probes: base.probes.map((probe) => probe.component === "python" ? { ...probe, ok: false } : probe) }), false);
   assert.equal(isRuntimeReady({ ...base, probes: base.probes.map((probe) => probe.component === "host" ? { ...probe, ok: false } : probe) }), false);
-  assert.equal(isRuntimeReady({ ...base, probes: base.probes.map((probe) => probe.component === "lancedb" ? { ...probe, ok: false } : probe) }), false);
+  assert.equal(isRuntimeReady({ ...base, probes: base.probes.map((probe) => probe.component === "lancedb" ? { ...probe, ok: false } : probe) }), !MANDATORY_RUNTIME_COMPONENTS.includes("lancedb"));
   assert.equal(isRuntimeReady({ ...base, probes: base.probes.filter((probe) => probe.component !== "migrations") }), false);
 });
 

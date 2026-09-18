@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type DesktopRuntimeTarget = "windows-x64" | "macos-arm64";
+export type DesktopRuntimeTarget = "windows-x64" | "macos-arm64" | "macos-x64";
 
 export interface DesktopPlatform {
   readonly target: DesktopRuntimeTarget;
@@ -11,6 +11,7 @@ export interface DesktopPlatform {
   readonly fontAsset: string;
   readonly portableDataDirectory: string;
   readonly userDataRoot: string;
+  readonly semanticRag: boolean;
 }
 
 export function desktopPlatform(options: {
@@ -32,6 +33,7 @@ export function desktopPlatform(options: {
       fontAsset: "msyh.ttc",
       portableDataDirectory: "data",
       userDataRoot: join(options.localAppData ?? process.env.LOCALAPPDATA ?? join(process.env.TEMP ?? ".", "LocalAppData"), "CoworkAny"),
+      semanticRag: true,
     };
   }
 
@@ -44,6 +46,20 @@ export function desktopPlatform(options: {
       fontAsset: "NotoSansCJKsc-Regular.otf",
       portableDataDirectory: "CoworkAny Data",
       userDataRoot: join(homeDirectory, "Library", "Application Support", "CoworkAny"),
+      semanticRag: true,
+    };
+  }
+
+  if (platform === "darwin" && architecture === "x64") {
+    return {
+      target: "macos-x64",
+      nodeExecutable: "node",
+      openCodeExecutable: "opencode",
+      pythonExecutable: "python3",
+      fontAsset: "NotoSansCJKsc-Regular.otf",
+      portableDataDirectory: "CoworkAny Data",
+      userDataRoot: join(homeDirectory, "Library", "Application Support", "CoworkAny"),
+      semanticRag: false,
     };
   }
 

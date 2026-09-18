@@ -1,16 +1,22 @@
 import { HybridKnowledgeRetriever, type KnowledgeCitation, type KnowledgeChunk } from "@coworkany/knowledge-runtime";
-import { readIndexState, readManifest, searchLanceIndex, type LocalEmbeddingOptions } from "./lancedb";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { resolveActiveIndexPath, type VaultManifest } from "./obsidian";
+import type { LocalEmbeddingOptions } from "./lancedb";
 
 export async function searchVaultIndex(indexPath: string, query: string, limit = 8, embedding: LocalEmbeddingOptions = {}): Promise<KnowledgeCitation[]> {
   const boundedLimit = Math.max(1, Math.min(20, limit));
-  const manifest = await readManifest(indexPath);
+  const manifest = JSON.parse(await readFile(join(resolveActiveIndexPath(indexPath), "manifest.json"), "utf8")) as VaultManifest;
   const lexical = await new HybridKnowledgeRetriever().retrieve(manifest.chunks as KnowledgeChunk[], query, boundedLimit * 2);
-  try {
-    if ((await readIndexState(indexPath)).status !== "semantic_ready") return lexical.slice(0, boundedLimit);
-    const semantic = await searchLanceIndex(indexPath, query, boundedLimit, embedding);
-    if (semantic.length > 0) return mergeHybridCitations(lexical, semantic, boundedLimit);
-  } catch {
-    // Lexical retrieval remains the immediate fallback while semantic storage is absent or rebuilding.
+  if (typeof __COWORKANY_SEMANTIC_RAG__ === "undefined" || __COWORKANY_SEMANTIC_RAG__) {
+    try {
+      const { readIndexState, searchLanceIndex } = await import("./lancedb");
+      if ((await readIndexState(indexPath)).status !== "semantic_ready") return lexical.slice(0, boundedLimit);
+      const semantic = await searchLanceIndex(indexPath, query, boundedLimit, embedding);
+      if (semantic.length > 0) return mergeHybridCitations(lexical, semantic, boundedLimit);
+    } catch {
+      // 语义索引重建或不可用时，仍可用关键词检索。
+    }
   }
   return lexical.slice(0, boundedLimit);
 }

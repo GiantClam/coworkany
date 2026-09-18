@@ -1,4 +1,4 @@
-import { access, chmod, cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, cp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
@@ -54,7 +54,14 @@ async function copyRuntimeDirectory(name, destination, executable) {
     // launch, invalidating the signed app resource seal.
     filter: item => name !== "python" || (!item.includes("/__pycache__/") && !item.endsWith(".pyc")),
   });
-  await access(join(destination, executable), constants.X_OK).catch(() => { throw new Error(`macos_runtime_${name}_executable_missing:${join(destination, executable)}`); });
+  const target = join(destination, executable);
+  try {
+    await access(target, constants.X_OK);
+  } catch {
+    const nested = join(destination, "bin", executable);
+    await access(nested, constants.X_OK).catch(() => { throw new Error(`macos_runtime_${name}_executable_missing:${target}`); });
+    await symlink(join("bin", executable), target);
+  }
 }
 
 async function copyMediaRuntime() {
@@ -312,9 +319,10 @@ async function copyLanceDb() {
   return [...seen].sort();
 }
 
-if (process.platform !== "darwin" || process.arch !== "arm64") {
-  throw new Error(`macos_runtime_stage_requires_darwin_arm64:${process.platform}-${process.arch}`);
+if (process.platform !== "darwin" || !["arm64", "x64"].includes(process.arch)) {
+  throw new Error(`macos_runtime_stage_requires_darwin_arm64_or_x64:${process.platform}-${process.arch}`);
 }
+const semanticRag = process.arch === "arm64";
 
 await removeOutput(output);
 await mkdir(output, { recursive: true });
@@ -326,7 +334,7 @@ await copyMediaRuntime();
 const font = await requiredPath("font", source.font);
 await mkdir(join(output, "fonts"), { recursive: true });
 await cp(font, join(output, "fonts/NotoSansCJKsc-Regular.otf"), { dereference: true });
-const lancedbPackages = await copyLanceDb();
+const lancedbPackages = semanticRag ? await copyLanceDb() : [];
 await mkdir(join(output, "embedding"), { recursive: true });
 await writeFile(join(output, "embedding/local-hash-384-v1.json"), `${JSON.stringify({ schemaVersion: 1, id: "local-hash-384-v1", type: "builtin-feature-hash", dimension: 384, network: false })}\n`);
 if (process.env.COWORKANY_MAC_RUNTIME_LICENSES_PATH) {
@@ -339,16 +347,16 @@ await makeWritableTree(output);
 
 const manifest = {
   schemaVersion: 1,
-  manifestId: "coworkany-runtime-macos-arm64-v1",
+  manifestId: `coworkany-runtime-macos-${process.arch}-v1`,
   platform: "macos",
-  architecture: "arm64",
-  compatibility: { architecture: "arm64", macos: ["12+"] },
+  architecture: process.arch,
+  compatibility: { architecture: process.arch, macos: ["12+"] },
   runtime: {
     node: "runtime/node/node",
     opencode: "runtime/opencode/opencode",
     python: "runtime/python/python3",
     font: "runtime/fonts/NotoSansCJKsc-Regular.otf",
-    lancedb: "runtime/lancedb/node_modules/@lancedb/lancedb/dist/index.js",
+    ...(semanticRag ? { lancedb: "runtime/lancedb/node_modules/@lancedb/lancedb/dist/index.js" } : {}),
     embedding: "runtime/embedding/local-hash-384-v1.json",
     media: { ffmpeg: "runtime/media/ffmpeg", ffprobe: "runtime/media/ffprobe" },
   },
@@ -356,4 +364,4 @@ const manifest = {
 };
 await writeFile(join(output, "runtime-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 const files = await Promise.all(["node/node", "opencode/opencode", "python/python3", "media/ffmpeg", "media/ffprobe", "fonts/NotoSansCJKsc-Regular.otf"].map(async relativePath => ({ relativePath, bytes: (await stat(join(output, relativePath))).size })));
-console.log(JSON.stringify({ status: "staged", target: "macos-arm64", output, files, lancedbPackages }));
+console.log(JSON.stringify({ status: "staged", target: `macos-${process.arch}`, output, files, lancedbPackages }));

@@ -345,6 +345,7 @@ fn configure_python_environment(command: &mut Command, executable: &std::path::P
     }
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn lancedb_runtime_directory(app: &AppHandle) -> Result<Option<String>, String> {
     let data = crate::data_dir(app)?;
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
@@ -535,10 +536,11 @@ pub fn host_start(app: AppHandle, state: State<'_, HostState>) -> Result<u64, St
         .envs(skills.as_ref().map(|path| [("COWORKANY_SKILLS_DIR", path.to_string_lossy().to_string())]).into_iter().flatten())
         .envs(agents.as_ref().map(|path| [("COWORKANY_AGENTS_DIR", path.to_string_lossy().to_string())]).into_iter().flatten())
         .envs(opencode_executable(&app)?.map(|path| [("COWORKANY_OPENCODE_PATH", path)]).into_iter().flatten())
-        .envs(lancedb_runtime_directory(&app)?.map(|path| [("COWORKANY_LANCEDB_DIR", path)]).into_iter().flatten())
         .env("COWORKANY_RUNTIME_DIR", runtime_directory)
         .env("COWORKANY_MEDIA_DIR", media_directory)
         .env("OPENCODE_RUNTIME_DIR", opencode_runtime);
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    command.envs(lancedb_runtime_directory(&app)?.map(|path| [("COWORKANY_LANCEDB_DIR", path)]).into_iter().flatten());
     if let Some(path) = python.as_deref() {
         command.env("COWORKANY_PYTHON_PATH", path);
         configure_python_environment(&mut command, std::path::Path::new(path));

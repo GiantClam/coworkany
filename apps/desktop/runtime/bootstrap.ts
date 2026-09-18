@@ -27,7 +27,7 @@ export interface BootstrapManifest {
   readonly checkedAt: string;
 }
 
-export const MANDATORY_RUNTIME_COMPONENTS: readonly RuntimeComponent[] = [
+const STANDARD_RUNTIME_COMPONENTS: readonly RuntimeComponent[] = [
   "node",
   "opencode",
   "python",
@@ -35,10 +35,13 @@ export const MANDATORY_RUNTIME_COMPONENTS: readonly RuntimeComponent[] = [
   "knowledge",
   "fonts",
   "skills",
-  "lancedb",
   "embedding",
   "migrations",
 ];
+
+export const MANDATORY_RUNTIME_COMPONENTS: readonly RuntimeComponent[] = desktopPlatform().semanticRag
+  ? [...STANDARD_RUNTIME_COMPONENTS, "lancedb"]
+  : STANDARD_RUNTIME_COMPONENTS;
 
 export async function probeRuntime(paths: DesktopPaths, config: DesktopConfig): Promise<BootstrapManifest> {
   const probes: RuntimeProbe[] = [];
@@ -50,7 +53,7 @@ export async function probeRuntime(paths: DesktopPaths, config: DesktopConfig): 
   probes.push(await probePath("knowledge", config.runtime.knowledgePath ?? join(paths.runtime, "knowledge.mjs")));
   probes.push(await probeFonts(config.runtime.fontsPath ?? join(paths.runtime, "fonts")));
   probes.push(await probeSkills(config.runtime.skillsPath ?? join(paths.runtime, "skills")));
-  probes.push(await probeLanceDb(config.runtime.lancedbPath ?? join(paths.runtime, "lancedb")));
+  if (platform.semanticRag) probes.push(await probeLanceDb(config.runtime.lancedbPath ?? join(paths.runtime, "lancedb")));
   probes.push(await probeEmbedding(config.runtime.embeddingPath ?? join(paths.runtime, "embedding")));
   probes.push(await probePath("migrations", paths.databaseFile));
   return { schemaVersion: 1, source: config.runtime.source, probes, checkedAt: new Date().toISOString() };

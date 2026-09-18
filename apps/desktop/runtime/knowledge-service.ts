@@ -1,7 +1,6 @@
 import { createRpcReader, writeRpcResponse } from "./rpc";
 import { searchVaultIndex } from "./rag";
-import { activateIndexGeneration, createIndexGenerationPath, indexObsidianVault, ObsidianVaultWatcher, writeObsidianNote } from "./obsidian";
-import { buildLanceIndex } from "./lancedb";
+import { activateIndexGeneration, createIndexGenerationPath, indexObsidianVault, ObsidianVaultWatcher, writeObsidianNote, type VaultIndexState } from "./obsidian";
 
 type EmbeddingConfig = { readonly mode?: "local" | "remote"; readonly baseUrl?: string; readonly model?: string; readonly apiKey?: string };
 type KnowledgeServiceCommand = { readonly version: 1; readonly requestId: string; readonly type: "service_request"; readonly method: "knowledge.index" | "knowledge.search" | "knowledge.write"; readonly payload?: Record<string, unknown> };
@@ -11,11 +10,13 @@ const vaultWatchers = new Map<string, ObsidianVaultWatcher>();
 async function rebuildVaultIndex(vaultPath: string, indexPath: string, embedding: EmbeddingConfig) {
   const generationPath = createIndexGenerationPath(indexPath);
   const manifest = await indexObsidianVault(vaultPath, indexPath, 0, generationPath);
-  let state: Awaited<ReturnType<typeof buildLanceIndex>>;
-  try {
-    state = await buildLanceIndex(generationPath, manifest, embedding);
-  } catch {
-    state = { schemaVersion: 1, generation: manifest.generation, status: "lexical_ready", embeddingModel: "lexical-fallback", embeddingDimension: 0, updatedAt: new Date().toISOString() };
+  let state: VaultIndexState = { schemaVersion: 1, generation: manifest.generation, status: "lexical_ready", embeddingModel: "keyword", embeddingDimension: 0, updatedAt: manifest.updatedAt };
+  if (typeof __COWORKANY_SEMANTIC_RAG__ === "undefined" || __COWORKANY_SEMANTIC_RAG__) {
+    try {
+      state = await (await import("./lancedb")).buildLanceIndex(generationPath, manifest, embedding);
+    } catch {
+      state = { ...state, embeddingModel: "lexical-fallback", updatedAt: new Date().toISOString() };
+    }
   }
   await activateIndexGeneration(indexPath, generationPath, manifest.generation);
   return { manifest, state };

@@ -7,6 +7,8 @@ import { mergeHybridCitations, searchVaultIndex } from "../runtime/rag";
 import { buildLanceIndex } from "../runtime/lancedb";
 import type { VaultManifest } from "../runtime/obsidian";
 
+const semanticRagSupported = !(process.platform === "darwin" && process.arch === "x64");
+
 test("desktop RAG searches a Vault manifest without SQLite or remote calls", async () => {
   const root = await mkdtemp(join(tmpdir(), "coworkany-rag-")); const index = join(root, "index");
   try {
@@ -20,7 +22,7 @@ test("desktop RAG searches a Vault manifest without SQLite or remote calls", asy
   finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("desktop RAG merges exact lexical hits with LanceDB nearest neighbours", () => {
+test("desktop RAG merges exact lexical hits with LanceDB nearest neighbours", { skip: !semanticRagSupported }, () => {
   const results = mergeHybridCitations(
     [{ chunkId: "exact", documentPath: "营销/精确.md", excerpt: "exact", score: 2 }],
     [{ id: "semantic", documentPath: "品牌/语义.md", excerpt: "semantic", distance: 0.05 }],
@@ -30,7 +32,7 @@ test("desktop RAG merges exact lexical hits with LanceDB nearest neighbours", ()
   assert.ok(results.every((item) => item.score > 0));
 });
 
-test("desktop RAG uses hybrid retrieval only after the active index is semantic-ready", async () => {
+test("desktop RAG uses hybrid retrieval only after the active index is semantic-ready", { skip: !semanticRagSupported }, async () => {
   const root = await mkdtemp(join(tmpdir(), "coworkany-rag-state-")); const index = join(root, "index");
   try {
     await mkdir(index);

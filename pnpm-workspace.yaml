@@ -4,9 +4,11 @@ packages:
   - "packages/*"
 
 allowBuilds:
+  '@google/genai': true
   '@tailwindcss/oxide': true
   bufferutil: false
   esbuild: true
+  onnxruntime-node: true
   protobufjs: true
   sharp: true
 

@@ -35,6 +35,12 @@ test("macOS arm64 uses Application Support, Unix runtime filenames, and an exter
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("macOS x64 uses the same local paths without semantic retrieval", () => {
+  const platform = desktopPlatform({ platform: "darwin", architecture: "x64" });
+  assert.equal(platform.target, "macos-x64");
+  assert.equal(platform.semanticRag, false);
+});
+
 test("first-run desktop config has no default text model", () => {
   const root = join(tmpdir(), "coworkany-default-config");
   const config = defaultDesktopConfig(createPaths(root, "normal"));

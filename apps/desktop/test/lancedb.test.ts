@@ -6,7 +6,9 @@ import assert from "node:assert/strict";
 import { buildLanceIndex, searchLanceIndex } from "../runtime/lancedb";
 import { activateIndexGeneration, createIndexGenerationPath, resolveActiveIndexPath, type VaultManifest } from "../runtime/obsidian";
 
-test("LanceDB semantic index persists, reopens and isolates a Vault", async () => {
+const semanticRagSupported = !(process.platform === "darwin" && process.arch === "x64");
+
+test("LanceDB semantic index persists, reopens and isolates a Vault", { skip: !semanticRagSupported }, async () => {
   const root = await mkdtemp(join(tmpdir(), "coworkany-lancedb-"));
   try {
     const indexPath = join(root, "Vault 中文 空格", "index");
@@ -30,7 +32,7 @@ test("LanceDB semantic index persists, reopens and isolates a Vault", async () =
   }
 });
 
-test("remote embedding is opt-in, HTTPS-only, and records its configured model", async () => {
+test("remote embedding is opt-in, HTTPS-only, and records its configured model", { skip: !semanticRagSupported }, async () => {
   const root = await mkdtemp(join(tmpdir(), "coworkany-lancedb-remote-"));
   try {
     const manifest: VaultManifest = { schemaVersion: 1, vaultPath: join(root, "Vault"), generation: 1, documents: [{ documentPath: "note.md", hash: "hash" }], chunks: [{ id: "chunk-1", documentPath: "note.md", text: "remote embedding coverage", hash: "hash" }], updatedAt: new Date().toISOString() };
@@ -54,7 +56,7 @@ test("remote embedding is opt-in, HTTPS-only, and records its configured model",
   }
 });
 
-test("embedding contract changes activate a complete new generation without mixing vectors", async () => {
+test("embedding contract changes activate a complete new generation without mixing vectors", { skip: !semanticRagSupported }, async () => {
   const root = await mkdtemp(join(tmpdir(), "coworkany-lancedb-generation-"));
   try {
     const indexPath = join(root, "index");
