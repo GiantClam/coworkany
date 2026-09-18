@@ -27,6 +27,16 @@ def archive_bytes(names):
     return buffer.getvalue()
 
 
+def archive_with_symlink():
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        entry = tarfile.TarInfo("./python/python3")
+        entry.type = tarfile.SYMTYPE
+        entry.linkname = "bin/python3"
+        archive.addfile(entry)
+    return buffer.getvalue()
+
+
 class RuntimeArchiveTests(unittest.TestCase):
     def test_reseals_nested_python_app_after_relocation(self):
         with tempfile.TemporaryDirectory() as root, patch.object(runtime.subprocess, "run") as run:
@@ -50,6 +60,14 @@ class RuntimeArchiveTests(unittest.TestCase):
                     runtime.prepare("https://example.com/runtime.tar.gz", "0" * 64, target)
                 run.assert_not_called()
                 self.assertFalse(target.exists())
+
+    def test_accepts_relative_runtime_symlink(self):
+        data = archive_with_symlink()
+        with tempfile.TemporaryDirectory() as root, patch.object(runtime.urllib.request, "urlopen", return_value=Response(data)), patch.object(runtime.subprocess, "run"):
+            output = Path(root) / "output"
+            output.mkdir()
+            runtime.extract_runtime_archive(tarfile.open(fileobj=io.BytesIO(data), mode="r:gz"), output)
+            self.assertEqual((output / "python/python3").readlink(), Path("bin/python3"))
 
     def test_rejects_archive_escape_and_missing_components(self):
         for names in [["../escaped"], ["node/node"]]:
