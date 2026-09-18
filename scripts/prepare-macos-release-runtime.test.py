@@ -105,6 +105,7 @@ class RuntimeArchiveTests(unittest.TestCase):
             self.assertEqual(len(values), 6)
             self.assertEqual(run.call_count, 10)
             self.assertEqual(run.call_args_list[0].args[0][1:], [str(Path(root) / "output" / "node/node"), "-verify_arch", "arm64"])
+            self.assertEqual(run.call_args_list[7].args[0], [str(Path(root) / "output" / "media/ffmpeg"), "-version"])
             self.assertEqual(values["COWORKANY_MAC_STATIC_FFMPEG_PATH"], str((Path(root) / "output" / "media/ffmpeg").resolve()))
             self.assertEqual(values["COWORKANY_MAC_STATIC_FFPROBE_PATH"], str((Path(root) / "output" / "media/ffprobe").resolve()))
             self.assertTrue(Path(values["COWORKANY_MAC_FONT_PATH"]).is_file())

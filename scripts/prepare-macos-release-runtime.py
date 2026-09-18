@@ -107,7 +107,8 @@ def prepare(url, expected_hash, destination, architecture="arm64"):
         # lipo interpret the binary path as an architecture name and always
         # fail with "unknown architecture specification".
         subprocess.run(["lipo", str(binary), "-verify_arch", architecture], check=True)
-        subprocess.run([str(binary), "--version"], check=True, timeout=60,
+        version_flag = "-version" if relative.startswith("media/") else "--version"
+        subprocess.run([str(binary), version_flag], check=True, timeout=60,
                        env={**os.environ, "OPENCODE_DISABLE_MODELS_FETCH": "true", "OPENCODE_DISABLE_AUTOUPDATE": "true"})
     return {key: str((destination / relative).resolve()) for key, relative in required.items()}
 
