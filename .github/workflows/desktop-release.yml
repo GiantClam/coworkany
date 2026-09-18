@@ -25,6 +25,14 @@ on:
         description: "SHA-256 for runtime_url"
         required: false
         type: string
+      x64_runtime_url:
+        description: "Optional fixed macOS x64 Runtime tar.gz URL; overrides repository variable"
+        required: false
+        type: string
+      x64_runtime_sha256:
+        description: "SHA-256 for x64_runtime_url"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -114,7 +122,25 @@ jobs:
 
   macos:
     needs: version
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: arm64
+            runner: macos-15
+            runner_arch: arm64
+            rust_target: aarch64-apple-darwin
+            tauri_config: src-tauri/tauri.macos.conf.json
+            host_build: build:host
+            artifact_name: desktop-macos-arm64
+          - id: x64
+            runner: macos-13
+            runner_arch: x86_64
+            rust_target: x86_64-apple-darwin
+            tauri_config: src-tauri/tauri.macos.x64.conf.json
+            host_build: build:host:macos-x64
+            artifact_name: desktop-macos-x64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -129,14 +155,21 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          COWORKANY_MAC_RUNTIME_URL: ${{ vars.COWORKANY_MAC_RUNTIME_URL }}
-          COWORKANY_MAC_RUNTIME_SHA256: ${{ vars.COWORKANY_MAC_RUNTIME_SHA256 }}
+          COWORKANY_MAC_RUNTIME_URL: ${{ matrix.id == 'arm64' && vars.COWORKANY_MAC_RUNTIME_URL || vars.COWORKANY_MAC_X64_RUNTIME_URL }}
+          COWORKANY_MAC_RUNTIME_SHA256: ${{ matrix.id == 'arm64' && vars.COWORKANY_MAC_RUNTIME_SHA256 || vars.COWORKANY_MAC_X64_RUNTIME_SHA256 }}
           RUNTIME_URL_INPUT: ${{ inputs.runtime_url }}
           RUNTIME_SHA256_INPUT: ${{ inputs.runtime_sha256 }}
+          X64_RUNTIME_URL_INPUT: ${{ inputs.x64_runtime_url }}
+          X64_RUNTIME_SHA256_INPUT: ${{ inputs.x64_runtime_sha256 }}
         run: |
-          COWORKANY_MAC_RUNTIME_URL="${RUNTIME_URL_INPUT:-$COWORKANY_MAC_RUNTIME_URL}"
-          COWORKANY_MAC_RUNTIME_SHA256="${RUNTIME_SHA256_INPUT:-$COWORKANY_MAC_RUNTIME_SHA256}"
-          test "$(uname -m)" = arm64
+          if [ "${{ matrix.id }}" = arm64 ]; then
+            COWORKANY_MAC_RUNTIME_URL="${RUNTIME_URL_INPUT:-$COWORKANY_MAC_RUNTIME_URL}"
+            COWORKANY_MAC_RUNTIME_SHA256="${RUNTIME_SHA256_INPUT:-$COWORKANY_MAC_RUNTIME_SHA256}"
+          else
+            COWORKANY_MAC_RUNTIME_URL="${X64_RUNTIME_URL_INPUT:-$COWORKANY_MAC_RUNTIME_URL}"
+            COWORKANY_MAC_RUNTIME_SHA256="${X64_RUNTIME_SHA256_INPUT:-$COWORKANY_MAC_RUNTIME_SHA256}"
+          fi
+          test "$(uname -m)" = "${{ matrix.runner_arch }}"
           for name in COWORKANY_MAC_RUNTIME_URL COWORKANY_MAC_RUNTIME_SHA256; do
             if [ -z "${!name}" ]; then echo "::error::Missing release configuration: $name"; exit 1; fi
           done
@@ -162,30 +195,31 @@ jobs:
       - name: Install dependencies and Rust target
         run: |
           pnpm install --frozen-lockfile
-          rustup target add aarch64-apple-darwin
+          rustup target add ${{ matrix.rust_target }}
       - name: Validate macOS application
         env:
           TAURI_CONFIG: '{"bundle":{"resources":[],"icon":["icons/coworkany-icon.png"]}}'
         run: |
           pnpm desktop:typecheck
-          pnpm --filter @coworkany/desktop build:host
+          pnpm --filter @coworkany/desktop run ${{ matrix.host_build }}
           node -e "const fs=require('node:fs'); const path=require('node:path'); const root='apps/desktop/dist-runtime/skills'; for (const id of ['ppt-master','dashi-ppt']) { fs.mkdirSync(path.join(root,id),{recursive:true}); fs.writeFileSync(path.join(root,id,'SKILL.md'),'# '+id+'\\n'); fs.writeFileSync(path.join(root,id+'.manifest.json'),'{}\\n'); }"
           pnpm --filter @coworkany/desktop build:agents
           pnpm --filter @coworkany/desktop test:release
           cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
       - name: Fetch approved relocatable runtimes and verify SHA-256
         env:
-          COWORKANY_MAC_RUNTIME_URL: ${{ inputs.runtime_url || vars.COWORKANY_MAC_RUNTIME_URL }}
-          COWORKANY_MAC_RUNTIME_SHA256: ${{ inputs.runtime_sha256 || vars.COWORKANY_MAC_RUNTIME_SHA256 }}
-        run: python scripts/prepare-macos-release-runtime.py
+          COWORKANY_MAC_RUNTIME_ARCH: ${{ matrix.runner_arch }}
+          COWORKANY_MAC_RUNTIME_URL: ${{ matrix.id == 'arm64' && (inputs.runtime_url || vars.COWORKANY_MAC_RUNTIME_URL) || (inputs.x64_runtime_url || vars.COWORKANY_MAC_X64_RUNTIME_URL) }}
+          COWORKANY_MAC_RUNTIME_SHA256: ${{ matrix.id == 'arm64' && (inputs.runtime_sha256 || vars.COWORKANY_MAC_RUNTIME_SHA256) || (inputs.x64_runtime_sha256 || vars.COWORKANY_MAC_X64_RUNTIME_SHA256) }}
+        run: python3 scripts/prepare-macos-release-runtime.py
       - name: Build app with all offline resources before signing
         env:
           MACOS_MODE: ${{ needs.version.outputs.macos_mode }}
         run: |
           if [ "$MACOS_MODE" = internal ]; then
-            pnpm --filter @coworkany/desktop exec tauri build --no-sign --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin --bundles app
+            pnpm --filter @coworkany/desktop exec tauri build --no-sign --config ${{ matrix.tauri_config }} --target ${{ matrix.rust_target }} --bundles app
           else
-            pnpm --filter @coworkany/desktop exec tauri build --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin --bundles app
+            pnpm --filter @coworkany/desktop exec tauri build --config ${{ matrix.tauri_config }} --target ${{ matrix.rust_target }} --bundles app
           fi
       - name: Sign, notarize and package macOS release
         env:
@@ -196,7 +230,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           COWORKANY_RELEASE_VERSION: ${{ needs.version.outputs.version }}
-          COWORKANY_MAC_APP_PATH: ${{ github.workspace }}/apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/CoworkAny.app
+          COWORKANY_MAC_APP_PATH: ${{ github.workspace }}/apps/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/CoworkAny.app
           COWORKANY_MAC_PORTABLE_OUTPUT: ${{ github.workspace }}/.artifacts/desktop-release
           MACOS_MODE: ${{ needs.version.outputs.macos_mode }}
         run: |
@@ -207,7 +241,7 @@ jobs:
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: desktop-macos
+          name: ${{ matrix.artifact_name }}
           if-no-files-found: error
           compression-level: 0
           path: |
@@ -256,7 +290,7 @@ jobs:
               release = (await github.rest.repos.createRelease({
                 ...context.repo, tag_name: tag, target_commitish: process.env.RELEASE_COMMIT,
                 name: `CoworkAny ${tag}`, draft: true, prerelease: process.env.RELEASE_PRERELEASE === 'true' || process.env.RELEASE_MACOS_MODE === 'internal',
-                body: `${notes.data.body}\n\n## Desktop downloads\n- Windows x64: installer, normal ZIP, portable ZIP. Existing Windows signing/runtime policy applies; ZIP users also need the separate [Windows Runtime](https://github.com/GiantClam/coworkany/releases/tag/v0.1.0).\n- macOS Apple Silicon: ${process.env.RELEASE_MACOS_MODE === 'internal' ? 'internal-test portable ZIP (ad hoc signed, not Developer ID signed or notarized). If macOS blocks the first launch, Control-click CoworkAny.app > Open; if it remains blocked, use System Settings > Privacy & Security > Security > Open Anyway, then open it again.' : 'signed and notarized DMG / portable ZIP'}, including offline runtimes. Intel Macs are not supported by these artifacts.\n- Verify downloads with SHA256SUMS; release-manifest.json records the exact source commit and macOS mode.\n\n## 授权说明\n- 当前仓库未声明公开开源许可证；下载此 Release 不自动授予修改、再分发、再许可或商业使用权，具体权限以项目所有者的明确书面授权为准。\n- ${process.env.RELEASE_MACOS_MODE === 'internal' ? '本次 macOS 产物为内部测试 ZIP，仅 ad hoc 签名，未使用 Developer ID，未公证，不属于正式公开分发包。' : 'macOS 正式产物使用 Developer ID Application 签名并完成 Apple 公证。'}\n- macOS 离线 Runtime 的第三方许可证和版权信息随包内 LICENSES.txt 提供，使用者还需遵守所调用 Provider、模型、字体和技能的上游条款。\n- 完整说明见 [Release 授权说明](https://github.com/GiantClam/coworkany/blob/${tag}/docs/desktop/release-authorization.zh-CN.md)。\n\nBefore publishing this draft, complete the clean-machine checks in docs/desktop/macos-arm64-release.zh-CN.md.\n`
+                body: `${notes.data.body}\n\n## Desktop downloads\n- Windows x64: installer, normal ZIP, portable ZIP. Existing Windows signing/runtime policy applies; ZIP users also need the separate [Windows Runtime](https://github.com/GiantClam/coworkany/releases/tag/v0.1.0).\n- macOS Apple Silicon: ${process.env.RELEASE_MACOS_MODE === 'internal' ? 'internal-test portable ZIP (ad hoc signed, not Developer ID signed or notarized). If macOS blocks the first launch, Control-click CoworkAny.app > Open; if it remains blocked, use System Settings > Privacy & Security > Security > Open Anyway, then open it again.' : 'signed and notarized DMG / portable ZIP'}, including offline runtimes.\n- macOS Intel: ${process.env.RELEASE_MACOS_MODE === 'internal' ? 'internal-test portable ZIP (ad hoc signed, not Developer ID signed or notarized).' : 'signed and notarized DMG / portable ZIP'}, including offline runtimes.\n- Verify downloads with SHA256SUMS; release-manifest.json records the exact source commit and macOS mode.\n\n## 授权说明\n- 当前仓库未声明公开开源许可证；下载此 Release 不自动授予修改、再分发、再许可或商业使用权，具体权限以项目所有者的明确书面授权为准。\n- ${process.env.RELEASE_MACOS_MODE === 'internal' ? '本次 macOS 产物为内部测试 ZIP，仅 ad hoc 签名，未使用 Developer ID，未公证，不属于正式公开分发包。' : 'macOS 正式产物使用 Developer ID Application 签名并完成 Apple 公证。'}\n- macOS 离线 Runtime 的第三方许可证和版权信息随包内 LICENSES.txt 提供，使用者还需遵守所调用 Provider、模型、字体和技能的上游条款。\n- 完整说明见 [Release 授权说明](https://github.com/GiantClam/coworkany/blob/${tag}/docs/desktop/release-authorization.zh-CN.md)。\n\nBefore publishing this draft, complete the clean-machine checks in docs/desktop/macos-arm64-release.zh-CN.md.\n`
               })).data;
             }
             core.summary.addLink('Review release draft', release.html_url);

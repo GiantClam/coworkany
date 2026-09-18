@@ -53,6 +53,7 @@ for (const rejection of ["none", "app", "dmg"]) {
       spctl: 'exit 0',
       uuidgen: 'printf test-key',
       file: 'case "$2" in *.node) printf "Mach-O 64-bit bundle arm64";; *) printf "Mach-O 64-bit executable arm64";; esac',
+      lipo: 'printf arm64',
       base64: 'cat >/dev/null; printf cert',
       node: 'exit 0',
     };

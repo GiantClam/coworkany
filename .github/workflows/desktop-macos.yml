@@ -24,9 +24,20 @@ permissions:
 
 jobs:
   validate:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            runner_arch: arm64
+          - runner: macos-13
+            runner_arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = "${{ matrix.runner_arch }}"
 
       - uses: pnpm/action-setup@v4
         with:

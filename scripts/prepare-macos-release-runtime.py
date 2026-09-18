@@ -11,6 +11,17 @@ import urllib.request
 PYTHON_FRAMEWORK_PREFIX = "/Library/Frameworks/Python.framework/Versions/"
 
 
+def extract_runtime_archive(bundle, destination):
+    """Extract only regular files and directories within the runtime root."""
+    members = []
+    for member in bundle.getmembers():
+        path = Path(member.name)
+        if path.is_absolute() or ".." in path.parts or not (member.isfile() or member.isdir()):
+            raise ValueError(f"macos_runtime_archive_entry_unsafe:{member.name}")
+        members.append(member)
+    bundle.extractall(destination, members=members)
+
+
 def repair_python_relocation(destination):
     """Make python.org framework binaries work without a host Python install.
 
@@ -52,9 +63,11 @@ def repair_python_relocation(destination):
         subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(python_app)], check=True)
 
 
-def prepare(url, expected_hash, destination):
+def prepare(url, expected_hash, destination, architecture="arm64"):
     if not url.startswith("https://") or not re.fullmatch(r"[a-fA-F0-9]{64}", expected_hash):
         raise ValueError("macos_runtime_https_url_and_sha256_required")
+    if architecture not in {"arm64", "x86_64"}:
+        raise ValueError(f"macos_runtime_architecture_invalid:{architecture}")
     destination = Path(destination)
     if destination.exists():
         raise ValueError("macos_runtime_destination_must_not_exist")
@@ -70,7 +83,7 @@ def prepare(url, expected_hash, destination):
         if digest.hexdigest() != expected_hash.lower():
             raise ValueError("macos_runtime_checksum_mismatch")
         with tarfile.open(archive, "r:gz") as bundle:
-            bundle.extractall(destination, filter="data")
+            extract_runtime_archive(bundle, destination)
     repair_python_relocation(destination)
     required = {
         "COWORKANY_MAC_NODE_RUNTIME_DIR": "node",
@@ -85,10 +98,10 @@ def prepare(url, expected_hash, destination):
     for relative in ["node/node", "opencode/opencode", "python/python3"]:
         binary = destination / relative
         # macOS lipo takes the input file before the verification action:
-        # `lipo <binary> -verify_arch arm64`. Passing the action first makes
+        # `lipo <binary> -verify_arch ARCH`. Passing the action first makes
         # lipo interpret the binary path as an architecture name and always
         # fail with "unknown architecture specification".
-        subprocess.run(["lipo", str(binary), "-verify_arch", "arm64"], check=True)
+        subprocess.run(["lipo", str(binary), "-verify_arch", architecture], check=True)
         subprocess.run([str(binary), "--version"], check=True, timeout=60,
                        env={**os.environ, "OPENCODE_DISABLE_MODELS_FETCH": "true", "OPENCODE_DISABLE_AUTOUPDATE": "true"})
     return {key: str((destination / relative).resolve()) for key, relative in required.items()}
@@ -96,7 +109,7 @@ def prepare(url, expected_hash, destination):
 
 if __name__ == "__main__":
     target = Path(os.environ["RUNNER_TEMP"]) / "coworkany-macos-runtime"
-    values = prepare(os.environ["COWORKANY_MAC_RUNTIME_URL"], os.environ["COWORKANY_MAC_RUNTIME_SHA256"], target)
+    values = prepare(os.environ["COWORKANY_MAC_RUNTIME_URL"], os.environ["COWORKANY_MAC_RUNTIME_SHA256"], target, os.environ.get("COWORKANY_MAC_RUNTIME_ARCH", "arm64"))
     with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
         for key, value in values.items():
             if "\n" in value or "\r" in value:

@@ -18,7 +18,9 @@ export async function collectReleaseAssets(input, output, tag, commit, macosMode
     `CoworkAny_${version}_x64-setup.exe`,
     "CoworkAny-Windows-x64-normal.zip",
     "CoworkAny-Windows-x64-portable.zip",
-    ...(macosMode === "internal" ? ["CoworkAny-macOS-arm64-internal-portable.zip"] : [`CoworkAny-${version}-macOS-arm64.dmg`, "CoworkAny-macOS-arm64-portable.zip"]),
+    ...(macosMode === "internal"
+      ? ["arm64", "x64"].map(architecture => `CoworkAny-macOS-${architecture}-internal-portable.zip`)
+      : ["arm64", "x64"].flatMap(architecture => [`CoworkAny-${version}-macOS-${architecture}.dmg`, `CoworkAny-macOS-${architecture}-portable.zip`])),
   ];
   const files = await walk(input);
   const selected = required.map(name => {

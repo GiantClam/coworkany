@@ -34,7 +34,7 @@ test("version update keeps JS, Tauri, Cargo and Cargo.lock aligned; check reject
   await assert.rejects(manageVersion(directory, "--check", "v0.1.3"), /apps\/desktop\/package.json=0.1.4/);
 });
 
-const names = ["CoworkAny_0.1.3_x64-setup.exe", "CoworkAny-Windows-x64-normal.zip", "CoworkAny-Windows-x64-portable.zip", "CoworkAny-0.1.3-macOS-arm64.dmg", "CoworkAny-macOS-arm64-portable.zip"];
+const names = ["CoworkAny_0.1.3_x64-setup.exe", "CoworkAny-Windows-x64-normal.zip", "CoworkAny-Windows-x64-portable.zip", "CoworkAny-0.1.3-macOS-arm64.dmg", "CoworkAny-macOS-arm64-portable.zip", "CoworkAny-0.1.3-macOS-x64.dmg", "CoworkAny-macOS-x64-portable.zip"];
 const commit = "a".repeat(40);
 
 test("release assembly requires both platforms and hashes exact shipped bytes", async t => {
@@ -45,13 +45,13 @@ test("release assembly requires both platforms and hashes exact shipped bytes", 
   await assert.rejects(collectReleaseAssets(input, output, "v0.1.3", commit), /release_asset_expected_once/);
   await writeFile(join(input, names.at(-1)), names.at(-1));
   const manifest = await collectReleaseAssets(input, output, "v0.1.3", commit);
-  assert.equal(manifest.assets.length, 5);
+  assert.equal(manifest.assets.length, 7);
   assert.equal(manifest.commit, commit);
   for (const asset of manifest.assets) {
     assert.equal(asset.sha256, createHash("sha256").update(asset.name).digest("hex"));
     assert.equal(await readFile(join(output, asset.name), "utf8"), asset.name);
   }
-  assert.equal((await readFile(join(output, "SHA256SUMS"), "utf8")).trim().split("\n").length, 5);
+  assert.equal((await readFile(join(output, "SHA256SUMS"), "utf8")).trim().split("\n").length, 7);
   await assert.rejects(collectReleaseAssets(input, output, "v0.1.3", commit), /release_output_must_be_empty/);
 });
 
@@ -68,9 +68,9 @@ test("internal macOS mode requires only the internal portable archive", async t 
   const directory = await fixture(t);
   const input = join(directory, "input"), output = join(directory, "output");
   await mkdir(input);
-  for (const name of [names[0], names[1], names[2], "CoworkAny-macOS-arm64-internal-portable.zip"]) await writeFile(join(input, name), name);
+  for (const name of [names[0], names[1], names[2], "CoworkAny-macOS-arm64-internal-portable.zip", "CoworkAny-macOS-x64-internal-portable.zip"]) await writeFile(join(input, name), name);
   const manifest = await collectReleaseAssets(input, output, "v0.1.3", commit, "internal");
   assert.equal(manifest.macosMode, "internal");
-  assert.equal(manifest.assets.length, 4);
+  assert.equal(manifest.assets.length, 5);
   assert.ok(manifest.assets.some(asset => asset.name.endsWith("internal-portable.zip")));
 });

@@ -56,7 +56,7 @@ class RuntimeArchiveTests(unittest.TestCase):
             with self.subTest(names=names), tempfile.TemporaryDirectory() as root:
                 data = archive_bytes(names)
                 with patch.object(runtime.urllib.request, "urlopen", return_value=Response(data)), patch.object(runtime.subprocess, "run") as run:
-                    with self.assertRaises((ValueError, tarfile.FilterError)):
+                    with self.assertRaises(ValueError):
                         runtime.prepare("https://example.com/runtime.tar.gz", hashlib.sha256(data).hexdigest(), Path(root) / "output")
                     run.assert_not_called()
                     self.assertFalse((Path(root) / "escaped").exists())
@@ -70,6 +70,13 @@ class RuntimeArchiveTests(unittest.TestCase):
             self.assertEqual(run.call_count, 6)
             self.assertEqual(run.call_args_list[0].args[0][1:], [str(Path(root) / "output" / "node/node"), "-verify_arch", "arm64"])
             self.assertTrue(Path(values["COWORKANY_MAC_FONT_PATH"]).is_file())
+
+    def test_accepts_intel_runtime_architecture(self):
+        names = ["node/node", "opencode/opencode", "python/python3", "fonts/NotoSansCJKsc-Regular.otf", "LICENSES.txt"]
+        data = archive_bytes(names)
+        with tempfile.TemporaryDirectory() as root, patch.object(runtime.urllib.request, "urlopen", return_value=Response(data)), patch.object(runtime.subprocess, "run") as run:
+            runtime.prepare("https://example.com/runtime.tar.gz", hashlib.sha256(data).hexdigest(), Path(root) / "output", "x86_64")
+            self.assertEqual(run.call_args_list[0].args[0][1:], [str(Path(root) / "output" / "node/node"), "-verify_arch", "x86_64"])
 
 
 if __name__ == "__main__":

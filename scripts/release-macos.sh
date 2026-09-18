@@ -18,8 +18,17 @@ version="${COWORKANY_RELEASE_VERSION:-}"
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo "macos_release_version_invalid" >&2; exit 1; }
 entitlements="$repo_root/scripts/macos-release.entitlements.plist"
 [[ -d "$app_path" && "$app_path" == *.app ]] || { echo "macos_app_bundle_missing:$app_path" >&2; exit 1; }
+app_executable="$app_path/Contents/MacOS/coworkany"
+[[ -f "$app_executable" ]] || { echo "macos_app_executable_missing:$app_executable" >&2; exit 1; }
+command -v lipo >/dev/null || { echo "macos_release_command_missing:lipo" >&2; exit 1; }
+architecture="$(lipo -archs "$app_executable")"
+case "$architecture" in
+  arm64) platform_name="arm64" ;;
+  x86_64) platform_name="x64" ;;
+  *) echo "macos_app_architecture_unsupported:$architecture" >&2; exit 1 ;;
+esac
 [[ -f "$entitlements" ]] || { echo "macos_release_entitlements_missing:$entitlements" >&2; exit 1; }
-for command_name in codesign security xcrun hdiutil ditto spctl mktemp base64 uuidgen file; do
+for command_name in codesign security xcrun hdiutil ditto spctl mktemp base64 uuidgen file lipo; do
   command -v "$command_name" >/dev/null || { echo "macos_release_command_missing:$command_name" >&2; exit 1; }
 done
 
@@ -79,7 +88,7 @@ dmg_stage="$(mktemp -d "/tmp/coworkany-dmg-XXXXXX")"
 ditto "$app_path" "$dmg_stage/CoworkAny.app"
 codesign --verify --deep --strict "$dmg_stage/CoworkAny.app" >/dev/null
 ln -s /Applications "$dmg_stage/Applications"
-dmg_path="$output_dir/CoworkAny-${version}-macOS-arm64.dmg"
+dmg_path="$output_dir/CoworkAny-${version}-macOS-${platform_name}.dmg"
 rm -f "$dmg_path"
 hdiutil create -volname CoworkAny -srcfolder "$dmg_stage" -ov -format UDZO "$dmg_path" >/dev/null
 
@@ -91,4 +100,4 @@ xcrun stapler staple "$dmg_path" >/dev/null
 xcrun stapler validate "$dmg_path" >/dev/null
 
 COWORKANY_MAC_APP_PATH="$app_path" COWORKANY_MAC_PORTABLE_OUTPUT="$output_dir" node "$repo_root/scripts/package-macos-portable.mjs" >/dev/null
-node -e 'console.log(JSON.stringify({status:"released",dmg:process.argv[1],portableZip:process.argv[2]}))' "$dmg_path" "$output_dir/CoworkAny-macOS-arm64-portable.zip"
+node -e 'console.log(JSON.stringify({status:"released",dmg:process.argv[1],portableZip:process.argv[2]}))' "$dmg_path" "$output_dir/CoworkAny-macOS-${platform_name}-portable.zip"
