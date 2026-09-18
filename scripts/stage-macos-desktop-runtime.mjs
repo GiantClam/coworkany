@@ -1,4 +1,4 @@
-import { access, chmod, cp, lstat, mkdir, readFile, readlink, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, cp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
@@ -55,13 +55,6 @@ async function copyRuntimeDirectory(name, destination, executable) {
     filter: item => name !== "python" || (!item.includes("/__pycache__/") && !item.endsWith(".pyc")),
   });
   const target = join(destination, executable);
-  const sourceTarget = join(path, executable);
-  if ((await lstat(sourceTarget)).isSymbolicLink()) {
-    const linkTarget = await readlink(sourceTarget);
-    if (linkTarget.startsWith("/") || linkTarget.split("/").includes("..")) throw new Error(`macos_runtime_${name}_unsafe_executable_link:${linkTarget}`);
-    await rm(target, { force: true });
-    await symlink(linkTarget, target);
-  }
   try {
     await access(target, constants.X_OK);
   } catch {
@@ -212,6 +205,7 @@ function pythonFrameworkDependency(value) {
 
 async function repairPythonMachODependencies() {
   const pythonRoot = join(output, "python");
+  const topLevelPython = join(pythonRoot, "python3");
   const files = await listPythonMachOFiles(pythonRoot);
   const bundled = new Set(files);
   const changed = [];
@@ -219,6 +213,11 @@ async function repairPythonMachODependencies() {
     const { stdout } = await execFileAsync("/usr/bin/otool", ["-L", file], { encoding: "utf8" }).catch(() => ({ stdout: "" }));
     const dependencies = stdout.split("\n").map(line => line.trim().split(" (", 1)[0]);
     for (const dependency of dependencies) {
+      if (file === topLevelPython && dependency === "@loader_path/../Python" && bundled.has(join(pythonRoot, "Python"))) {
+        await execFileAsync("/usr/bin/install_name_tool", ["-change", dependency, "@loader_path/Python", file]);
+        changed.push(file);
+        continue;
+      }
       const relativeTarget = pythonFrameworkDependency(dependency);
       if (!relativeTarget) continue;
       const target = join(pythonRoot, relativeTarget);
