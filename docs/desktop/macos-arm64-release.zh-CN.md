@@ -68,6 +68,8 @@ Runtime 归档根目录必须包含以下文件，并在 `node`、`opencode`、`
 node/node
 opencode/opencode
 python/python3
+media/ffmpeg
+media/ffprobe
 fonts/NotoSansCJKsc-Regular.otf
 LICENSES.txt
 ```

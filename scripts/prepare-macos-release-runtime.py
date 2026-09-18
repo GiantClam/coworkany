@@ -89,13 +89,15 @@ def prepare(url, expected_hash, destination, architecture="arm64"):
         "COWORKANY_MAC_NODE_RUNTIME_DIR": "node",
         "COWORKANY_MAC_OPENCODE_RUNTIME_DIR": "opencode",
         "COWORKANY_MAC_PYTHON_RUNTIME_DIR": "python",
+        "COWORKANY_MAC_STATIC_FFMPEG_PATH": "media/ffmpeg",
+        "COWORKANY_MAC_STATIC_FFPROBE_PATH": "media/ffprobe",
         "COWORKANY_MAC_FONT_PATH": "fonts/NotoSansCJKsc-Regular.otf",
     }
-    for relative in ["node/node", "opencode/opencode", "python/python3", "fonts/NotoSansCJKsc-Regular.otf", "LICENSES.txt"]:
+    for relative in ["node/node", "opencode/opencode", "python/python3", "media/ffmpeg", "media/ffprobe", "fonts/NotoSansCJKsc-Regular.otf", "LICENSES.txt"]:
         path = destination / relative
         if not path.is_file() or path.stat().st_size == 0:
             raise ValueError(f"macos_runtime_file_missing:{relative}")
-    for relative in ["node/node", "opencode/opencode", "python/python3"]:
+    for relative in ["node/node", "opencode/opencode", "python/python3", "media/ffmpeg", "media/ffprobe"]:
         binary = destination / relative
         # macOS lipo takes the input file before the verification action:
         # `lipo <binary> -verify_arch ARCH`. Passing the action first makes

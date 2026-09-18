@@ -62,17 +62,19 @@ class RuntimeArchiveTests(unittest.TestCase):
                     self.assertFalse((Path(root) / "escaped").exists())
 
     def test_complete_archive_exports_paths_and_checks_binaries(self):
-        names = ["node/node", "opencode/opencode", "python/python3", "fonts/NotoSansCJKsc-Regular.otf", "LICENSES.txt"]
+        names = ["node/node", "opencode/opencode", "python/python3", "media/ffmpeg", "media/ffprobe", "fonts/NotoSansCJKsc-Regular.otf", "LICENSES.txt"]
         data = archive_bytes(names)
         with tempfile.TemporaryDirectory() as root, patch.object(runtime.urllib.request, "urlopen", return_value=Response(data)), patch.object(runtime.subprocess, "run") as run:
             values = runtime.prepare("https://example.com/runtime.tar.gz", hashlib.sha256(data).hexdigest(), Path(root) / "output")
-            self.assertEqual(len(values), 4)
-            self.assertEqual(run.call_count, 6)
+            self.assertEqual(len(values), 6)
+            self.assertEqual(run.call_count, 10)
             self.assertEqual(run.call_args_list[0].args[0][1:], [str(Path(root) / "output" / "node/node"), "-verify_arch", "arm64"])
+            self.assertEqual(values["COWORKANY_MAC_STATIC_FFMPEG_PATH"], str((Path(root) / "output" / "media/ffmpeg").resolve()))
+            self.assertEqual(values["COWORKANY_MAC_STATIC_FFPROBE_PATH"], str((Path(root) / "output" / "media/ffprobe").resolve()))
             self.assertTrue(Path(values["COWORKANY_MAC_FONT_PATH"]).is_file())
 
     def test_accepts_intel_runtime_architecture(self):
-        names = ["node/node", "opencode/opencode", "python/python3", "fonts/NotoSansCJKsc-Regular.otf", "LICENSES.txt"]
+        names = ["node/node", "opencode/opencode", "python/python3", "media/ffmpeg", "media/ffprobe", "fonts/NotoSansCJKsc-Regular.otf", "LICENSES.txt"]
         data = archive_bytes(names)
         with tempfile.TemporaryDirectory() as root, patch.object(runtime.urllib.request, "urlopen", return_value=Response(data)), patch.object(runtime.subprocess, "run") as run:
             runtime.prepare("https://example.com/runtime.tar.gz", hashlib.sha256(data).hexdigest(), Path(root) / "output", "x86_64")
