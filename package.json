@@ -1,6 +1,6 @@
 {
   "name": "coworkany",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "packageManager": "pnpm@9.15.4",
   "scripts": {
