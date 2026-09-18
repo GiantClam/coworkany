@@ -2,7 +2,7 @@
 Author: Judy
 Created: 2026-09-18
 Function:
-    将已验证的 Intel macOS 桌面 Runtime 打包为可供 GitHub Actions 下载的归档。
+    将已验证的 macOS 桌面 Runtime 打包为可供 GitHub Actions 下载的归档。
     归档包含 Node、OpenCode、Python、字体和媒体工具，并汇总上游许可。
 Example:
     python3 scripts/20260918Codex_package_intel_macos_runtime.py \
@@ -26,7 +26,6 @@ REQUIRED_FILES = (
     "media/ffmpeg",
     "media/ffprobe",
     "fonts/NotoSansCJKsc-Regular.otf",
-    "runtime-manifest.json",
 )
 
 
@@ -48,19 +47,20 @@ def normalized_tar_info(info):
     return info
 
 
-def verify_runtime(runtime_dir):
-    """确认 Runtime 与 Intel 应用架构一致。"""
+def verify_runtime(runtime_dir, architecture):
+    """确认 Runtime 与目标应用架构一致。"""
     for relative in REQUIRED_FILES:
         path = runtime_dir / relative
         if not path.is_file() or path.stat().st_size == 0:
             raise ValueError(f"runtime_file_missing:{relative}")
     for relative in ("node/node", "opencode/opencode", "python/python3", "media/ffmpeg", "media/ffprobe"):
-        subprocess.run(["lipo", str(runtime_dir / relative), "-verify_arch", "x86_64"], check=True)
+        subprocess.run(["lipo", str(runtime_dir / relative), "-verify_arch", architecture], check=True)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime-dir", type=Path, required=True)
+    parser.add_argument("--architecture", choices=("arm64", "x86_64"), default="x86_64")
     parser.add_argument("--node-license", type=Path, required=True)
     parser.add_argument("--opencode-license", type=Path, required=True)
     parser.add_argument("--ffmpeg-license", type=Path, required=True)
@@ -73,9 +73,9 @@ def main():
         raise ValueError(f"runtime_directory_missing:{runtime_dir}")
     if args.output.exists():
         raise ValueError(f"output_already_exists:{args.output}")
-    verify_runtime(runtime_dir)
+    verify_runtime(runtime_dir, args.architecture)
 
-    licenses = "CoworkAny macOS Intel Runtime 的第三方许可证\n"
+    licenses = "CoworkAny macOS Runtime 的第三方许可证\n"
     licenses += "Runtime 内各依赖自己的 LICENSE、NOTICE 文件也会原样保留。\n"
     licenses += read_license("Node.js", args.node_license.resolve())
     licenses += read_license("OpenCode", args.opencode_license.resolve())
