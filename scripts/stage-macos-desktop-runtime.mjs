@@ -1,4 +1,4 @@
-import { access, chmod, cp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, cp, lstat, mkdir, readFile, readlink, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
@@ -55,6 +55,13 @@ async function copyRuntimeDirectory(name, destination, executable) {
     filter: item => name !== "python" || (!item.includes("/__pycache__/") && !item.endsWith(".pyc")),
   });
   const target = join(destination, executable);
+  const sourceTarget = join(path, executable);
+  if ((await lstat(sourceTarget)).isSymbolicLink()) {
+    const linkTarget = await readlink(sourceTarget);
+    if (linkTarget.startsWith("/") || linkTarget.split("/").includes("..")) throw new Error(`macos_runtime_${name}_unsafe_executable_link:${linkTarget}`);
+    await rm(target, { force: true });
+    await symlink(linkTarget, target);
+  }
   try {
     await access(target, constants.X_OK);
   } catch {
