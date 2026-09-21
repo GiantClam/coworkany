@@ -18,6 +18,7 @@ export * from "./writer";
 export * from "./workflow-directory";
 export * from "./workflow-canvas";
 export * from "./workflow-parameter-fields";
+export * from "./workflow-ai-sidebar";
 export * from "./task-status";
 export { WorkflowCanvas as WorkbenchWorkflowCanvas } from "./workflow-canvas";
 

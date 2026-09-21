@@ -406,7 +406,8 @@ test("renders an AI Elements confirmation for a blocked tool call", () => {
     ...createDesktopUIMessage({ id: "assistant-approval", role: "assistant", conversationId: "conversation-1" }),
     parts: [{ type: "dynamic-tool", toolName: "bash", toolCallId: "tool-approval", state: "approval-requested", input: { command: "pwd" }, approval: { id: "permission-1", reason: "Run pwd" } }],
   }]} locale="en" />);
-  assert.match(markup, /data-state="closed"[^>]*data-status="waiting"[^>]*data-slot="tool"/);
+  assert.match(markup, /data-state="open"[^>]*data-status="waiting"[^>]*data-slot="tool"/);
+  assert.match(markup, /data-slot="confirmation"/);
   assert.match(markup, /data-tool-name="bash"/);
   assert.match(markup, /Awaiting approval/);
   assert.match(markup, /data-slot="tool-content"/);
