@@ -9,3 +9,4 @@ export * from "./compiler";
 export * from "./ports";
 export * from "./execution";
 export * from "./media-processing";
+export * from "./ai-operations";
