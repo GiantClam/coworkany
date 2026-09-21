@@ -240,3 +240,4 @@ export interface WorkbenchClient {
 export * from "./message-parts";
 export * from "./questions";
 export * from "./uimessage";
+export * from "./workflow-ai";
