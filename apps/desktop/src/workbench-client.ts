@@ -13,6 +13,8 @@ import type {
   WorkbenchWorkflow,
   WorkbenchWorkflowInput,
   WorkbenchConversationMessagesOptions,
+  WorkflowAiCommand,
+  WorkflowAiOperationGroup,
 } from "@coworkany/workbench-client";
 import { createDesktopRunTransport, createDesktopUIMessage, desktopUIMessageStorage, desktopUIMessageText, parseDesktopUIMessage } from "@coworkany/workbench-client";
 import type { DesktopUIMessage } from "@coworkany/workbench-client";
@@ -24,6 +26,7 @@ import { isWorkbenchQuestionToolEvent, parseWorkbenchQuestionEvent, type Workben
 type DesktopConversationRow = { id: string; title: string; updated_at: string; message_count?: number; opencode_session_id?: string | null; agent_id?: string | null };
 type DesktopMessageRow = { id: string; conversation_id: string; role: DesktopUIMessage["role"] | "tool"; content: string; parts_json?: string | null; metadata_json?: string | null; created_at: string };
 type DesktopWorkflowRow = { id: string; name: string; definition_json: string; updated_at: string };
+type DesktopWorkflowAiOperationGroupRow = { id: string; conversation_id: string; workflow_id: string; base_revision: number; result_revision?: number | null; commands_json: string; status: string; summary: string; created_at: string };
 type DesktopArtifactRow = { id: string; relative_path: string; mime_type: string; byte_length: number; sha256: string; created_at: string; available?: boolean };
 type DesktopRunRow = { id: string; conversation_id?: string | null; status: WorkbenchRun["status"] | string; model?: string | null; started_at: string; finished_at?: string | null };
 type DesktopRunDetail = { run: DesktopRunRow; nodes: Array<{ node_key: string; status: string; output_json?: string | null; updated_at: string }>; events: Array<{ sequence: number; event_type: string; payload_json: string; created_at: string }>; usage: Array<{ provider?: string | null; model: string; input_tokens?: number | null; output_tokens?: number | null; provider_cost?: number | null; estimated_cost?: number | null; created_at: string }> };
@@ -63,6 +66,28 @@ function readWorkflowDefinition(raw: string): WorkbenchWorkflow["definition"] {
 
 function toWorkbenchWorkflow(row: DesktopWorkflowRow): WorkbenchWorkflow {
   return { id: row.id, title: row.name, definition: readWorkflowDefinition(row.definition_json), updatedAt: row.updated_at };
+}
+
+function toWorkflowAiOperationGroup(row: DesktopWorkflowAiOperationGroupRow): WorkflowAiOperationGroup {
+  let commands: readonly WorkflowAiCommand[] = [];
+  try {
+    const parsed = JSON.parse(row.commands_json) as unknown;
+    if (Array.isArray(parsed)) commands = parsed as readonly WorkflowAiCommand[];
+  } catch {
+    commands = [];
+  }
+  const status = row.status === "applied" || row.status === "rolled_back" || row.status === "failed" ? row.status : "failed";
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    workflowId: row.workflow_id,
+    baseRevision: row.base_revision,
+    resultRevision: row.result_revision ?? null,
+    commands,
+    status,
+    summary: row.summary,
+    createdAt: row.created_at,
+  };
 }
 
 function toWorkbenchArtifact(row: DesktopArtifactRow): WorkbenchArtifact {
@@ -187,6 +212,21 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
         input: { id, name: input.title, project_id: null, definition_json: JSON.stringify(input.definition) },
       });
       return toWorkbenchWorkflow(row);
+    },
+    async applyAiOperation(input: Parameters<WorkbenchClient["workflows"]["applyAiOperation"]>[0]): Promise<WorkbenchWorkflow> {
+      const row = await bridge.invoke<DesktopWorkflowRow>("apply_workflow_ai_operation", {
+        input: {
+          workflowId: input.workflowId,
+          expectedRevision: input.expectedRevision,
+          definitionJson: JSON.stringify(input.definition),
+          operationGroup: input.operationGroup,
+        },
+      });
+      return toWorkbenchWorkflow(row);
+    },
+    async operationGroups(workflowId: string): Promise<readonly WorkflowAiOperationGroup[]> {
+      const rows = await bridge.invoke<DesktopWorkflowAiOperationGroupRow[]>("list_workflow_ai_operation_groups", { workflowId });
+      return rows.map(toWorkflowAiOperationGroup);
     },
     async remove(workflowId: string): Promise<void> {
       await bridge.invoke("remove_workflow", { workflowId });

@@ -1,5 +1,7 @@
 import type { DesktopUIMessage } from "./uimessage";
 import type { WorkbenchQuestionClient, WorkbenchQuestionEvent } from "./questions";
+import type { WorkflowAiOperationGroup } from "./workflow-ai";
+import type { WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
 
 export interface NavigationAdapter {
   readonly go: (href: string) => void;
@@ -222,6 +224,8 @@ export interface WorkbenchClient {
   readonly workflows: {
     readonly list: () => Promise<readonly WorkbenchWorkflow[]>;
     readonly save: (input: WorkbenchWorkflowInput) => Promise<WorkbenchWorkflow>;
+    readonly applyAiOperation: (input: { readonly workflowId: string; readonly expectedRevision: number; readonly definition: WorkflowDefinitionEnvelope; readonly operationGroup: WorkflowAiOperationGroup }) => Promise<WorkbenchWorkflow>;
+    readonly operationGroups: (workflowId: string) => Promise<readonly WorkflowAiOperationGroup[]>;
     readonly remove: (workflowId: string) => Promise<void>;
   };
   readonly runs: {
