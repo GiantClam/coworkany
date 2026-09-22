@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { createDesktopUIMessage, type DesktopUIMessage, type WorkflowAiContext, type WorkflowAiOperationGroup } from "@coworkany/workbench-client";
+import { createDesktopUIMessage, type DesktopUIMessage, type WorkflowAiContext } from "@coworkany/workbench-client";
 import { WorkflowAiSidebar, type WorkflowAiSidebarProps } from "../src/workflow-ai-sidebar";
 
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
@@ -25,24 +25,11 @@ const assistant: DesktopUIMessage = {
   ],
 };
 
-const operationGroup: WorkflowAiOperationGroup = {
-  id: "group-1",
-  conversationId: "conversation-1",
-  workflowId: "workflow-1",
-  baseRevision: 3,
-  resultRevision: 4,
-  commands: [{ type: "update_node", nodeKey: "writer", patch: { title: "Writer" } }],
-  status: "applied",
-  summary: "Renamed the writer node",
-  createdAt: "2026-09-21T00:00:00Z",
-};
-
 function props(overrides: Partial<WorkflowAiSidebarProps> = {}): WorkflowAiSidebarProps {
   return {
     open: true,
     width: 390,
     messages: [createDesktopUIMessage({ id: "user-1", role: "user", conversationId: "conversation-1", content: "Rename the writer" }), assistant],
-    operationGroups: [operationGroup],
     providerOptions: [
       { id: "openai:gpt-5", label: "GPT-5", provider: "OpenAI" },
       { id: "gemini:pro", label: "Gemini Pro", provider: "Google" },
@@ -59,8 +46,6 @@ function props(overrides: Partial<WorkflowAiSidebarProps> = {}): WorkflowAiSideb
     onRetry: () => undefined,
     onApprove: () => undefined,
     onReject: () => undefined,
-    onUndoOperationGroup: () => undefined,
-    onFocusNodes: () => undefined,
     ...overrides,
   };
 }
@@ -97,20 +82,21 @@ test("composes AI Elements messages, tools, confirmation and prompt input", () =
   assert.match(markup, /aria-label="Send"/);
 });
 
-test("shows operation-group audit actions and configured provider candidates", () => {
+test("keeps workflow history out of the assistant and shows provider candidates", () => {
   const markup = renderToStaticMarkup(<WorkflowAiSidebar {...props()} />);
-  assert.match(markup, /data-operation-group-id="group-1"/);
-  assert.match(markup, /Renamed the writer node/);
-  assert.match(markup, /aria-label="Focus operation nodes"/);
-  assert.match(markup, /aria-label="Undo operation group"/);
-  assert.match(markup, /data-slot="task"/);
+  assert.doesNotMatch(markup, /AI operation history/);
+  assert.doesNotMatch(markup, /Conversation operations/);
+  assert.doesNotMatch(markup, /data-operation-group-id/);
+  assert.doesNotMatch(markup, /aria-label="Focus operation nodes"/);
+  assert.doesNotMatch(markup, /aria-label="Undo operation group"/);
+  assert.doesNotMatch(markup, /aria-label="Redo operation group"/);
   assert.match(markup, /data-slot="model-selector"/);
   assert.match(markup, /data-provider-count="2"/);
   assert.match(markup, /aria-label="View available providers and models"/);
 });
 
 test("renders quick-start suggestions for a blank conversation", () => {
-  const markup = renderToStaticMarkup(<WorkflowAiSidebar {...props({ messages: [], operationGroups: [], locale: "zh" })} />);
+  const markup = renderToStaticMarkup(<WorkflowAiSidebar {...props({ messages: [], locale: "zh" })} />);
   assert.match(markup, /data-slot="conversation-empty-state"/);
   assert.match(markup, /data-slot="suggestions"/);
   assert.match(markup, /创建一个内容发布工作流/);

@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useMemo, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
-import { Focus, History, PanelRightClose, Sparkles, Undo2 } from "lucide-react";
-import type { DesktopUIMessage, WorkflowAiContext, WorkflowAiOperationGroup } from "@coworkany/workbench-client";
+import { PanelRightClose, Sparkles } from "lucide-react";
+import type { DesktopUIMessage, WorkflowAiContext } from "@coworkany/workbench-client";
 import {
   ModelSelector,
   ModelSelectorContent,
@@ -20,7 +20,6 @@ import {
   PromptInputTools,
   Suggestion,
   Suggestions,
-  Task,
   type ModelOption,
 } from "./ai-elements";
 import { WorkbenchMessageSurface } from "./workbench-message-surface";
@@ -31,7 +30,6 @@ export type WorkflowAiSidebarProps = {
   readonly minWidth?: number;
   readonly maxWidth?: number;
   readonly messages: readonly DesktopUIMessage[];
-  readonly operationGroups: readonly WorkflowAiOperationGroup[];
   readonly providerOptions: readonly ModelOption[];
   readonly context: WorkflowAiContext;
   readonly locale: "zh" | "en";
@@ -45,8 +43,6 @@ export type WorkflowAiSidebarProps = {
   readonly onRetry: (message: DesktopUIMessage) => void | Promise<void>;
   readonly onApprove: (toolCallId: string) => void | Promise<void>;
   readonly onReject: (toolCallId: string) => void | Promise<void>;
-  readonly onUndoOperationGroup: (id: string) => void | Promise<void>;
-  readonly onFocusNodes: (nodeKeys: readonly string[]) => void;
 };
 
 const DEFAULT_MIN_WIDTH = 320;
@@ -54,63 +50,6 @@ const DEFAULT_MAX_WIDTH = 560;
 
 function clampWidth(width: number, minWidth: number, maxWidth: number) {
   return Math.min(Math.max(width, minWidth), maxWidth);
-}
-
-function operationNodeKeys(operationGroup: WorkflowAiOperationGroup) {
-  const nodeKeys = new Set<string>();
-  for (const command of operationGroup.commands) {
-    if ("nodeKey" in command && typeof command.nodeKey === "string") nodeKeys.add(command.nodeKey);
-    if ("node" in command && command.node && typeof command.node.nodeKey === "string") nodeKeys.add(command.node.nodeKey);
-    if ("groupNode" in command && command.groupNode && typeof command.groupNode.nodeKey === "string") nodeKeys.add(command.groupNode.nodeKey);
-    if ("sourceNodeKey" in command && typeof command.sourceNodeKey === "string") nodeKeys.add(command.sourceNodeKey);
-    if ("nodeKeys" in command && Array.isArray(command.nodeKeys)) command.nodeKeys.forEach((nodeKey) => nodeKeys.add(nodeKey));
-    if ("edge" in command && command.edge) {
-      nodeKeys.add(command.edge.sourceNodeKey);
-      nodeKeys.add(command.edge.targetNodeKey);
-    }
-  }
-  return [...nodeKeys];
-}
-
-function operationStatus(status: WorkflowAiOperationGroup["status"]) {
-  if (status === "applied") return "completed" as const;
-  if (status === "rolled_back") return "cancelled" as const;
-  return "failed" as const;
-}
-
-function OperationHistory({ operationGroups, locale, onUndo, onFocus }: {
-  readonly operationGroups: readonly WorkflowAiOperationGroup[];
-  readonly locale: "zh" | "en";
-  readonly onUndo: WorkflowAiSidebarProps["onUndoOperationGroup"];
-  readonly onFocus: WorkflowAiSidebarProps["onFocusNodes"];
-}) {
-  if (!operationGroups.length) return null;
-  return <section className="workflow-ai-operation-history" aria-label={locale === "zh" ? "AI 操作历史" : "AI operation history"}>
-    <div className="workflow-ai-section-label"><History size={13} aria-hidden="true" /><span>{locale === "zh" ? "本次会话操作" : "Conversation operations"}</span></div>
-    <div className="workflow-ai-operation-list">
-      {operationGroups.map((operationGroup) => {
-        const nodeKeys = operationNodeKeys(operationGroup);
-        const status = operationStatus(operationGroup.status);
-        return <div className="workflow-ai-operation" key={operationGroup.id} data-operation-group-id={operationGroup.id} data-operation-status={operationGroup.status}>
-          <Task
-            title={operationGroup.summary}
-            description={`${operationGroup.commands.length} ${locale === "zh" ? "项操作" : operationGroup.commands.length === 1 ? "operation" : "operations"} · r${operationGroup.baseRevision} → r${operationGroup.resultRevision ?? "-"}`}
-            status={status}
-            locale={locale}
-            defaultOpen={false}
-          />
-          <div className="workflow-ai-operation-actions">
-            <button type="button" disabled={!nodeKeys.length} onClick={() => onFocus(nodeKeys)} aria-label={locale === "zh" ? "定位本组节点" : "Focus operation nodes"} title={locale === "zh" ? "定位节点" : "Focus nodes"}>
-              <Focus size={14} aria-hidden="true" />
-            </button>
-            <button type="button" disabled={operationGroup.status !== "applied"} onClick={() => void onUndo(operationGroup.id)} aria-label={locale === "zh" ? "撤销本组操作" : "Undo operation group"} title={locale === "zh" ? "撤销本组" : "Undo group"}>
-              <Undo2 size={14} aria-hidden="true" />
-            </button>
-          </div>
-        </div>;
-      })}
-    </div>
-  </section>;
 }
 
 function ProviderCandidates({ options, locale }: { readonly options: readonly ModelOption[]; readonly locale: "zh" | "en" }) {
@@ -140,7 +79,6 @@ export function WorkflowAiSidebar({
   minWidth = DEFAULT_MIN_WIDTH,
   maxWidth = DEFAULT_MAX_WIDTH,
   messages,
-  operationGroups,
   providerOptions,
   context,
   locale,
@@ -154,8 +92,6 @@ export function WorkflowAiSidebar({
   onRetry,
   onApprove,
   onReject,
-  onUndoOperationGroup,
-  onFocusNodes,
 }: WorkflowAiSidebarProps) {
   const resolvedWidth = clampWidth(width, minWidth, maxWidth);
   const sidebarStyle = useMemo(() => ({
@@ -238,7 +174,6 @@ export function WorkflowAiSidebar({
           <Suggestions>{quickStarts.map((suggestion) => <Suggestion key={suggestion} suggestion={suggestion} onClick={onInputChange} />)}</Suggestions>
         </div>}
       />
-      <OperationHistory operationGroups={operationGroups} locale={locale} onUndo={onUndoOperationGroup} onFocus={onFocusNodes} />
     </div>
 
     <div className="workflow-ai-composer">

@@ -5,21 +5,12 @@ import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { missingMacOSRuntimeInputs, resolveMacOSRuntimeInputs } from "./resolve-macos-runtime-inputs.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
 const execFileAsync = promisify(execFile);
 const output = resolve(process.env.COWORKANY_MAC_RUNTIME_OUTPUT ?? join(root, "apps/desktop/dist-runtime/runtime"));
-const source = {
-  node: process.env.COWORKANY_MAC_NODE_RUNTIME_DIR,
-  opencode: process.env.COWORKANY_MAC_OPENCODE_RUNTIME_DIR,
-  python: process.env.COWORKANY_MAC_PYTHON_RUNTIME_DIR,
-  font: process.env.COWORKANY_MAC_FONT_PATH,
-  ffmpeg: process.env.COWORKANY_MAC_FFMPEG_PATH,
-  ffprobe: process.env.COWORKANY_MAC_FFPROBE_PATH,
-  staticFfmpeg: process.env.COWORKANY_MAC_STATIC_FFMPEG_PATH,
-  staticFfprobe: process.env.COWORKANY_MAC_STATIC_FFPROBE_PATH,
-};
 
 async function removeOutput(path) {
   let lastError;
@@ -323,7 +314,27 @@ if (process.platform !== "darwin" || !["arm64", "x64"].includes(process.arch)) {
   throw new Error(`macos_runtime_stage_requires_darwin_arm64_or_x64:${process.platform}-${process.arch}`);
 }
 const semanticRag = process.arch === "arm64";
+const source = await resolveMacOSRuntimeInputs({ workspaceRoot: root });
+const missing = missingMacOSRuntimeInputs(source);
+const inputChecks = [
+  ["node", source.node],
+  ["opencode", source.opencode],
+  ["python", source.python],
+  ["font", source.font],
+  ["ffmpeg", source.staticFfmpeg ?? source.ffmpeg],
+  ["ffprobe", source.staticFfprobe ?? source.ffprobe],
+];
+const checked = await Promise.allSettled(inputChecks.filter(([, value]) => value).map(([name, value]) => requiredPath(name, value)));
+const invalid = checked.filter(result => result.status === "rejected").map(result => result.reason?.message ?? String(result.reason));
+if (missing.length || invalid.length) {
+  throw new Error(`macos_runtime_inputs_missing:\n${[
+    ...missing.map(item => `  ${item}`),
+    ...invalid.map(item => `  ${item}`),
+  ].join("\n")}`);
+}
 
+// Resolve and validate every input before deleting an existing staging tree.
+// A failed local build must not leave a previously usable runtime unusable.
 await removeOutput(output);
 await mkdir(output, { recursive: true });
 await copyRuntimeDirectory("node", join(output, "node"), "node");

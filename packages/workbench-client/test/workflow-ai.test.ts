@@ -89,6 +89,13 @@ test("creates a prompt with sanitized context and user text", () => {
   assert.match(prompt, /Do not run the workflow unless the user explicitly asks/);
 });
 
+test("workflow prompt gives the model the canonical mutation command shape", () => {
+  const prompt = createWorkflowAiPrompt(context(), "Rename the input node");
+  assert.match(prompt, /"type":"update_node","nodeKey":"node-key","patch":\{"title":"New title"\}/);
+  assert.match(prompt, /Never put validate_workflow, focus_nodes, run_preflight, or run_workflow inside operationGroup\.commands/);
+  assert.match(prompt, /Use the type field, never name/);
+});
+
 test("accepts only the named workflow tools", () => {
   for (const toolName of WORKFLOW_AI_TOOL_NAMES) assert.equal(isWorkflowAiToolName(toolName), true, toolName);
   for (const toolName of ["execute_code", "fetch_url", "write_credentials", "database_query", "apply_json_patch", "run_shell"]) {

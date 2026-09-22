@@ -1422,8 +1422,7 @@
 .workflow-ai-sidebar-header > div { display: flex; min-width: 0; align-items: center; gap: 7px; }
 .workflow-ai-sidebar-header strong { overflow: hidden; color: var(--wb-foreground, #111); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-ai-sidebar-header span { color: var(--wb-muted-foreground, #777); font-size: 10px; font-variant-numeric: tabular-nums; }
-.workflow-ai-sidebar-header button,
-.workflow-ai-operation-actions button {
+.workflow-ai-sidebar-header button {
   display: inline-grid;
   width: 30px;
   height: 30px;
@@ -1435,12 +1434,10 @@
   color: var(--wb-muted-foreground, #777);
   cursor: pointer;
 }
-.workflow-ai-sidebar-header button:hover,
-.workflow-ai-operation-actions button:hover:not(:disabled) { border-color: var(--wb-border, #e5e5e0); background: var(--wb-muted, #efefea); color: var(--wb-foreground, #111); }
+.workflow-ai-sidebar-header button:hover { border-color: var(--wb-border, #e5e5e0); background: var(--wb-muted, #efefea); color: var(--wb-foreground, #111); }
 .workflow-ai-sidebar-header button:focus-visible,
-.workflow-ai-operation-actions button:focus-visible,
 .workflow-ai-provider-trigger:focus-visible { outline: 2px solid var(--wb-ring, #ffd000); outline-offset: 2px; }
-.workflow-ai-sidebar-body { display: grid; grid-template-rows: minmax(0, 1fr) auto; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+.workflow-ai-sidebar-body { display: grid; grid-template-rows: minmax(0, 1fr); flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
 .workflow-ai-sidebar .wb-ai-message-surface { min-height: 0; border: 0; background: transparent; }
 .workflow-ai-sidebar .wb-ai-message-surface .ai-elements-conversation-content { gap: 14px; padding: 14px 12px 28px; }
 .workflow-ai-sidebar .wb-ai-message-row { gap: 8px; }
@@ -1455,16 +1452,6 @@
 .workflow-ai-empty-state .ai-elements-suggestions { max-width: 100%; }
 .workflow-ai-empty-state .ai-elements-suggestions-list { justify-content: flex-start; }
 .workflow-ai-empty-state .ai-elements-suggestion { border-radius: 7px; font-size: 11px; text-align: left; white-space: normal; }
-.workflow-ai-operation-history { display: grid; min-width: 0; max-height: min(32vh, 250px); overflow: auto; border-top: 1px solid var(--wb-border, #e5e5e0); background: color-mix(in srgb, var(--wb-muted, #efefea) 32%, var(--wb-background, #fdfdfb)); padding: 9px 10px 10px; }
-.workflow-ai-section-label { display: flex; align-items: center; gap: 6px; color: var(--wb-muted-foreground, #777); font-size: 10px; font-weight: 700; }
-.workflow-ai-operation-list { display: grid; gap: 7px; margin-top: 8px; }
-.workflow-ai-operation { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 5px; }
-.workflow-ai-operation .ai-elements-task { min-width: 0; border-radius: 7px; background: var(--wb-card, #fff); }
-.workflow-ai-operation .ai-elements-task-trigger-content { min-height: 34px; }
-.workflow-ai-operation .ai-elements-task-item { overflow-wrap: anywhere; }
-.workflow-ai-operation-actions { display: flex; gap: 2px; padding-top: 3px; }
-.workflow-ai-operation-actions button { width: 28px; height: 28px; flex-basis: 28px; }
-.workflow-ai-operation-actions button:disabled { cursor: not-allowed; opacity: .35; }
 .workflow-ai-composer { flex: 0 0 auto; border-top: 1px solid var(--wb-border, #e5e5e0); background: var(--wb-card, #fff); padding: 10px; }
 .workflow-ai-composer .ai-elements-prompt-input { border-radius: 8px; box-shadow: none; }
 .workflow-ai-composer .ai-elements-prompt-input-textarea { min-height: 48px; font-size: 13px; }
@@ -1480,7 +1467,6 @@
     min-width: min(var(--workflow-ai-sidebar-min-width, 320px), 88vw);
     max-width: 88vw;
   }
-  .workflow-ai-operation-history { max-height: 28vh; }
 }
 @keyframes wb-ai-process-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {

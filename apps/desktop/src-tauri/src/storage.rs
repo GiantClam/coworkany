@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, conversation_id TEXT N
 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, conversation_id TEXT REFERENCES conversations(id), status TEXT NOT NULL, model TEXT, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT);
 CREATE TABLE IF NOT EXISTS run_events (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id), sequence INTEGER NOT NULL, event_type TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(run_id, sequence));
 CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), relative_path TEXT NOT NULL, mime_type TEXT NOT NULL, byte_length INTEGER NOT NULL, sha256 TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS deleted_artifacts (id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS usage_records (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT REFERENCES runs(id), provider TEXT, model TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER, provider_cost REAL, estimated_cost REAL, idempotency_key TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS workflows (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), name TEXT NOT NULL, definition_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS workflow_revisions (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflows(id), revision INTEGER NOT NULL, definition_json TEXT NOT NULL, definition_hash TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(workflow_id, revision));
@@ -72,6 +73,12 @@ fn initialize_schema(path: &Path) -> Result<()> {
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (6)", [])?;
     let _ = connection.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT", []);
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (7)", [])?;
+    // SQLite preserves the storage class of values written by older clients,
+    // even when the column is declared TEXT. Normalize historical workflow
+    // definitions so rusqlite can safely deserialize them as String values.
+    connection.execute("UPDATE workflows SET definition_json=CAST(definition_json AS TEXT) WHERE typeof(definition_json)='blob'", [])?;
+    connection.execute("UPDATE workflow_revisions SET definition_json=CAST(definition_json AS TEXT) WHERE typeof(definition_json)='blob'", [])?;
+    connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (8)", [])?;
     connection.execute("CREATE TABLE IF NOT EXISTS workflow_ai_operation_groups (workflow_id TEXT NOT NULL REFERENCES workflows(id), id TEXT NOT NULL, conversation_id TEXT NOT NULL, base_revision INTEGER NOT NULL, result_revision INTEGER, commands_json TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(workflow_id, id))", [])?;
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (9)", [])?;
     Ok(())
@@ -378,6 +385,7 @@ pub fn append_run_event(path: &Path, run_id: &str, sequence: i64, event_type: &s
 pub fn register_artifact(path: &Path, id: &str, project_id: Option<&str>, metadata: &crate::artifacts::ArtifactMetadata) -> Result<()> {
     initialize(path)?;
     let connection = open(path)?;
+    connection.execute("DELETE FROM deleted_artifacts WHERE id=?1", [id])?;
     connection.execute("INSERT INTO artifacts(id, project_id, relative_path, mime_type, byte_length, sha256) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(id) DO UPDATE SET relative_path=excluded.relative_path, mime_type=excluded.mime_type, byte_length=excluded.byte_length, sha256=excluded.sha256", params![id, project_id, metadata.relative_path, metadata.mime_type, metadata.byte_length as i64, metadata.sha256])?;
     Ok(())
 }
@@ -481,6 +489,8 @@ pub fn artifact_reconciliation_candidates(path: &Path) -> Result<Vec<ArtifactRec
         let mime_type = artifact.get("mimeType").and_then(Value::as_str).filter(|value| !value.trim().is_empty()).unwrap_or("application/octet-stream");
         let id = artifact.get("id").and_then(Value::as_str).filter(|value| !value.trim().is_empty()).map(str::to_owned).unwrap_or_else(|| format!("{run_id}:{relative_path}"));
         if existing_ids.contains(&id) || candidates.iter().any(|candidate: &ArtifactReconciliationCandidate| candidate.id == id) { continue; }
+        let deleted: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM deleted_artifacts WHERE id=?1)", [&id], |row| row.get(0))?;
+        if deleted { continue; }
         candidates.push(ArtifactReconciliationCandidate { id, relative_path: relative_path.to_owned(), mime_type: mime_type.to_owned() });
     }
     Ok(candidates)
@@ -488,8 +498,11 @@ pub fn artifact_reconciliation_candidates(path: &Path) -> Result<Vec<ArtifactRec
 
 pub fn remove_artifact(path: &Path, artifact_id: &str) -> Result<()> {
     initialize(path)?;
-    let connection = open(path)?;
-    connection.execute("DELETE FROM artifacts WHERE id=?1", [artifact_id])?;
+    let mut connection = open(path)?;
+    let transaction = connection.transaction()?;
+    transaction.execute("DELETE FROM artifacts WHERE id=?1", [artifact_id])?;
+    transaction.execute("INSERT OR IGNORE INTO deleted_artifacts(id) VALUES (?1)", [artifact_id])?;
+    transaction.commit()?;
     Ok(())
 }
 
@@ -564,9 +577,14 @@ pub fn save_workflow(path: &Path, id: &str, name: &str, project_id: Option<&str>
     let definition_json = redact_json_payload(definition_json)?;
     let hash = format!("{:x}", sha2::Sha256::digest(definition_json.as_bytes()));
     connection.execute("INSERT INTO workflows(id, project_id, name, definition_json) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, name=excluded.name, definition_json=excluded.definition_json, updated_at=CURRENT_TIMESTAMP", params![id, project_id, name, definition_json])?;
-    let revision: i64 = connection.query_row("SELECT COALESCE(MAX(revision), 0) + 1 FROM workflow_revisions WHERE workflow_id=?1", [id], |row| row.get(0))?;
+    let latest_revision: i64 = connection.query_row("SELECT COALESCE(MAX(revision), 0) FROM workflow_revisions WHERE workflow_id=?1", [id], |row| row.get(0))?;
+    let requested_revision = serde_json::from_str::<Value>(&definition_json).ok().and_then(|value| value.get("revision").and_then(Value::as_i64)).filter(|revision| *revision > 0);
+    let revision = match requested_revision {
+        Some(requested) if requested >= latest_revision => requested,
+        _ => latest_revision + 1,
+    };
     let revision_id = format!("{id}:revision:{revision}");
-    connection.execute("INSERT OR IGNORE INTO workflow_revisions(id, workflow_id, revision, definition_json, definition_hash) VALUES (?1, ?2, ?3, ?4, ?5)", params![revision_id, id, revision, definition_json, hash])?;
+    connection.execute("INSERT INTO workflow_revisions(id, workflow_id, revision, definition_json, definition_hash) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(workflow_id, revision) DO UPDATE SET definition_json=excluded.definition_json, definition_hash=excluded.definition_hash", params![revision_id, id, revision, definition_json, hash])?;
     connection.query_row("SELECT id, project_id, name, definition_json, updated_at FROM workflows WHERE id=?1", [id], |row| Ok(WorkflowRow { id: row.get(0)?, project_id: row.get(1)?, name: row.get(2)?, definition_json: row.get(3)?, updated_at: row.get(4)? }))
 }
 
@@ -595,7 +613,6 @@ pub fn apply_workflow_ai_operation(
     if operation_group.status != "applied" && operation_group.status != "rolled_back" {
         return Err(WorkflowAiStorageError::InvalidOperation("status_must_create_revision".to_string()));
     }
-
     let definition_json = redact_json_payload(definition_json)?;
     let commands_json = redact_json_payload(&operation_group.commands_json)?;
     let definition: Value = serde_json::from_str(&definition_json)
@@ -702,6 +719,20 @@ mod tests {
             relative_path: "exports/deck.pptx".to_string(),
             mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
         }]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removed_artifacts_are_not_recreated_from_persisted_events() {
+        let root = std::env::temp_dir().join(format!("coworkany-storage-artifact-remove-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("app.db");
+        create_run(&path, "run-remove", None, Some("local")).unwrap();
+        append_run_event(&path, "run-remove", 1, "artifact", r#"{"event":"artifact","artifact":{"id":"artifact-remove","relativePath":"exports/remove.txt","mimeType":"text/plain"}}"#).unwrap();
+
+        remove_artifact(&path, "artifact-remove").unwrap();
+
+        assert!(artifact_reconciliation_candidates(&path).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1009,6 +1040,30 @@ mod tests {
         assert!(columns.iter().any(|column| column == "provider"));
         assert!(columns.iter().any(|column| column == "provider_cost"));
         assert!(migrations_ready(&path).unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn upgrades_blob_workflow_definitions_to_text() {
+        let root = std::env::temp_dir().join(format!("coworkany-workflow-blob-migration-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("app.db");
+        initialize(&path).unwrap();
+        let connection = open(&path).unwrap();
+        let definition = br#"{\"version\":1,\"nodes\":[]}"#.to_vec();
+        connection.execute("INSERT INTO workflows(id, name, definition_json) VALUES (?1, ?2, ?3)", params!["workflow-blob", "Legacy workflow", definition.clone()]).unwrap();
+        connection.execute("INSERT INTO workflow_revisions(id, workflow_id, revision, definition_json, definition_hash) VALUES (?1, ?2, ?3, ?4, ?5)", params!["workflow-blob:revision:1", "workflow-blob", 1, definition, "legacy-hash"]).unwrap();
+        drop(connection);
+
+        let workflows = list_workflows(&path).unwrap();
+
+        assert_eq!(workflows.len(), 1);
+        assert_eq!(workflows[0].definition_json, r#"{\"version\":1,\"nodes\":[]}"#);
+        let connection = open(&path).unwrap();
+        for (table, column) in [("workflows", "definition_json"), ("workflow_revisions", "definition_json")] {
+            let sql = format!("SELECT typeof({column}) FROM {table}");
+            assert_eq!(connection.query_row(&sql, [], |row| row.get::<_, String>(0)).unwrap(), "text");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
