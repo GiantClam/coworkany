@@ -1,6 +1,7 @@
 """Fetch an approved, relocatable runtime archive; never package host installations."""
 import hashlib
 import os
+import posixpath
 from pathlib import Path
 import re
 import subprocess
@@ -16,7 +17,9 @@ def extract_runtime_archive(bundle, destination):
     members = []
     for member in bundle.getmembers():
         path = Path(member.name)
-        if path.is_absolute() or ".." in path.parts or not (member.isfile() or member.isdir()):
+        link_target = posixpath.normpath(posixpath.join(posixpath.dirname(member.name), member.linkname))
+        safe_link = member.issym() and not Path(member.linkname).is_absolute() and link_target not in {"..", "."} and not link_target.startswith("../")
+        if path.is_absolute() or ".." in path.parts or not (member.isfile() or member.isdir() or safe_link):
             raise ValueError(f"macos_runtime_archive_entry_unsafe:{member.name}")
         members.append(member)
     bundle.extractall(destination, members=members)
@@ -104,7 +107,8 @@ def prepare(url, expected_hash, destination, architecture="arm64"):
         # lipo interpret the binary path as an architecture name and always
         # fail with "unknown architecture specification".
         subprocess.run(["lipo", str(binary), "-verify_arch", architecture], check=True)
-        subprocess.run([str(binary), "--version"], check=True, timeout=60,
+        version_flag = "-version" if relative.startswith("media/") else "--version"
+        subprocess.run([str(binary), version_flag], check=True, timeout=60,
                        env={**os.environ, "OPENCODE_DISABLE_MODELS_FETCH": "true", "OPENCODE_DISABLE_AUTOUPDATE": "true"})
     return {key: str((destination / relative).resolve()) for key, relative in required.items()}
 

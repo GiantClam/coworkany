@@ -196,6 +196,7 @@ function pythonFrameworkDependency(value) {
 
 async function repairPythonMachODependencies() {
   const pythonRoot = join(output, "python");
+  const topLevelPython = join(pythonRoot, "python3");
   const files = await listPythonMachOFiles(pythonRoot);
   const bundled = new Set(files);
   const changed = [];
@@ -203,6 +204,11 @@ async function repairPythonMachODependencies() {
     const { stdout } = await execFileAsync("/usr/bin/otool", ["-L", file], { encoding: "utf8" }).catch(() => ({ stdout: "" }));
     const dependencies = stdout.split("\n").map(line => line.trim().split(" (", 1)[0]);
     for (const dependency of dependencies) {
+      if (file === topLevelPython && dependency === "@loader_path/../Python" && bundled.has(join(pythonRoot, "Python"))) {
+        await execFileAsync("/usr/bin/install_name_tool", ["-change", dependency, "@loader_path/Python", file]);
+        changed.push(file);
+        continue;
+      }
       const relativeTarget = pythonFrameworkDependency(dependency);
       if (!relativeTarget) continue;
       const target = join(pythonRoot, relativeTarget);
