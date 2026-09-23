@@ -442,7 +442,7 @@ function ExecutionParts({ message, locale, streaming, waiting = false, onToolApp
       }
       if (part.type === "dynamic-tool") {
         const toolStatus = part.state === "approval-requested" ? "waiting" : part.state === "output-available" ? "completed" : part.state === "output-error" ? "failed" : part.state === "output-denied" ? "denied" : "running";
-        return <Tool key={`tool:${part.toolCallId}`} defaultOpen={false} status={toolStatus}>
+        return <Tool key={`tool:${part.toolCallId}`} defaultOpen={part.state === "approval-requested"} status={toolStatus}>
           <ToolHeader type="dynamic-tool" toolName={part.toolName} toolCallId={part.toolCallId} state={part.state} locale={locale} />
           <ToolContent>
             <ToolInput input={part.input} locale={locale} />

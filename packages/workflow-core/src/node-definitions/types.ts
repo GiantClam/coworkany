@@ -1,5 +1,5 @@
 export const WORKFLOW_NODE_TYPES = [
-  "upload", "text_input", "file_create", "writer", "llm_generate", "agent_execute",
+  "upload", "text_input", "text_split", "file_create", "writer", "llm_generate", "agent_execute",
   "image_generate", "video_generate", "video_compose", "digital_human", "music_generate", "voice_synthesis", "voice_clone",
   "audio_generate", "ppt_generate", "knowledge_retrieve", "knowledge_write", "product_store",
   "video_process", "audio_process",

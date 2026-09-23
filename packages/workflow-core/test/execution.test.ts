@@ -118,6 +118,34 @@ test("workflow foreach executes its body with bounded concurrency and collects i
   assert.deepEqual(events.filter((event) => event.type === "node_succeeded" && event.payload.nodeKey === "agent").map((event) => event.payload.checkpointKey), ["agent:asset-1", "agent:asset-2", "agent:asset-3"]);
 });
 
+test("workflow foreach expands text segments and carries a shared reference image into the body", async () => {
+  const textDefinition: WorkflowDefinitionEnvelope = { schemaVersion: 2, revision: 1, definitionHash: "", nodes: [
+    { nodeKey: "script", type: "text_input", nodeVersion: 1, title: "Script", positionX: 0, positionY: 0, config: {} },
+    { nodeKey: "reference", type: "image_generate", nodeVersion: 1, title: "Reference", positionX: 0, positionY: 1, config: {} },
+    { nodeKey: "foreach", type: "foreach", nodeVersion: 1, title: "For Each", positionX: 1, positionY: 0, config: { inputPortId: "text", collectNodeKey: "collect", concurrency: 1, maxIterations: 10, failurePolicy: "fail_fast" } },
+    { nodeKey: "video", type: "video_generate", nodeVersion: 1, title: "Video", positionX: 2, positionY: 0, config: {} },
+    { nodeKey: "collect", type: "collect", nodeVersion: 1, title: "Collect", positionX: 3, positionY: 0, config: {} },
+  ], edges: [
+    { edgeKey: "script-foreach", sourceNodeKey: "script", sourcePortId: "text", targetNodeKey: "foreach", targetPortId: "items.text" },
+    { edgeKey: "reference-foreach", sourceNodeKey: "reference", sourcePortId: "image", targetNodeKey: "foreach", targetPortId: "referenceImage" },
+    { edgeKey: "foreach-video-text", sourceNodeKey: "foreach", sourcePortId: "item.text", targetNodeKey: "video", targetPortId: "text" },
+    { edgeKey: "foreach-video-image", sourceNodeKey: "foreach", sourcePortId: "item.image", targetNodeKey: "video", targetPortId: "referenceImages" },
+    { edgeKey: "video-collect", sourceNodeKey: "video", sourcePortId: "video", targetNodeKey: "collect", targetPortId: "items.video" },
+  ] };
+  const seen: Array<Record<string, unknown>> = [];
+  const result = await executeWorkflow(textDefinition, { runId: "text-foreach-run", ports: { capability: { execute: async ({ executorId, inputs }) => {
+    if (executorId === "text_input") return { text: "ignored" };
+    if (executorId === "image_generate") return { image: "creator-reference" };
+    if (executorId === "foreach") return { texts: ["hook", "demo", "cta"] };
+    if (executorId === "video_generate") { seen.push(inputs); return { video: `video-${String(inputs.text)}` }; }
+    return executorId === "collect" ? { videos: inputs["items.video"] } : inputs;
+  } } } });
+  assert.equal(result.status, "succeeded");
+  assert.deepEqual(seen.map((inputs) => inputs.text), ["hook", "demo", "cta"]);
+  assert.deepEqual(seen.map((inputs) => inputs.referenceImages), ["creator-reference", "creator-reference", "creator-reference"]);
+  assert.deepEqual(result.outputs.collect?.videos, ["video-hook", "video-demo", "video-cta"]);
+});
+
 test("workflow retries a failed node through the capability port", async () => {
   let writerAttempts = 0;
   const result = await executeWorkflow(definition, { runId: "retry-run", retryLimit: 1, ports: { capability: { execute: async ({ executorId }) => {

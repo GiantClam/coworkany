@@ -376,6 +376,9 @@ importers:
 
   packages/workbench-client:
     dependencies:
+      '@coworkany/workflow-core':
+        specifier: workspace:*
+        version: link:../workflow-core
       ai:
         specifier: ^7.0.48
         version: 7.0.48(zod@3.25.76)

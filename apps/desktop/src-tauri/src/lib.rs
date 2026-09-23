@@ -1500,6 +1500,29 @@ fn list_recoverable_attempts(app: tauri::AppHandle) -> Result<Vec<storage::RunAt
 #[derive(Debug, Deserialize)]
 struct WorkflowInput { id: String, name: String, project_id: Option<String>, definition_json: String }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkflowAiOperationGroupInput {
+    id: String,
+    conversation_id: String,
+    workflow_id: String,
+    base_revision: i64,
+    result_revision: Option<i64>,
+    commands: serde_json::Value,
+    status: String,
+    summary: String,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyWorkflowAiOperationInput {
+    workflow_id: String,
+    expected_revision: i64,
+    definition_json: String,
+    operation_group: WorkflowAiOperationGroupInput,
+}
+
 #[tauri::command]
 fn save_workflow(app: tauri::AppHandle, input: WorkflowInput) -> Result<storage::WorkflowRow, String> {
     if serde_json::from_str::<serde_json::Value>(&input.definition_json).is_err() { return Err("workflow_definition_invalid_json".to_string()); }
@@ -1509,6 +1532,35 @@ fn save_workflow(app: tauri::AppHandle, input: WorkflowInput) -> Result<storage:
 #[tauri::command]
 fn list_workflows(app: tauri::AppHandle) -> Result<Vec<storage::WorkflowRow>, String> {
     storage::list_workflows(&database_path(&app)?).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn apply_workflow_ai_operation(app: tauri::AppHandle, input: ApplyWorkflowAiOperationInput) -> Result<storage::WorkflowRow, String> {
+    if !input.operation_group.commands.is_array() { return Err("workflow_ai_invalid_operation:commands_must_be_array".to_string()); }
+    let commands_json = serde_json::to_string(&input.operation_group.commands).map_err(|error| format!("workflow_ai_invalid_operation:commands_json:{error}"))?;
+    let operation_group = storage::WorkflowAiOperationGroupWrite {
+        id: input.operation_group.id,
+        conversation_id: input.operation_group.conversation_id,
+        workflow_id: input.operation_group.workflow_id,
+        base_revision: input.operation_group.base_revision,
+        result_revision: input.operation_group.result_revision,
+        commands_json,
+        status: input.operation_group.status,
+        summary: input.operation_group.summary,
+        created_at: input.operation_group.created_at,
+    };
+    storage::apply_workflow_ai_operation(
+        &database_path(&app)?,
+        &input.workflow_id,
+        input.expected_revision,
+        &input.definition_json,
+        &operation_group,
+    ).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_workflow_ai_operation_groups(app: tauri::AppHandle, workflow_id: String) -> Result<Vec<storage::WorkflowAiOperationGroupRow>, String> {
+    storage::list_workflow_ai_operation_groups(&database_path(&app)?, &workflow_id).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1613,7 +1665,7 @@ pub fn run() {
             *state.0.lock().map_err(|_| "startup_state_poisoned")? = Some(StartupResults { local_state, runtime });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
+        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, apply_workflow_ai_operation, list_workflow_ai_operation_groups, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
     let app = builder.build(tauri::generate_context!()).expect("error while building CoworkAny");
     drop(startup_progress);
     app.run(|app, event| {

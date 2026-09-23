@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OpenFlags, Result};
+use rusqlite::{params, Connection, OpenFlags, Result, TransactionBehavior};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::Digest;
@@ -24,9 +24,11 @@ CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, conversation_id TEXT N
 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, conversation_id TEXT REFERENCES conversations(id), status TEXT NOT NULL, model TEXT, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT);
 CREATE TABLE IF NOT EXISTS run_events (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id), sequence INTEGER NOT NULL, event_type TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(run_id, sequence));
 CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), relative_path TEXT NOT NULL, mime_type TEXT NOT NULL, byte_length INTEGER NOT NULL, sha256 TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS deleted_artifacts (id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS usage_records (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT REFERENCES runs(id), provider TEXT, model TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER, provider_cost REAL, estimated_cost REAL, idempotency_key TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS workflows (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), name TEXT NOT NULL, definition_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS workflow_revisions (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflows(id), revision INTEGER NOT NULL, definition_json TEXT NOT NULL, definition_hash TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(workflow_id, revision));
+CREATE TABLE IF NOT EXISTS workflow_ai_operation_groups (workflow_id TEXT NOT NULL REFERENCES workflows(id), id TEXT NOT NULL, conversation_id TEXT NOT NULL, base_revision INTEGER NOT NULL, result_revision INTEGER, commands_json TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(workflow_id, id));
 CREATE TABLE IF NOT EXISTS run_nodes (run_id TEXT NOT NULL REFERENCES runs(id), node_key TEXT NOT NULL, status TEXT NOT NULL, output_json TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, node_key));
 CREATE TABLE IF NOT EXISTS run_attempts (idempotency_key TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), node_key TEXT NOT NULL, provider TEXT, provider_task_id TEXT, status TEXT NOT NULL, payload_json TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS run_checkpoints (run_id TEXT NOT NULL REFERENCES runs(id), checkpoint_key TEXT NOT NULL, sequence INTEGER NOT NULL, output_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, checkpoint_key));
@@ -71,6 +73,14 @@ fn initialize_schema(path: &Path) -> Result<()> {
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (6)", [])?;
     let _ = connection.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT", []);
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (7)", [])?;
+    // SQLite preserves the storage class of values written by older clients,
+    // even when the column is declared TEXT. Normalize historical workflow
+    // definitions so rusqlite can safely deserialize them as String values.
+    connection.execute("UPDATE workflows SET definition_json=CAST(definition_json AS TEXT) WHERE typeof(definition_json)='blob'", [])?;
+    connection.execute("UPDATE workflow_revisions SET definition_json=CAST(definition_json AS TEXT) WHERE typeof(definition_json)='blob'", [])?;
+    connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (8)", [])?;
+    connection.execute("CREATE TABLE IF NOT EXISTS workflow_ai_operation_groups (workflow_id TEXT NOT NULL REFERENCES workflows(id), id TEXT NOT NULL, conversation_id TEXT NOT NULL, base_revision INTEGER NOT NULL, result_revision INTEGER, commands_json TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(workflow_id, id))", [])?;
+    connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (9)", [])?;
     Ok(())
 }
 
@@ -276,6 +286,55 @@ pub struct RunDetail { pub run: RunRow, pub nodes: Vec<RunNodeRow>, pub events: 
 pub struct WorkflowRow { pub id: String, pub project_id: Option<String>, pub name: String, pub definition_json: String, pub updated_at: String }
 
 #[derive(Debug, Serialize)]
+pub struct WorkflowAiOperationGroupRow {
+    pub id: String,
+    pub conversation_id: String,
+    pub workflow_id: String,
+    pub base_revision: i64,
+    pub result_revision: Option<i64>,
+    pub commands_json: String,
+    pub status: String,
+    pub summary: String,
+    pub created_at: String,
+}
+
+#[derive(Debug)]
+pub struct WorkflowAiOperationGroupWrite {
+    pub id: String,
+    pub conversation_id: String,
+    pub workflow_id: String,
+    pub base_revision: i64,
+    pub result_revision: Option<i64>,
+    pub commands_json: String,
+    pub status: String,
+    pub summary: String,
+    pub created_at: String,
+}
+
+#[derive(Debug)]
+pub enum WorkflowAiStorageError {
+    Database(rusqlite::Error),
+    InvalidOperation(String),
+    RevisionConflict { expected: i64, actual: i64 },
+}
+
+impl std::fmt::Display for WorkflowAiStorageError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Database(error) => write!(formatter, "{error}"),
+            Self::InvalidOperation(message) => write!(formatter, "workflow_ai_invalid_operation:{message}"),
+            Self::RevisionConflict { expected, actual } => write!(formatter, "workflow_ai_revision_conflict:expected={expected}:actual={actual}"),
+        }
+    }
+}
+
+impl std::error::Error for WorkflowAiStorageError {}
+
+impl From<rusqlite::Error> for WorkflowAiStorageError {
+    fn from(error: rusqlite::Error) -> Self { Self::Database(error) }
+}
+
+#[derive(Debug, Serialize)]
 pub struct UsageSummary { pub runs: i64, pub input_tokens: i64, pub output_tokens: i64, pub provider_cost: Option<f64>, pub estimated_cost: Option<f64>, pub artifacts: i64 }
 
 pub fn create_conversation(path: &Path, id: &str, title: &str, project_id: Option<&str>, agent_id: Option<&str>) -> Result<ConversationRow> {
@@ -326,6 +385,7 @@ pub fn append_run_event(path: &Path, run_id: &str, sequence: i64, event_type: &s
 pub fn register_artifact(path: &Path, id: &str, project_id: Option<&str>, metadata: &crate::artifacts::ArtifactMetadata) -> Result<()> {
     initialize(path)?;
     let connection = open(path)?;
+    connection.execute("DELETE FROM deleted_artifacts WHERE id=?1", [id])?;
     connection.execute("INSERT INTO artifacts(id, project_id, relative_path, mime_type, byte_length, sha256) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(id) DO UPDATE SET relative_path=excluded.relative_path, mime_type=excluded.mime_type, byte_length=excluded.byte_length, sha256=excluded.sha256", params![id, project_id, metadata.relative_path, metadata.mime_type, metadata.byte_length as i64, metadata.sha256])?;
     Ok(())
 }
@@ -429,6 +489,8 @@ pub fn artifact_reconciliation_candidates(path: &Path) -> Result<Vec<ArtifactRec
         let mime_type = artifact.get("mimeType").and_then(Value::as_str).filter(|value| !value.trim().is_empty()).unwrap_or("application/octet-stream");
         let id = artifact.get("id").and_then(Value::as_str).filter(|value| !value.trim().is_empty()).map(str::to_owned).unwrap_or_else(|| format!("{run_id}:{relative_path}"));
         if existing_ids.contains(&id) || candidates.iter().any(|candidate: &ArtifactReconciliationCandidate| candidate.id == id) { continue; }
+        let deleted: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM deleted_artifacts WHERE id=?1)", [&id], |row| row.get(0))?;
+        if deleted { continue; }
         candidates.push(ArtifactReconciliationCandidate { id, relative_path: relative_path.to_owned(), mime_type: mime_type.to_owned() });
     }
     Ok(candidates)
@@ -436,8 +498,11 @@ pub fn artifact_reconciliation_candidates(path: &Path) -> Result<Vec<ArtifactRec
 
 pub fn remove_artifact(path: &Path, artifact_id: &str) -> Result<()> {
     initialize(path)?;
-    let connection = open(path)?;
-    connection.execute("DELETE FROM artifacts WHERE id=?1", [artifact_id])?;
+    let mut connection = open(path)?;
+    let transaction = connection.transaction()?;
+    transaction.execute("DELETE FROM artifacts WHERE id=?1", [artifact_id])?;
+    transaction.execute("INSERT OR IGNORE INTO deleted_artifacts(id) VALUES (?1)", [artifact_id])?;
+    transaction.commit()?;
     Ok(())
 }
 
@@ -512,9 +577,14 @@ pub fn save_workflow(path: &Path, id: &str, name: &str, project_id: Option<&str>
     let definition_json = redact_json_payload(definition_json)?;
     let hash = format!("{:x}", sha2::Sha256::digest(definition_json.as_bytes()));
     connection.execute("INSERT INTO workflows(id, project_id, name, definition_json) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, name=excluded.name, definition_json=excluded.definition_json, updated_at=CURRENT_TIMESTAMP", params![id, project_id, name, definition_json])?;
-    let revision: i64 = connection.query_row("SELECT COALESCE(MAX(revision), 0) + 1 FROM workflow_revisions WHERE workflow_id=?1", [id], |row| row.get(0))?;
+    let latest_revision: i64 = connection.query_row("SELECT COALESCE(MAX(revision), 0) FROM workflow_revisions WHERE workflow_id=?1", [id], |row| row.get(0))?;
+    let requested_revision = serde_json::from_str::<Value>(&definition_json).ok().and_then(|value| value.get("revision").and_then(Value::as_i64)).filter(|revision| *revision > 0);
+    let revision = match requested_revision {
+        Some(requested) if requested >= latest_revision => requested,
+        _ => latest_revision + 1,
+    };
     let revision_id = format!("{id}:revision:{revision}");
-    connection.execute("INSERT OR IGNORE INTO workflow_revisions(id, workflow_id, revision, definition_json, definition_hash) VALUES (?1, ?2, ?3, ?4, ?5)", params![revision_id, id, revision, definition_json, hash])?;
+    connection.execute("INSERT INTO workflow_revisions(id, workflow_id, revision, definition_json, definition_hash) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(workflow_id, revision) DO UPDATE SET definition_json=excluded.definition_json, definition_hash=excluded.definition_hash", params![revision_id, id, revision, definition_json, hash])?;
     connection.query_row("SELECT id, project_id, name, definition_json, updated_at FROM workflows WHERE id=?1", [id], |row| Ok(WorkflowRow { id: row.get(0)?, project_id: row.get(1)?, name: row.get(2)?, definition_json: row.get(3)?, updated_at: row.get(4)? }))
 }
 
@@ -526,10 +596,91 @@ pub fn list_workflows(path: &Path) -> Result<Vec<WorkflowRow>> {
     Ok(rows)
 }
 
+pub fn apply_workflow_ai_operation(
+    path: &Path,
+    workflow_id: &str,
+    expected_revision: i64,
+    definition_json: &str,
+    operation_group: &WorkflowAiOperationGroupWrite,
+) -> std::result::Result<WorkflowRow, WorkflowAiStorageError> {
+    initialize(path)?;
+    if operation_group.workflow_id != workflow_id {
+        return Err(WorkflowAiStorageError::InvalidOperation("workflow_id_mismatch".to_string()));
+    }
+    if operation_group.base_revision != expected_revision {
+        return Err(WorkflowAiStorageError::InvalidOperation("base_revision_mismatch".to_string()));
+    }
+    if operation_group.status != "applied" && operation_group.status != "rolled_back" {
+        return Err(WorkflowAiStorageError::InvalidOperation("status_must_create_revision".to_string()));
+    }
+    let definition_json = redact_json_payload(definition_json)?;
+    let commands_json = redact_json_payload(&operation_group.commands_json)?;
+    let definition: Value = serde_json::from_str(&definition_json)
+        .map_err(|error| WorkflowAiStorageError::InvalidOperation(format!("definition_json:{error}")))?;
+    let mut connection = open(path)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let actual_revision: i64 = transaction.query_row(
+        "SELECT COALESCE(MAX(revisions.revision), 0) FROM workflows LEFT JOIN workflow_revisions revisions ON revisions.workflow_id=workflows.id WHERE workflows.id=?1 GROUP BY workflows.id",
+        [workflow_id],
+        |row| row.get(0),
+    )?;
+    if actual_revision != expected_revision {
+        return Err(WorkflowAiStorageError::RevisionConflict { expected: expected_revision, actual: actual_revision });
+    }
+    let result_revision = actual_revision + 1;
+    if operation_group.result_revision != Some(result_revision) {
+        return Err(WorkflowAiStorageError::InvalidOperation("result_revision_mismatch".to_string()));
+    }
+    if definition.get("revision").and_then(Value::as_i64) != Some(result_revision) {
+        return Err(WorkflowAiStorageError::InvalidOperation("definition_revision_mismatch".to_string()));
+    }
+
+    let definition_hash = format!("{:x}", sha2::Sha256::digest(definition_json.as_bytes()));
+    let revision_id = format!("{workflow_id}:revision:{result_revision}");
+    transaction.execute(
+        "UPDATE workflows SET definition_json=?2, updated_at=CURRENT_TIMESTAMP WHERE id=?1",
+        params![workflow_id, definition_json],
+    )?;
+    transaction.execute(
+        "INSERT INTO workflow_revisions(id, workflow_id, revision, definition_json, definition_hash) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![revision_id, workflow_id, result_revision, definition_json, definition_hash],
+    )?;
+    transaction.execute(
+        "INSERT INTO workflow_ai_operation_groups(workflow_id, id, conversation_id, base_revision, result_revision, commands_json, status, summary, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![workflow_id, operation_group.id, operation_group.conversation_id, operation_group.base_revision, operation_group.result_revision, commands_json, operation_group.status, operation_group.summary, operation_group.created_at],
+    )?;
+    let workflow = transaction.query_row(
+        "SELECT id, project_id, name, definition_json, updated_at FROM workflows WHERE id=?1",
+        [workflow_id],
+        |row| Ok(WorkflowRow { id: row.get(0)?, project_id: row.get(1)?, name: row.get(2)?, definition_json: row.get(3)?, updated_at: row.get(4)? }),
+    )?;
+    transaction.commit()?;
+    Ok(workflow)
+}
+
+pub fn list_workflow_ai_operation_groups(path: &Path, workflow_id: &str) -> Result<Vec<WorkflowAiOperationGroupRow>> {
+    initialize(path)?;
+    let connection = open(path)?;
+    let mut statement = connection.prepare("SELECT id, conversation_id, workflow_id, base_revision, result_revision, commands_json, status, summary, created_at FROM workflow_ai_operation_groups WHERE workflow_id=?1 ORDER BY result_revision ASC, created_at ASC, id ASC")?;
+    let rows = statement.query_map([workflow_id], |row| Ok(WorkflowAiOperationGroupRow {
+        id: row.get(0)?,
+        conversation_id: row.get(1)?,
+        workflow_id: row.get(2)?,
+        base_revision: row.get(3)?,
+        result_revision: row.get(4)?,
+        commands_json: row.get(5)?,
+        status: row.get(6)?,
+        summary: row.get(7)?,
+        created_at: row.get(8)?,
+    }))?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 pub fn remove_workflow(path: &Path, workflow_id: &str) -> Result<()> {
     initialize(path)?;
     let mut connection = open(path)?;
     let transaction = connection.transaction()?;
+    transaction.execute("DELETE FROM workflow_ai_operation_groups WHERE workflow_id=?1", [workflow_id])?;
     transaction.execute("DELETE FROM workflow_revisions WHERE workflow_id=?1", [workflow_id])?;
     transaction.execute("DELETE FROM workflows WHERE id=?1", [workflow_id])?;
     transaction.commit()?;
@@ -568,6 +719,20 @@ mod tests {
             relative_path: "exports/deck.pptx".to_string(),
             mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
         }]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removed_artifacts_are_not_recreated_from_persisted_events() {
+        let root = std::env::temp_dir().join(format!("coworkany-storage-artifact-remove-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("app.db");
+        create_run(&path, "run-remove", None, Some("local")).unwrap();
+        append_run_event(&path, "run-remove", 1, "artifact", r#"{"event":"artifact","artifact":{"id":"artifact-remove","relativePath":"exports/remove.txt","mimeType":"text/plain"}}"#).unwrap();
+
+        remove_artifact(&path, "artifact-remove").unwrap();
+
+        assert!(artifact_reconciliation_candidates(&path).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -764,19 +929,99 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    fn workflow_ai_group(workflow_id: &str, id: &str, base_revision: i64, result_revision: i64, status: &str) -> WorkflowAiOperationGroupWrite {
+        WorkflowAiOperationGroupWrite {
+            id: id.to_string(),
+            conversation_id: "conversation-ai".to_string(),
+            workflow_id: workflow_id.to_string(),
+            base_revision,
+            result_revision: Some(result_revision),
+            commands_json: r#"[{"type":"update_node","nodeKey":"writer","patch":{"title":"Updated"}}]"#.to_string(),
+            status: status.to_string(),
+            summary: "Updated the writer node".to_string(),
+            created_at: "2026-09-21T00:00:00Z".to_string(),
+        }
+    }
+
     #[test]
-    fn removing_workflow_also_removes_its_revisions() {
+    fn workflow_ai_operation_creates_one_revision_and_one_group_atomically() {
+        let root = std::env::temp_dir().join(format!("coworkany-workflow-ai-apply-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("app.db");
+        save_workflow(&path, "wf-ai", "AI workflow", None, r#"{"schemaVersion":2,"revision":1,"definitionHash":"initial","nodes":[],"edges":[]}"#).unwrap();
+        let group = workflow_ai_group("wf-ai", "group-1", 1, 2, "applied");
+
+        let workflow = apply_workflow_ai_operation(
+            &path,
+            "wf-ai",
+            1,
+            r#"{"schemaVersion":2,"revision":2,"definitionHash":"next","nodes":[],"edges":[]}"#,
+            &group,
+        ).unwrap();
+
+        assert!(workflow.definition_json.contains(r#""revision":2"#));
+        let connection = open(&path).unwrap();
+        let revisions: i64 = connection.query_row("SELECT COUNT(*) FROM workflow_revisions WHERE workflow_id='wf-ai'", [], |row| row.get(0)).unwrap();
+        let groups: i64 = connection.query_row("SELECT COUNT(*) FROM workflow_ai_operation_groups WHERE workflow_id='wf-ai'", [], |row| row.get(0)).unwrap();
+        assert_eq!((revisions, groups), (2, 1));
+        assert_eq!(list_workflow_ai_operation_groups(&path, "wf-ai").unwrap()[0].id, "group-1");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn workflow_ai_operation_rejects_a_stale_revision_without_overwriting_definition() {
+        let root = std::env::temp_dir().join(format!("coworkany-workflow-ai-conflict-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("app.db");
+        save_workflow(&path, "wf-ai-conflict", "AI workflow", None, r#"{"schemaVersion":2,"revision":1,"definitionHash":"initial","nodes":[],"edges":[]}"#).unwrap();
+        let applied = workflow_ai_group("wf-ai-conflict", "group-applied", 1, 2, "applied");
+        apply_workflow_ai_operation(&path, "wf-ai-conflict", 1, r#"{"schemaVersion":2,"revision":2,"definitionHash":"applied","nodes":[],"edges":[]}"#, &applied).unwrap();
+        let stale = workflow_ai_group("wf-ai-conflict", "group-stale", 1, 2, "applied");
+
+        let error = apply_workflow_ai_operation(&path, "wf-ai-conflict", 1, r#"{"schemaVersion":2,"revision":2,"definitionHash":"stale","nodes":[],"edges":[]}"#, &stale).unwrap_err();
+
+        assert_eq!(error.to_string(), "workflow_ai_revision_conflict:expected=1:actual=2");
+        let stored = list_workflows(&path).unwrap().into_iter().find(|workflow| workflow.id == "wf-ai-conflict").unwrap();
+        assert!(stored.definition_json.contains("applied"));
+        assert!(!stored.definition_json.contains("stale"));
+        assert_eq!(list_workflow_ai_operation_groups(&path, "wf-ai-conflict").unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn workflow_ai_operation_persists_rolled_back_groups() {
+        let root = std::env::temp_dir().join(format!("coworkany-workflow-ai-rollback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("app.db");
+        save_workflow(&path, "wf-ai-rollback", "AI workflow", None, r#"{"schemaVersion":2,"revision":1,"definitionHash":"initial","nodes":[],"edges":[]}"#).unwrap();
+        let group = workflow_ai_group("wf-ai-rollback", "group-rollback", 1, 2, "rolled_back");
+
+        apply_workflow_ai_operation(&path, "wf-ai-rollback", 1, r#"{"schemaVersion":2,"revision":2,"definitionHash":"rollback","nodes":[],"edges":[]}"#, &group).unwrap();
+
+        let groups = list_workflow_ai_operation_groups(&path, "wf-ai-rollback").unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].status, "rolled_back");
+        assert_eq!(groups[0].result_revision, Some(2));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removing_workflow_also_removes_its_revisions_and_ai_operation_groups() {
         let root = std::env::temp_dir().join(format!("coworkany-workflow-remove-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("app.db");
         save_workflow(&path, "wf-remove", "待删除工作流", None, r#"{"version":1,"nodes":[]}"#).unwrap();
         save_workflow(&path, "wf-remove", "待删除工作流", None, r#"{"version":1,"nodes":[{"type":"text_input"}]}"#).unwrap();
+        let group = workflow_ai_group("wf-remove", "group-remove", 2, 3, "applied");
+        apply_workflow_ai_operation(&path, "wf-remove", 2, r#"{"schemaVersion":2,"revision":3,"definitionHash":"remove","nodes":[],"edges":[]}"#, &group).unwrap();
 
         remove_workflow(&path, "wf-remove").unwrap();
 
         assert!(list_workflows(&path).unwrap().is_empty());
         let revisions: i64 = open(&path).unwrap().query_row("SELECT COUNT(*) FROM workflow_revisions WHERE workflow_id='wf-remove'", [], |row| row.get(0)).unwrap();
         assert_eq!(revisions, 0);
+        let groups: i64 = open(&path).unwrap().query_row("SELECT COUNT(*) FROM workflow_ai_operation_groups WHERE workflow_id='wf-remove'", [], |row| row.get(0)).unwrap();
+        assert_eq!(groups, 0);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -795,6 +1040,30 @@ mod tests {
         assert!(columns.iter().any(|column| column == "provider"));
         assert!(columns.iter().any(|column| column == "provider_cost"));
         assert!(migrations_ready(&path).unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn upgrades_blob_workflow_definitions_to_text() {
+        let root = std::env::temp_dir().join(format!("coworkany-workflow-blob-migration-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("app.db");
+        initialize(&path).unwrap();
+        let connection = open(&path).unwrap();
+        let definition = br#"{\"version\":1,\"nodes\":[]}"#.to_vec();
+        connection.execute("INSERT INTO workflows(id, name, definition_json) VALUES (?1, ?2, ?3)", params!["workflow-blob", "Legacy workflow", definition.clone()]).unwrap();
+        connection.execute("INSERT INTO workflow_revisions(id, workflow_id, revision, definition_json, definition_hash) VALUES (?1, ?2, ?3, ?4, ?5)", params!["workflow-blob:revision:1", "workflow-blob", 1, definition, "legacy-hash"]).unwrap();
+        drop(connection);
+
+        let workflows = list_workflows(&path).unwrap();
+
+        assert_eq!(workflows.len(), 1);
+        assert_eq!(workflows[0].definition_json, r#"{\"version\":1,\"nodes\":[]}"#);
+        let connection = open(&path).unwrap();
+        for (table, column) in [("workflows", "definition_json"), ("workflow_revisions", "definition_json")] {
+            let sql = format!("SELECT typeof({column}) FROM {table}");
+            assert_eq!(connection.query_row(&sql, [], |row| row.get::<_, String>(0)).unwrap(), "text");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

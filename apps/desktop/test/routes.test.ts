@@ -940,6 +940,10 @@ test("desktop asset and task routes mirror the cloud library interaction contrac
   assert.match(appSource, /asset-library-card-preview/);
   assert.match(appSource, /asset-library-card-action-danger/);
   assert.match(appSource, /onArtifactRemove\(item\.id\)/);
+  assert.match(appSource, /confirmingRemove/);
+  assert.match(appSource, /removeArtifact = async/);
+  assert.match(appSource, /role=\"alert\">\{actionError\}/);
+  assert.match(appSource, /setArtifactCount\(\(current\) => Math\.max\(0, current - 1\)\)/);
   assert.match(styleSource, /\.asset-library-grid/);
   assert.match(styleSource, /\.asset-library-card-action-danger/);
   assert.match(styleSource, /\.task-center-table-head/);
@@ -1230,6 +1234,15 @@ test("desktop workflow builder keeps the Canvas full-screen with movable side pa
   assert.match(desktopStyles, /\.workflow-floating-panel-tab[^\n]*cursor: grab/);
   assert.match(desktopStyles, /\.workflow-builder-toolbar p \{ display: none; \}/);
   assert.match(desktopStyles, /\.workflow-builder-toolbar \{[^}]*padding: 8px 16px 7px/);
+  assert.match(modernSurface, /className="workflow-builder-title"/);
+  assert.match(modernSurface, /<ArrowLeft size=\{16\}/);
+  assert.match(modernSurface, /props\.workflowMetadata\.title\.trim\(\) \|\| route\.label/);
+  assert.doesNotMatch(modernSurface, /WORKFLOW BUILDER/);
+  assert.doesNotMatch(modernSurface, /route\.description/);
+  assert.match(desktopStyles, /\.workflow-builder-title \{[^}]*flex: 1 1 auto;[^}]*overflow: hidden/);
+  assert.match(desktopStyles, /\.workflow-builder-toolbar \.workflow-header-actions \{ flex: 0 0 auto; \}/);
+  assert.match(desktopStyles, /\.workflow-builder-toolbar \.ghost, \.workflow-builder-toolbar \.primary, \.workflow-builder-toolbar \.workflow-import-button \{[^}]*height: 30px/);
+  assert.match(desktopStyles, /\.workflow-builder-toolbar \.ghost, \.workflow-builder-toolbar \.primary, \.workflow-builder-toolbar \.workflow-import-button \{[^}]*white-space: nowrap/);
   assert.match(desktopStyles, /\.workflow-canvas-shell > \.ai-elements-workflow-canvas \{ position: absolute; inset: 0; min-height: 0/);
   assert.doesNotMatch(appSource, /return <div className="workflow-workspace">/);
 });

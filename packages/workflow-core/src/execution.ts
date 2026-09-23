@@ -125,7 +125,8 @@ async function executeForeach(
   sequence: { value: number },
   recovery?: WorkflowRecoveryAttempt,
 ): Promise<ForeachExecution> {
-  const inputKind = String(config.inputPortId ?? "image").includes("asset") ? "asset" : "image";
+  const inputPortId = String(config.inputPortId ?? "image");
+  const inputKind = inputPortId.includes("asset") ? "asset" : inputPortId.includes("text") ? "text" : "image";
   const resolved = await executeWithRetry("foreach", step.nodeKey, config, inputs, options, undefined, recovery);
   const items = extractIterationItems(resolved, inputs, inputKind);
   const collectNode = definition.nodes.find((node) => node.nodeKey === step.collectNodeKey && node.type === "collect");
@@ -138,6 +139,8 @@ async function executeForeach(
       ...completed,
       [step.nodeKey]: { [inputKind]: item, [`item.${inputKind}`]: item },
     };
+    const sharedImage = inputs.referenceImage ?? inputs.image;
+    if (sharedImage !== undefined) localOutputs[step.nodeKey]!["item.image"] = sharedImage;
     try {
       for (const node of bodySteps) {
         throwIfCancelled(options.signal);
@@ -174,7 +177,7 @@ async function executeForeach(
   return { output, consumedNodeKeys: [collectNode.nodeKey, ...step.bodyNodeKeys] };
 }
 
-function extractIterationItems(resolved: Record<string, unknown>, inputs: Record<string, unknown>, inputKind: "asset" | "image") {
+function extractIterationItems(resolved: Record<string, unknown>, inputs: Record<string, unknown>, inputKind: "asset" | "image" | "text") {
   const candidates = [resolved[`${inputKind}s`], resolved[inputKind], resolved[`items.${inputKind}`], inputs[`items.${inputKind}`], inputs[`${inputKind}s`], inputs[inputKind]];
   return (candidates.find(Array.isArray) ?? []) as unknown[];
 }

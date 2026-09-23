@@ -44,7 +44,7 @@ test("registry exposes local video and audio processing nodes", () => {
 
 test("v1 registry matches the approved capability boundary", () => {
   const types = new Set(workflowNodeRegistry.list().map((definition) => definition.type));
-  for (const required of ["upload", "text_input", "file_create", "writer", "llm_generate", "agent_execute", "image_generate", "video_generate", "video_compose", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate", "video_process", "audio_process", "ppt_generate", "knowledge_retrieve", "knowledge_write", "product_store", "foreach", "collect", "output"]) assert.equal(types.has(required as never), true, required);
+  for (const required of ["upload", "text_input", "text_split", "file_create", "writer", "llm_generate", "agent_execute", "image_generate", "video_generate", "video_compose", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate", "video_process", "audio_process", "ppt_generate", "knowledge_retrieve", "knowledge_write", "product_store", "foreach", "collect", "output"]) assert.equal(types.has(required as never), true, required);
   for (const excluded of ["lead_hunter", "publish_as_agent", "workflow_marketplace", "enterprise_preset"]) assert.equal(types.has(excluded as never), false, excluded);
 });
 

@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/pro
 import { basename, dirname, isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import { buildOpenCodeCommand, createOpenCodeEventParser, type OpenCodeRuntimeEvent } from "@coworkany/runtime-contracts/opencode";
 import { createBailianImageAdapter, createBailianVideoAdapter, createHttpMediaAdapter, createMiniMaxAudioAdapter, createMiniMaxVideoAdapter, createOpenAICompatibleImageAdapter, createRunningHubAdapter, createRunningHubAiAppAdapter, createRunningHubWorkflowAdapter, downloadMediaOutputs, IMAGE_GENERATION_REQUEST_TIMEOUT_MS, listMiniMaxVoices, runMediaJob, uploadRunningHubMediaAsset, type MediaProviderId, type MediaProviderAdapter } from "@coworkany/media-runtime";
-import { executeWorkflow, migrateWorkflowDefinitionToCurrent, type WorkflowArtifactPort, type WorkflowCapabilityPort, type WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
+import { executeWorkflow, migrateWorkflowDefinitionToCurrent, splitWorkflowText as splitText, type WorkflowArtifactPort, type WorkflowCapabilityPort, type WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
 import { OpenCodeServeClient } from "./opencode-serve";
 import { createRpcReader, writeRpcResponse, writeRpcServiceRequest } from "./rpc";
 import { createDesktopWorkflowPorts } from "./workflow-ports";
@@ -20,7 +20,7 @@ import { detectMediaStreams, runFfmpegMediaProcess } from "./media-process";
 import * as chatAttachmentExtractor from "../../../lib/chat-attachments/extract.ts";
 import { promptRequestsArtifact } from "../src/artifact-intent";
 
-type HostCommand = { readonly version: 1; readonly requestId: string; readonly type: "chat.run" | "workflow.run" | "run.cancel" | "run.emergency_stop" | "run.retry" | "media.resume" | "media.voices" | "provider.models" | "health" | "session.create" | "session.attach" | "session.prompt" | "permission.respond" | "question.list" | "question.reply" | "question.reject" | "attachment.extract" | "knowledge.index" | "knowledge.search"; readonly runId?: string; readonly sessionId?: string; readonly payload?: Record<string, unknown> };
+type HostCommand = { readonly version: 1; readonly requestId: string; readonly type: "chat.run" | "workflow.ai" | "workflow.run" | "run.cancel" | "run.emergency_stop" | "run.retry" | "media.resume" | "media.voices" | "provider.models" | "health" | "session.create" | "session.attach" | "session.prompt" | "permission.respond" | "question.list" | "question.reply" | "question.reject" | "attachment.extract" | "knowledge.index" | "knowledge.search"; readonly runId?: string; readonly sessionId?: string; readonly payload?: Record<string, unknown> };
 type ProviderConfig = { readonly id?: string; readonly source?: string; readonly model?: string; readonly baseUrl?: string; readonly apiKey?: string; readonly reasoningEffort?: string; readonly timeout?: number | false; readonly chunkTimeout?: number | false; readonly endpoint?: string; readonly queryEndpoint?: string; readonly workflowId?: string; readonly digitalHumanWorkflowId?: string; readonly videoEnhanceWorkflowId?: string; readonly workflows?: readonly RunningHubWorkflowRegistration[] };
 const active = new Map<string, ReturnType<typeof spawn>>();
 const workflowControllers = new Map<string, AbortController>();
@@ -703,6 +703,24 @@ async function runDirectTextCapability(command: HostCommand, executorId: string,
   return { text, executorId };
 }
 
+function splitWorkflowNodeText(config: Record<string, unknown>, inputs: Record<string, unknown>) {
+  const raw = Array.isArray(inputs.text)
+    ? inputs.text.filter((value): value is string => typeof value === "string").join("\n\n")
+    : typeof inputs.text === "string" ? inputs.text : "";
+  const separator = typeof config.separator === "string" && ["blank_line", "line", "heading", "custom", "regex"].includes(config.separator) ? config.separator as "blank_line" | "line" | "heading" | "custom" | "regex" : "blank_line";
+  const trim = config.trim !== false;
+  const delimiter = typeof config.delimiter === "string" ? config.delimiter : "";
+  const pattern = typeof config.pattern === "string" ? config.pattern : "";
+  let normalized: string[];
+  try {
+    normalized = splitText(raw, separator, delimiter, trim, pattern);
+  } catch (error) {
+    throw new Error(`text_split_invalid_regex:${error instanceof Error ? error.message : String(error)}`);
+  }
+  const index = Number.isInteger(config.segmentIndex) ? Number(config.segmentIndex) : 0;
+  return { text: normalized[index] ?? "", texts: normalized };
+}
+
 async function runRunningHubAudioTranscription(command: HostCommand, runId: string, nodeKey: string, config: Record<string, unknown>, inputs: Record<string, unknown>, workspacePath: string, signal?: AbortSignal, resumeProviderTaskId?: string) {
   const providerProfiles = readProviderMap(command.payload?.providers);
   const configuredProvider = command.payload?.provider && typeof command.payload.provider === "object" ? command.payload.provider as Record<string, unknown> : undefined;
@@ -1096,6 +1114,7 @@ async function runWorkflow(command: HostCommand) {
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
   const capability: WorkflowCapabilityPort = { execute: async ({ executorId, nodeKey, config, inputs }, signal) => {
       if (executorId === "text_input") return { text: typeof config.text === "string" ? config.text : "" };
+      if (executorId === "text_split") return splitWorkflowNodeText(config, inputs);
       if (executorId === "upload") {
         const uploadedFiles = Array.isArray(config.uploadedFiles) ? config.uploadedFiles : [];
         if (uploadedFiles.length > 1) throw new Error("workflow_upload_multiple_files_not_supported");
@@ -1116,13 +1135,35 @@ async function runWorkflow(command: HostCommand) {
           audio: uploadedFiles.filter((file) => hasMediaType(file, "audio/", "hasAudio")),
         };
       }
-      if (executorId === "collect" || executorId === "output") return inputs;
+      if (executorId === "collect") {
+        // Collect receives iteration results under `items.*`, while downstream
+        // nodes consume the declared output ports (`videos`, `images`, etc.).
+        // Preserve the raw inputs for compatibility, but also expose the
+        // normalized aliases so media processing nodes can consume them.
+        const collected: Record<string, unknown> = { ...inputs };
+        const outputAliases: Record<string, string> = {
+          "items.asset": "assets",
+          "items.image": "images",
+          "items.video": "videos",
+          "items.audio": "audios",
+          "items.ppt": "presentations",
+          "items.text": "text",
+        };
+        for (const [inputPort, outputPort] of Object.entries(outputAliases)) {
+          if (inputs[inputPort] !== undefined) collected[outputPort] = inputs[inputPort];
+        }
+        return collected;
+      }
+      if (executorId === "output") return inputs;
       if (executorId === "product_store") return storeWorkflowArtifacts(workspacePath, runId, nodeKey, config, inputs, artifactPort);
       if (executorId === "foreach") {
-        const inputPort = typeof config.inputPortId === "string" && config.inputPortId.startsWith("asset") ? "asset" : "image";
+        const configuredInputPort = typeof config.inputPortId === "string" ? config.inputPortId : "image";
+        const inputPort = configuredInputPort.includes("asset") ? "asset" : configuredInputPort.includes("text") ? "text" : "image";
         const source = inputs[`items.${inputPort}`] ?? inputs[`${inputPort}s`] ?? inputs[inputPort];
         const values = Array.isArray(source) ? source : source === undefined ? [] : [source];
-        return inputPort === "asset" ? { assets: values, asset: values } : { images: values, image: values };
+        if (inputPort === "asset") return { assets: values, asset: values };
+        if (inputPort === "text") return { texts: values, text: values };
+        return { images: values, image: values };
       }
       if (executorId === "file_create") {
         const output = await createFileArtifact(workspacePath, runId, nodeKey, config, inputs);
@@ -1639,6 +1680,29 @@ const hostReader = createRpcReader(process.stdin, (raw) => {
       .catch(error => fail(command, "provider_model_list_failed", error instanceof Error ? error.message : String(error)));
   }
   if (command.type === "attachment.extract") return void extractAttachment(command);
+  if (command.type === "workflow.ai") {
+    const runId = typeof command.runId === "string" ? command.runId : typeof command.payload?.runId === "string" ? command.payload.runId : randomUUID();
+    const prompt = typeof command.payload?.prompt === "string" ? command.payload.prompt.trim() : "";
+    if (!prompt) return fail(command, "invalid_prompt", "prompt is required");
+    if (consumePendingCancellation(runId)) {
+      respond(command, { runId, cancelled: true });
+      return emit(command, { event: "runtime_error", code: "workflow_ai_aborted", message: "Workflow AI request cancelled before it started.", retryable: false, runId });
+    }
+    const controller = new AbortController();
+    sessionRunControllers.set(runId, controller);
+    respond(command, { runId, transport: "direct-provider", tools: [] });
+    return void runDirectTextCapability(
+      { ...command, runId },
+      "workflow_ai",
+      { prompt, ...(typeof command.payload?.model === "string" ? { model: command.payload.model } : {}) },
+      {},
+      controller.signal,
+    ).then(() => emit(command, { event: "done", runId })).catch((error) => {
+      emit(command, { event: "runtime_error", code: controller.signal.aborted ? "workflow_ai_aborted" : "workflow_ai_request_failed", message: error instanceof Error ? error.message : String(error), retryable: !controller.signal.aborted, runId });
+    }).finally(() => {
+      if (sessionRunControllers.get(runId) === controller) sessionRunControllers.delete(runId);
+    });
+  }
   if (command.type === "session.create") {
     const conversationId = typeof command.payload?.conversationId === "string" ? command.payload.conversationId : "";
     const workspacePath = workspacePathFromPayload(command.payload?.workspacePath);

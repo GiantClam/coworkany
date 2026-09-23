@@ -13,9 +13,12 @@ import type {
   WorkbenchWorkflow,
   WorkbenchWorkflowInput,
   WorkbenchConversationMessagesOptions,
+  WorkflowAiCommand,
+  WorkflowAiOperationGroup,
 } from "@coworkany/workbench-client";
-import { createDesktopRunTransport, createDesktopUIMessage, desktopUIMessageStorage, desktopUIMessageText, parseDesktopUIMessage } from "@coworkany/workbench-client";
+import { applyWorkbenchRunEventToUIMessage, createDesktopRunTransport, createDesktopUIMessage, desktopUIMessageStorage, desktopUIMessageText, parseDesktopUIMessage } from "@coworkany/workbench-client";
 import type { DesktopUIMessage } from "@coworkany/workbench-client";
+import type { WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
 import type { TauriBridge } from "./tauri";
 import { promptRequestsArtifact } from "./artifact-intent";
 import { createQuestionBridge } from "./question-bridge";
@@ -24,6 +27,7 @@ import { isWorkbenchQuestionToolEvent, parseWorkbenchQuestionEvent, type Workben
 type DesktopConversationRow = { id: string; title: string; updated_at: string; message_count?: number; opencode_session_id?: string | null; agent_id?: string | null };
 type DesktopMessageRow = { id: string; conversation_id: string; role: DesktopUIMessage["role"] | "tool"; content: string; parts_json?: string | null; metadata_json?: string | null; created_at: string };
 type DesktopWorkflowRow = { id: string; name: string; definition_json: string; updated_at: string };
+type DesktopWorkflowAiOperationGroupRow = { id: string; conversation_id: string; workflow_id: string; base_revision: number; result_revision?: number | null; commands_json: string; status: string; summary: string; created_at: string };
 type DesktopArtifactRow = { id: string; relative_path: string; mime_type: string; byte_length: number; sha256: string; created_at: string; available?: boolean };
 type DesktopRunRow = { id: string; conversation_id?: string | null; status: WorkbenchRun["status"] | string; model?: string | null; started_at: string; finished_at?: string | null };
 type DesktopRunDetail = { run: DesktopRunRow; nodes: Array<{ node_key: string; status: string; output_json?: string | null; updated_at: string }>; events: Array<{ sequence: number; event_type: string; payload_json: string; created_at: string }>; usage: Array<{ provider?: string | null; model: string; input_tokens?: number | null; output_tokens?: number | null; provider_cost?: number | null; estimated_cost?: number | null; created_at: string }> };
@@ -39,6 +43,12 @@ export type DesktopChatTransportOptions = {
   readonly resolveSystemPrompt?: (message: DesktopUIMessage) => string | undefined;
   readonly resolveAgentId?: (message: DesktopUIMessage) => string | undefined;
   readonly resolveAllowArtifacts?: (message: DesktopUIMessage) => boolean;
+  readonly onRunStarted?: (runId: string, chatId: string, message: DesktopUIMessage) => void;
+};
+
+export type DesktopWorkflowAiChatTransportOptions = {
+  readonly resolveProvider: (message: DesktopUIMessage) => Record<string, unknown>;
+  readonly resolvePrompt?: (message: DesktopUIMessage, prompt: string) => string;
   readonly onRunStarted?: (runId: string, chatId: string, message: DesktopUIMessage) => void;
 };
 
@@ -63,6 +73,28 @@ function readWorkflowDefinition(raw: string): WorkbenchWorkflow["definition"] {
 
 function toWorkbenchWorkflow(row: DesktopWorkflowRow): WorkbenchWorkflow {
   return { id: row.id, title: row.name, definition: readWorkflowDefinition(row.definition_json), updatedAt: row.updated_at };
+}
+
+function toWorkflowAiOperationGroup(row: DesktopWorkflowAiOperationGroupRow): WorkflowAiOperationGroup {
+  let commands: readonly WorkflowAiCommand[] = [];
+  try {
+    const parsed = JSON.parse(row.commands_json) as unknown;
+    if (Array.isArray(parsed)) commands = parsed as readonly WorkflowAiCommand[];
+  } catch {
+    commands = [];
+  }
+  const status = row.status === "applied" || row.status === "rolled_back" || row.status === "failed" ? row.status : "failed";
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    workflowId: row.workflow_id,
+    baseRevision: row.base_revision,
+    resultRevision: row.result_revision ?? null,
+    commands,
+    status,
+    summary: row.summary,
+    createdAt: row.created_at,
+  };
 }
 
 function toWorkbenchArtifact(row: DesktopArtifactRow): WorkbenchArtifact {
@@ -187,6 +219,21 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
         input: { id, name: input.title, project_id: null, definition_json: JSON.stringify(input.definition) },
       });
       return toWorkbenchWorkflow(row);
+    },
+    async applyAiOperation(input: Parameters<WorkbenchClient["workflows"]["applyAiOperation"]>[0]): Promise<WorkbenchWorkflow> {
+      const row = await bridge.invoke<DesktopWorkflowRow>("apply_workflow_ai_operation", {
+        input: {
+          workflowId: input.workflowId,
+          expectedRevision: input.expectedRevision,
+          definitionJson: JSON.stringify(input.definition),
+          operationGroup: input.operationGroup,
+        },
+      });
+      return toWorkbenchWorkflow(row);
+    },
+    async operationGroups(workflowId: string): Promise<readonly WorkflowAiOperationGroup[]> {
+      const rows = await bridge.invoke<DesktopWorkflowAiOperationGroupRow[]>("list_workflow_ai_operation_groups", { workflowId });
+      return rows.map(toWorkflowAiOperationGroup);
     },
     async remove(workflowId: string): Promise<void> {
       await bridge.invoke("remove_workflow", { workflowId });
@@ -353,6 +400,62 @@ export function createDesktopChatTransport(bridge: TauriBridge, workbenchClient:
       return { runId };
     },
     subscribe: workbenchClient.runs.subscribe,
+    stop: workbenchClient.runs.cancel,
+  });
+}
+
+/**
+ * Workflow AI uses a direct Provider request with no OpenCode tool catalog.
+ * The renderer accepts only the structured workflow envelope and executes it
+ * through the local allowlisted controller.
+ */
+export function createDesktopWorkflowAiChatTransport(bridge: TauriBridge, workbenchClient: WorkbenchClient, options: DesktopWorkflowAiChatTransportOptions) {
+  const conversationsByRun = new Map<string, string>();
+  const assistantMessages = new Map<string, DesktopUIMessage>();
+  return createDesktopRunTransport({
+    start: async ({ chatId, message, prompt }) => {
+      const runId = makeId("workflow-ai-run");
+      const provider = options.resolveProvider(message);
+      const resolvedProviderId = typeof provider.id === "string" ? provider.id : undefined;
+      const resolvedModelId = typeof provider.model === "string" ? provider.model : undefined;
+      if (message.metadata?.providerId && resolvedProviderId && message.metadata.providerId !== resolvedProviderId) throw new Error("desktop_transport_provider_changed");
+      if (message.metadata?.modelId && resolvedModelId && message.metadata.modelId !== resolvedModelId) throw new Error("desktop_transport_model_changed");
+      await bridge.invoke("create_conversation", { input: { id: chatId, title: "Workflow AI", project_id: null, agent_id: "workflow-ai" } });
+      await bridge.invoke("create_run", { runId, conversationId: chatId, model: resolvedModelId ?? null });
+      const stored = desktopUIMessageStorage(message);
+      await bridge.invoke("append_message", { input: { id: message.id, conversation_id: chatId, role: "user", content: stored.content, parts_json: stored.parts_json, metadata_json: stored.metadata_json, created_at: message.metadata?.createdAt ?? new Date().toISOString() } });
+      options.onRunStarted?.(runId, chatId, message);
+      await bridge.invoke("host_start");
+      await bridge.invoke("host_send", { message: {
+        version: 1,
+        requestId: runId,
+        runId,
+        type: "workflow.ai",
+        payload: {
+          prompt: options.resolvePrompt?.(message, prompt) ?? prompt,
+          model: resolvedModelId,
+          provider,
+        },
+      } });
+      conversationsByRun.set(runId, chatId);
+      assistantMessages.set(runId, createDesktopUIMessage({ id: `assistant-${runId}`, role: "assistant", conversationId: chatId, runId, providerId: resolvedProviderId, modelId: resolvedModelId }));
+      return { runId };
+    },
+    subscribe(runId, onEvent) {
+      return workbenchClient.runs.subscribe(runId, (event) => {
+        onEvent(event);
+        const current = assistantMessages.get(runId);
+        if (current) assistantMessages.set(runId, applyWorkbenchRunEventToUIMessage(current, event));
+        if (event.type !== "status" || !["succeeded", "failed", "cancelled", "interrupted"].includes(event.status)) return;
+        const completed = assistantMessages.get(runId);
+        const conversationId = conversationsByRun.get(runId);
+        assistantMessages.delete(runId);
+        conversationsByRun.delete(runId);
+        if (!completed || !conversationId) return;
+        const stored = desktopUIMessageStorage(completed);
+        void bridge.invoke("append_message", { input: { id: completed.id, conversation_id: conversationId, role: "assistant", content: stored.content, parts_json: stored.parts_json, metadata_json: stored.metadata_json, created_at: completed.metadata?.createdAt ?? new Date().toISOString() } }).catch(() => undefined);
+      });
+    },
     stop: workbenchClient.runs.cancel,
   });
 }

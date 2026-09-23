@@ -67,5 +67,5 @@ jobs:
           node --check scripts/stage-macos-desktop-runtime.mjs
           node --check scripts/package-macos-portable.mjs
           bash -n scripts/release-macos.sh
-          node --test scripts/desktop-release.test.mjs scripts/release-macos.test.mjs
+          node --test scripts/desktop-release.test.mjs scripts/release-macos.test.mjs scripts/stage-macos-desktop-runtime.test.mjs
           python3 scripts/prepare-macos-release-runtime.test.py
