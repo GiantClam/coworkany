@@ -20,7 +20,10 @@ pub fn read(path: &Path, workspace_path: &Path) -> Result<Value, String> {
         Ok(raw) => {
             let json = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
             let mut value: Value = serde_json::from_str(json).map_err(|error| format!("invalid_config_json: {error}"))?;
-            remove_development_runninghub_workflow_ids(&mut value);
+            if !is_customer_package(&value) {
+                remove_development_runninghub_workflow_ids(&mut value);
+            }
+            normalize_runtime_and_workspace(&mut value, workspace_path);
             Ok(value)
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(default_config(workspace_path)),
@@ -28,9 +31,21 @@ pub fn read(path: &Path, workspace_path: &Path) -> Result<Value, String> {
     }
 }
 
+fn normalize_runtime_and_workspace(value: &mut Value, workspace_path: &Path) {
+    let Some(object) = value.as_object_mut() else { return; };
+    if object.get("workspacePath").and_then(Value::as_str).is_none() {
+        object.insert("workspacePath".to_string(), Value::String(workspace_path.join("projects").to_string_lossy().into_owned()));
+    }
+    if object.get("runtime").and_then(Value::as_object).is_none() {
+        object.insert("runtime".to_string(), json!({ "source": "system" }));
+    }
+}
+
 pub fn write(path: &Path, value: &Value) -> Result<(), String> {
     let mut normalized = value.clone();
-    remove_development_runninghub_workflow_ids(&mut normalized);
+    if !is_customer_package(&normalized) {
+        remove_development_runninghub_workflow_ids(&mut normalized);
+    }
     validate(&normalized)?;
     let parent = path.parent().ok_or_else(|| "config_parent_missing".to_string())?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -66,6 +81,10 @@ fn remove_development_runninghub_workflow_ids(value: &mut Value) {
             for profile in providers.values_mut() { remove_from_profile(profile); }
         }
     }
+}
+
+fn is_customer_package(value: &Value) -> bool {
+    value.get("packageType").and_then(Value::as_str) == Some("customer")
 }
 
 #[cfg(unix)]
@@ -112,6 +131,18 @@ mod tests {
     }
 
     #[test]
+    fn config_read_repairs_customer_config_without_runtime_fields() {
+        let root = std::env::temp_dir().join(format!("coworkany-config-migration-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root); fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.json");
+        fs::write(&path, br#"{"schemaVersion":1,"provider":{"model":"customer-model"}}"#).unwrap();
+        let value = read(&path, &root).unwrap();
+        assert_eq!(value["workspacePath"], root.join("projects").to_string_lossy().as_ref());
+        assert_eq!(value["runtime"]["source"], "system");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn removes_development_runninghub_workflows_but_keeps_user_workflows() {
         let mut value = json!({
             "provider": { "digitalHumanWorkflowId": "2019410250268418050" },
@@ -126,5 +157,26 @@ mod tests {
         assert!(value["provider"].get("digitalHumanWorkflowId").is_none());
         assert_eq!(value["providers"]["video"]["digitalHumanWorkflowId"], "user-workflow-42");
         assert!(value["providers"]["video"].get("videoEnhanceWorkflowId").is_none());
+    }
+
+    #[test]
+    fn customer_package_preserves_provider_workflow_configuration() {
+        let root = std::env::temp_dir().join(format!("coworkany-customer-config-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root); fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.json");
+        let value = json!({
+            "schemaVersion": 1,
+            "packageType": "customer",
+            "workspacePath": root.join("projects"),
+            "runtime": { "source": "system" },
+            "provider": { "model": "customer-model", "apiKey": "customer-secret", "digitalHumanWorkflowId": "2019410250268418050" },
+            "providers": { "asr": { "model": "1999879555714347010", "workflows": [{ "remoteWorkflowId": "1999879555714347010" }] } }
+        });
+        write(&path, &value).unwrap();
+        let read_back = read(&path, &root).unwrap();
+        assert_eq!(read_back["provider"]["apiKey"], "customer-secret");
+        assert_eq!(read_back["provider"]["digitalHumanWorkflowId"], "2019410250268418050");
+        assert_eq!(read_back["providers"]["asr"]["workflows"][0]["remoteWorkflowId"], "1999879555714347010");
+        let _ = fs::remove_dir_all(root);
     }
 }

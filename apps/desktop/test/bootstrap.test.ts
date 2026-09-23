@@ -53,12 +53,12 @@ test("browser preview opens the desktop shell without a Tauri bootstrap", () => 
   assert.match(source, /setRuntimeReady\(true\);[\s\S]*setShellReady\(true\);[\s\S]*return;/);
 });
 
-test("runtime repair failure still renders the shell for recovery", () => {
+test("runtime startup failure still renders the shell for recovery", () => {
   const source = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
 
   assert.match(source, /setRuntimeStatus\(preview \? "浏览器预览模式 · Tauri 未连接" : `运行环境修复失败：/u);
   assert.match(source, /setShellReady\(true\);[\s\S]*setRuntimeReady\(preview\);/u);
-  assert.match(source, /if \(shouldRepairRuntime\(runtime\) && !imageRuntimeReady\) \{[\s\S]*setShellReady\(true\);[\s\S]*repairPromise/u);
+  assert.doesNotMatch(source, /shouldRepairRuntime\(runtime\)/u);
 });
 
 test("desktop shell is released before slow artifact hydration", () => {
@@ -71,9 +71,34 @@ test("desktop shell is released before slow artifact hydration", () => {
   assert.ok(shellRelease < hydrationStart);
 });
 
-test("image-ready runtimes skip the full optional repair gate", () => {
+test("feature pages only read the runtime result produced during desktop startup", () => {
   const source = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  assert.match(source, /const imageRuntimeReady = canRunImageWorkflow\(runtime\);[\s\S]*if \(shouldRepairRuntime\(runtime\) && !imageRuntimeReady\)/u);
+  const hydration = source.indexOf("window.setTimeout(() => { void hydrateWorkbench(); }, 0)");
+  const runtimeProbe = source.indexOf('tauriBridge.invoke<RuntimeProbe>("runtime_status")');
+
+  assert.ok(hydration >= 0);
+  assert.ok(runtimeProbe >= 0);
+  assert.ok(hydration < runtimeProbe);
+  assert.doesNotMatch(source, /tauriBridge\.invoke<RuntimeProbe>\("runtime_probe"\)/u);
+  assert.doesNotMatch(source, /tauriBridge\.invoke[^\n]*\("initialize_local_state"\)/u);
+  assert.match(source, /tauriBridge\.invoke<\{ integrity: boolean; interruptedRuns\?: number \}>\("local_state_status"\)/u);
+});
+
+test("feature pages do not perform capability-specific runtime probes", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  assert.doesNotMatch(source, /canRunImageWorkflow\(runtime\)/u);
+});
+
+test("workflow submission does not check or gate on the runtime environment", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const runAgentStart = source.indexOf("async function runAgent(");
+  const runAgentEnd = source.indexOf("  async function cancelActiveRun()", runAgentStart);
+  assert.ok(runAgentStart >= 0);
+  assert.ok(runAgentEnd > runAgentStart);
+  const runAgentSource = source.slice(runAgentStart, runAgentEnd);
+  assert.doesNotMatch(runAgentSource, /runtime_probe|runtime_status|repair_runtime|runtimeReady/u);
+  assert.match(source, /disabled=\{Boolean\(props.activeRunId\) \|\| issues.length > 0\}/u);
+  assert.doesNotMatch(source, /disabled=\{!props.runtimeReady/u);
 });
 
 test("development runtime does not enter the signed macOS repair gate", () => {

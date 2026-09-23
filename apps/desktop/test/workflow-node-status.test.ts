@@ -18,7 +18,7 @@ test("workflow node snapshots retain the failure message for the node canvas", (
   assert.deepEqual(snapshots, [{ nodeKey: "image", status: "failed", errorMessage: "media_outputs_not_downloadable" }]);
 });
 
-test("workflow completion keeps terminal nodes and marks untouched nodes as skipped", () => {
+test("workflow completion keeps terminal nodes and leaves untouched nodes queued", () => {
   const snapshots = [
     { nodeKey: "input", status: "succeeded" },
     { nodeKey: "writer", status: "failed", errorMessage: "provider_unavailable" },
@@ -27,7 +27,7 @@ test("workflow completion keeps terminal nodes and marks untouched nodes as skip
   assert.deepEqual(finalizeWorkflowNodeSnapshots(snapshots, "failed"), [
     { nodeKey: "input", status: "succeeded" },
     { nodeKey: "writer", status: "failed", errorMessage: "provider_unavailable" },
-    { nodeKey: "output", status: "skipped" },
+    { nodeKey: "output", status: "queued" },
   ]);
 });
 
@@ -37,6 +37,16 @@ test("workflow failure marks an in-flight node as failed", () => {
     { nodeKey: "output", status: "queued" },
   ], "failed"), [
     { nodeKey: "writer", status: "failed" },
-    { nodeKey: "output", status: "skipped" },
+    { nodeKey: "output", status: "queued" },
+  ]);
+});
+
+test("workflow failure before the first node does not mark every node as skipped", () => {
+  assert.deepEqual(finalizeWorkflowNodeSnapshots([
+    { nodeKey: "input", status: "queued" },
+    { nodeKey: "output", status: "queued" },
+  ], "failed"), [
+    { nodeKey: "input", status: "queued" },
+    { nodeKey: "output", status: "queued" },
   ]);
 });

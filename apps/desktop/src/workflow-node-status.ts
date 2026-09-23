@@ -36,6 +36,8 @@ export function finalizeWorkflowNodeSnapshots(snapshots: readonly WorkflowCanvas
   return snapshots.map((snapshot) => {
     if (["succeeded", "failed", "cancelled", "skipped"].includes(snapshot.status)) return snapshot;
     if (status === "failed" && snapshot.status === "running") return { ...snapshot, status: "failed" };
-    return { ...snapshot, status: status === "cancelled" ? "cancelled" : "skipped" };
+    if (status === "cancelled" && snapshot.status === "running") return { ...snapshot, status: "cancelled" };
+    // 未收到启动事件的节点没有执行证据，保留 queued，避免把启动失败误报为“已跳过”。
+    return snapshot;
   });
 }

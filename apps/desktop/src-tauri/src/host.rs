@@ -212,13 +212,16 @@ fn system_executable(command: &str) -> Option<PathBuf> {
     {
     let mut where_command = Command::new("where.exe");
     where_command.creation_flags(0x08000000);
-    let output = where_command.arg(command).output().ok()?;
+    where_command.arg(command);
+    let output = crate::platform::command_output_with_timeout(where_command, std::time::Duration::from_secs(10)).ok()??;
     if !output.status.success() { return None; }
     return String::from_utf8_lossy(&output.stdout).lines().map(str::trim).filter(|line| !line.is_empty()).map(PathBuf::from).flat_map(crate::resolve_windows_command_shim).filter(|path| path.is_file() && executable_works(path, &["--version"])).find_map(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path));
     }
     #[cfg(not(windows))]
     {
-        let output = Command::new("which").arg(command).output().ok()?;
+        let mut which_command = Command::new("which");
+        which_command.arg(command);
+        let output = crate::platform::command_output_with_timeout(which_command, std::time::Duration::from_secs(10)).ok()??;
         if !output.status.success() { return None; }
         String::from_utf8_lossy(&output.stdout).lines().map(str::trim).find(|line| !line.is_empty()).map(PathBuf::from).filter(|path| path.is_file() && executable_works(path, &["--version"])).and_then(|path| std::fs::canonicalize(path).ok())
     }
@@ -226,8 +229,9 @@ fn system_executable(command: &str) -> Option<PathBuf> {
 
 fn executable_works(path: &std::path::Path, args: &[&str]) -> bool {
     let mut command = Command::new(path);
-    crate::platform::configure_child_command(&mut command);
-    command.args(args).output().map(|output| output.status.success()).unwrap_or(false)
+    command.args(args);
+    crate::platform::command_output_with_timeout(command, std::time::Duration::from_secs(10))
+        .ok().flatten().is_some_and(|output| output.status.success())
 }
 
 fn configured_runtime_path(app: &AppHandle, key: &str) -> Option<PathBuf> {
@@ -319,9 +323,11 @@ fn select_skills_directory(candidates: impl IntoIterator<Item = PathBuf>) -> Opt
 
 fn probe_python(path: &std::path::Path) -> Result<(), String> {
     let mut command = Command::new(path);
-    crate::platform::configure_child_command(&mut command);
     configure_python_environment(&mut command, path);
-    let output = command.args(["-c", crate::PPT_PYTHON_PROBE]).output().map_err(|error| format!("spawn_error={error}"))?;
+    command.args(["-c", crate::PPT_PYTHON_PROBE]);
+    let Some(output) = crate::platform::command_output_with_timeout(command, std::time::Duration::from_secs(10)).map_err(|error| format!("spawn_error={error}"))? else {
+        return Err("probe_timeout=10s".to_string());
+    };
     if output.status.success() { return Ok(()); }
     let stdout = String::from_utf8_lossy(&output.stdout).trim().chars().take(512).collect::<String>();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().chars().take(512).collect::<String>();

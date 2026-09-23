@@ -75,6 +75,8 @@ async function copyMediaRuntime() {
   await chmod(join(output, "media/ffmpeg"), 0o755);
   await chmod(join(output, "media/ffprobe"), 0o755);
   await bundleMediaMachODependencies([join(output, "media/ffmpeg"), join(output, "media/ffprobe")]);
+  const { stdout, stderr } = await execFileAsync(join(output, "media/ffmpeg"), ["-hide_banner", "-encoders"], { encoding: "utf8" });
+  if (!/\blibx264\b/u.test(`${stdout}\n${stderr}`)) throw new Error("macos_runtime_ffmpeg_libx264_missing");
 }
 
 function machODependencies(outputText) {

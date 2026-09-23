@@ -167,7 +167,7 @@ const statusTone = (status?: string | null) => {
           ? ["#fcd34d", "#fef3c7", "#a16207"]
           : ["var(--wb-border, #e5e5e0)", "var(--wb-background, #fdfdfb)", "var(--wb-muted-foreground, #777)"];
 };
-const statusLabel = (locale: "zh" | "en", status: string) => status === "skipped" ? (locale === "zh" ? "已跳过" : "Skipped") : getWorkbenchTaskStatusLabel(normalizeWorkbenchTaskStatus(status), locale);
+const statusLabel = (locale: "zh" | "en", status: string) => status === "skipped" ? (locale === "zh" ? "未执行" : "Not run") : getWorkbenchTaskStatusLabel(normalizeWorkbenchTaskStatus(status), locale);
 const mediaPortLabel = (port: WorkflowPortDefinition | undefined, locale: "zh" | "en") => {
   const labels: Record<string, { zh: string; en: string }> = {
     "text.prompt": { zh: "提示词", en: "Prompt" },

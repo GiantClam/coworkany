@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 use std::fs;
@@ -63,8 +64,7 @@ fn health() -> Health {
     Health { status: "ok", version: env!("CARGO_PKG_VERSION") }
 }
 
-#[tauri::command]
-fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+fn perform_runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
     let data = data_dir(&app)?;
     logs::append(&data, "runtime-probe", &format!("probe_started resource={} data={}", resource.display(), data.display()));
@@ -75,6 +75,7 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     }
     let database = data.join("app.db");
     let migrations = storage::migrations_ready_without_initialization(&database).unwrap_or(false);
+    logs::append(&data, "runtime-probe", "probe_stage component=node");
     let configured_node = configured_runtime_executable(&data, "nodePath");
     let private_node = data.join("runtime").join("node").join(platform::runtime_executable("node"));
     let packaged_nodes = [
@@ -88,11 +89,14 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         .find(|path| path.is_file() && executable_works(path, &["--version"]))
         .or_else(|| system_executable("node"))
         .and_then(canonical_path);
+    logs::append(&data, "runtime-probe", "probe_stage component=opencode");
     let opencode_path = host::opencode_executable(&app)?.map(PathBuf::from).and_then(canonical_path);
     let node = node_path.is_some();
     let opencode = opencode_path.is_some();
+    logs::append(&data, "runtime-probe", "probe_stage component=python");
     let python_path = host::python_executable(&app)?.map(PathBuf::from).and_then(canonical_path);
     let python = python_path.is_some();
+    logs::append(&data, "runtime-probe", "probe_stage component=media");
     let media_directory = media_runtime_directory(&app)?;
     let media = media_runtime_is_usable(&media_directory);
     let media_path = media.then(|| canonical_path(media_directory.clone())).flatten();
@@ -174,6 +178,40 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         write_runtime_probe_cache(&data, &runtime_probe_fingerprint(&data, &resource), &result);
     }
     Ok(result)
+}
+
+#[derive(Clone)]
+struct StartupResults {
+    local_state: Result<serde_json::Value, String>,
+    runtime: Result<serde_json::Value, String>,
+}
+
+struct StartupState(Mutex<Option<StartupResults>>);
+
+impl Default for StartupState {
+    fn default() -> Self { Self(Mutex::new(None)) }
+}
+
+fn refresh_runtime_probe(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let result = perform_runtime_probe(app.clone());
+    if let Some(state) = app.try_state::<StartupState>() {
+        if let Some(startup) = state.0.lock().map_err(|_| "startup_state_poisoned".to_string())?.as_mut() {
+            startup.runtime = result.clone();
+        }
+    }
+    result
+}
+
+#[tauri::command]
+fn local_state_status(state: tauri::State<'_, StartupState>) -> Result<serde_json::Value, String> {
+    state.0.lock().map_err(|_| "startup_state_poisoned".to_string())?
+        .as_ref().map(|startup| startup.local_state.clone()).unwrap_or_else(|| Err("startup_not_ready".to_string()))
+}
+
+#[tauri::command]
+fn runtime_status(state: tauri::State<'_, StartupState>) -> Result<serde_json::Value, String> {
+    state.0.lock().map_err(|_| "startup_state_poisoned".to_string())?
+        .as_ref().map(|startup| startup.runtime.clone()).unwrap_or_else(|| Err("startup_not_ready".to_string()))
 }
 
 const RUNTIME_PROBE_CACHE_FILE: &str = ".runtime-probe-cache.json";
@@ -304,7 +342,9 @@ fn executable_works(path: &std::path::Path, args: &[&str]) -> bool {
     let mut command = Command::new(path);
     #[cfg(windows)]
     command.creation_flags(0x08000000);
-    command.args(args).output().map(|output| output.status.success()).unwrap_or(false)
+    command.args(args);
+    platform::command_output_with_timeout(command, Duration::from_secs(10))
+        .ok().flatten().is_some_and(|output| output.status.success())
 }
 
 fn canonical_path(path: PathBuf) -> Option<PathBuf> {
@@ -352,13 +392,16 @@ fn system_executable(command: &str) -> Option<PathBuf> {
     {
     let mut where_command = Command::new("where.exe");
     where_command.creation_flags(0x08000000);
-    let output = where_command.arg(command).output().ok()?;
+    where_command.arg(command);
+    let output = platform::command_output_with_timeout(where_command, Duration::from_secs(10)).ok()??;
     if !output.status.success() { return None; }
     return String::from_utf8_lossy(&output.stdout).lines().map(str::trim).filter(|line| !line.is_empty()).map(PathBuf::from).flat_map(resolve_windows_command_shim).filter(|path| path.exists() && executable_works(path, &["--version"])).find_map(canonical_path);
     }
     #[cfg(not(windows))]
     {
-        let output = Command::new("which").arg(command).output().ok()?;
+        let mut which_command = Command::new("which");
+        which_command.arg(command);
+        let output = platform::command_output_with_timeout(which_command, Duration::from_secs(10)).ok()??;
         if !output.status.success() { return None; }
         String::from_utf8_lossy(&output.stdout).lines().map(str::trim).find(|line| !line.is_empty()).map(PathBuf::from).filter(|path| path.is_file() && executable_works(path, &["--version"])).and_then(canonical_path)
     }
@@ -467,7 +510,7 @@ fn repair_runtime(app: tauri::AppHandle, options: Option<RuntimeRepairOptions>) 
         return Err(format!("runtime_install_failed: {detail}"));
     }
     emit_runtime_progress(&app, "ready");
-    Ok(serde_json::json!({ "status": "ok", "installRoot": install_root }))
+    refresh_runtime_probe(&app)
 }
 
 #[tauri::command]
@@ -488,7 +531,7 @@ fn repair_runtime(app: tauri::AppHandle, _options: Option<RuntimeRepairOptions>)
             logs::append(&data, "runtime-repair", &format!("quarantine_clear status={}", status));
             if !status.success() { return Err("macos_internal_quarantine_clear_failed".to_string()); }
             logs::append(&data, "runtime-repair", "repair_finished status=bundled");
-            return Ok(serde_json::json!({ "status": "bundled", "mode": "internal" }));
+            return refresh_runtime_probe(&app);
         }
     }
     // macOS runtime executables are sealed inside the signed application bundle.
@@ -506,10 +549,11 @@ fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 fn internal_portable_distribution_root(executable: &Path) -> Option<PathBuf> {
     let root = platform::distribution_root(executable);
     let package_name = root.file_name().and_then(|value| value.to_str()).unwrap_or_default();
-    (package_name == "CoworkAny-macOS-arm64-internal-portable"
-        && (root.join("portable.flag").is_file()
-            || executable.parent()?.parent()?.parent()?.join("Contents/Resources/internal-portable.flag").is_file()))
-        .then_some(root)
+    let generated_portable = package_name.starts_with("CoworkAny-macOS-")
+        && package_name.contains("-internal-portable")
+        && root.join("portable.flag").is_file();
+    let bundled_marker = executable.parent()?.parent()?.join("Resources/internal-portable.flag").is_file();
+    (generated_portable || bundled_marker).then_some(root)
 }
 
 /// Older green packages and user instructions sometimes placed `config.json`
@@ -539,9 +583,8 @@ fn portable_default_workspace_path(executable_dir: &Path, configured: &Path) -> 
     let configured_name = configured.file_name()?.to_str()?;
     let data_name = configured.parent()?.file_name()?.to_str()?;
     let portable_root = configured.parent()?.parent()?;
-    let portable_name = portable_root.file_name()?.to_str()?;
-    let generated_package = portable_name.starts_with("CoworkAny-Windows-") || portable_name.starts_with("CoworkAny-macOS-");
-    if !configured_name.eq_ignore_ascii_case("projects") || !data_name.eq_ignore_ascii_case(platform::portable_data_directory()) || !generated_package { return None; }
+    if portable_root.file_name()? != executable_dir.file_name()? { return None; }
+    if !configured_name.eq_ignore_ascii_case("projects") || !data_name.eq_ignore_ascii_case(platform::portable_data_directory()) { return None; }
     let current = executable_dir.join(platform::portable_data_directory()).join("projects");
     if configured == current { return None; }
     Some(current)
@@ -1478,8 +1521,55 @@ fn usage_summary(app: tauri::AppHandle) -> Result<storage::UsageSummary, String>
     storage::usage_summary(&database_path(&app)?).map_err(|error| error.to_string())
 }
 
+fn customer_package_id(marker: &str, package_root: &Path, downloads: &Path) -> Option<String> {
+    let marker = marker.trim();
+    let valid = !marker.is_empty() && marker.len() <= 128 && marker.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-'));
+    if valid { return Some(marker.to_string()); }
+    if !package_root.starts_with(downloads) { return None; }
+    package_root.file_name().and_then(|value| value.to_str()).filter(|value| !value.is_empty()).map(str::to_string)
+}
+
+fn relaunch_customer_package() -> Result<bool, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let app_bundle = executable.parent().and_then(Path::parent).and_then(Path::parent).ok_or_else(|| "macos_app_bundle_missing".to_string())?;
+    let package_root = platform::distribution_root(&executable);
+    let customer_marker = app_bundle.join("Contents/Resources/customer-package.flag");
+    if !customer_marker.is_file() { return Ok(false); }
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return Ok(false); };
+    let downloads = home.join("Downloads");
+    let marker = fs::read_to_string(&customer_marker).unwrap_or_default();
+    let Some(package_name) = customer_package_id(&marker, &package_root, &downloads) else { return Ok(false); };
+    let destination = home.join("Library/Application Support/CoworkAny/customer-packages").join(package_name);
+    if package_root == destination { return Ok(false); }
+    fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
+    let copied_app = destination.join("CoworkAny.app");
+    let status = Command::new("/usr/bin/ditto").arg(&app_bundle).arg(&copied_app).status().map_err(|error| format!("customer_package_copy_failed: {error}"))?;
+    if !status.success() { return Err(format!("customer_package_copy_failed:{status}")); }
+    fs::write(destination.join("portable.flag"), b"").map_err(|error| error.to_string())?;
+    let bundled_seed = app_bundle.join("Contents/Resources/customer-package-seed");
+    let adjacent_seed = package_root.join(platform::portable_data_directory());
+    let seed = if adjacent_seed.join("config.json").is_file() && adjacent_seed.join("app.db").is_file() { adjacent_seed } else { bundled_seed };
+    let data = destination.join(platform::portable_data_directory());
+    fs::create_dir_all(&data).map_err(|error| error.to_string())?;
+    for name in ["config.json", "app.db"] {
+        let source = seed.join(name);
+        let target = data.join(name);
+        if !target.exists() {
+            if !source.is_file() { return Err(format!("customer_package_seed_missing:{name}")); }
+            fs::copy(source, target).map_err(|error| format!("customer_package_seed_copy_failed:{name}:{error}"))?;
+        }
+    }
+    Command::new("/usr/bin/open").args(["-n"]).arg(&copied_app).spawn().map_err(|error| format!("customer_package_relaunch_failed: {error}"))?;
+    Ok(true)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    match relaunch_customer_package() {
+        Ok(true) => return,
+        Ok(false) => {},
+        Err(error) => { eprintln!("CoworkAny cannot install customer package: {error}"); bootstrap::show_startup_error(&error); return; }
+    }
     let lock_path = match lock_path() {
         Ok(path) => path,
         Err(error) => { eprintln!("CoworkAny cannot resolve instance lock path: {error}"); bootstrap::show_startup_error(&error); return; }
@@ -1505,16 +1595,25 @@ pub fn run() {
         instance_lock.release();
         return;
     }
-    // Runtime installation/probing is intentionally handled by the React
-    // bootstrap screen after the Tauri window exists. WebView2 must be ready
-    // before creating the window, but the green runtime can be repaired while
-    // the user sees progress and diagnostics instead of a blank native shell.
+    // The runtime probe runs during desktop startup. The React shell only
+    // reads the result and never blocks a feature page on a fresh probe.
     startup_progress.show_stage(bootstrap::StartupStage::Runtime);
     startup_progress.show_stage(bootstrap::StartupStage::Workbench);
     let builder = tauri::Builder::default()
         .manage(instance_lock)
         .manage(host::HostState::default())
-        .invoke_handler(tauri::generate_handler![health, runtime_probe, list_local_skill_catalog, repair_runtime, runtime_paths, initialize_local_state, read_config, write_config, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
+        .manage(StartupState::default())
+        .setup(|app| {
+            let local_state = initialize_local_state(app.handle().clone());
+            let runtime = match &local_state {
+                Ok(_) => perform_runtime_probe(app.handle().clone()),
+                Err(error) => Err(format!("local_state_initialization_failed: {error}")),
+            };
+            let state = app.state::<StartupState>();
+            *state.0.lock().map_err(|_| "startup_state_poisoned")? = Some(StartupResults { local_state, runtime });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
     let app = builder.build(tauri::generate_context!()).expect("error while building CoworkAny");
     drop(startup_progress);
     app.run(|app, event| {
@@ -1548,7 +1647,7 @@ fn adjacent_instance_lock_path(data_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, customer_package_id, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
     #[cfg(target_os = "macos")]
     use super::macos_workflow_output_save_script;
     use std::fs;
@@ -1569,19 +1668,32 @@ mod tests {
         assert_ne!(lock.parent(), Some(data_root));
     }
 
+    #[test]
+    fn customer_package_id_survives_moving_the_app_out_of_downloads() {
+        let package = Path::new("/Applications");
+        let downloads = Path::new("/Users/customer/Downloads");
+        assert_eq!(customer_package_id("customer-custom-intel-v0.1.36\n", package, downloads).as_deref(), Some("customer-custom-intel-v0.1.36"));
+        assert_eq!(customer_package_id("../escape", package, downloads), None);
+        assert_eq!(customer_package_id("", Path::new("/Users/customer/Downloads/legacy-customer"), downloads).as_deref(), Some("legacy-customer"));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
-    fn internal_portable_root_requires_the_portable_marker_next_to_the_app() {
+    fn internal_portable_root_accepts_both_macos_architectures_and_the_bundled_marker() {
         let root = std::env::temp_dir().join(format!("coworkany-macos-portable-marker-{}", std::process::id()));
-        let executable = root.join("CoworkAny-macOS-arm64-internal-portable/CoworkAny.app/Contents/MacOS/coworkany");
-        fs::create_dir_all(executable.parent().unwrap()).unwrap();
-        assert_eq!(internal_portable_distribution_root(&executable), None);
-        fs::write(root.join("CoworkAny-macOS-arm64-internal-portable/portable.flag"), b"").unwrap();
-        assert_eq!(internal_portable_distribution_root(&executable), Some(root.join("CoworkAny-macOS-arm64-internal-portable")));
-        fs::remove_file(root.join("CoworkAny-macOS-arm64-internal-portable/portable.flag")).unwrap();
-        fs::create_dir_all(root.join("CoworkAny-macOS-arm64-internal-portable/CoworkAny.app/Contents/Resources")).unwrap();
-        fs::write(root.join("CoworkAny-macOS-arm64-internal-portable/CoworkAny.app/Contents/Resources/internal-portable.flag"), b"").unwrap();
-        assert_eq!(internal_portable_distribution_root(&executable), Some(root.join("CoworkAny-macOS-arm64-internal-portable")));
+        for architecture in ["arm64", "x64"] {
+            let package = root.join(format!("CoworkAny-macOS-{architecture}-internal-portable-customer"));
+            let executable = package.join("CoworkAny.app/Contents/MacOS/coworkany");
+            fs::create_dir_all(executable.parent().unwrap()).unwrap();
+            assert_eq!(internal_portable_distribution_root(&executable), None);
+            fs::write(package.join("portable.flag"), b"").unwrap();
+            assert_eq!(internal_portable_distribution_root(&executable), Some(package));
+        }
+        let installed = root.join("Applications/CoworkAny.app/Contents/MacOS/coworkany");
+        fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs::create_dir_all(root.join("Applications/CoworkAny.app/Contents/Resources")).unwrap();
+        fs::write(root.join("Applications/CoworkAny.app/Contents/Resources/internal-portable.flag"), b"").unwrap();
+        assert_eq!(internal_portable_distribution_root(&installed), Some(root.join("Applications")));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1659,6 +1771,11 @@ mod tests {
         assert_eq!(portable_default_workspace_path(&root, &stale), Some(root.join(data_name).join("projects")));
         assert_eq!(portable_default_workspace_path(&root, &root.join(data_name).join("projects")), None);
         assert_eq!(portable_default_workspace_path(&root, Path::new(r"D:\work\marketing")), None);
+        let customer_root = base.join("customer-custom-intel-v0.1.30");
+        fs::create_dir_all(&customer_root).unwrap();
+        fs::write(customer_root.join("portable.flag"), b"").unwrap();
+        let customer_stale = base.join("old-customer").join("customer-custom-intel-v0.1.30").join(data_name).join("projects");
+        assert_eq!(portable_default_workspace_path(&customer_root, &customer_stale), Some(customer_root.join(data_name).join("projects")));
         let _ = fs::remove_dir_all(base);
     }
 
@@ -1783,11 +1900,14 @@ mod tests {
         let builder = source.find("let builder = tauri::Builder::default()").expect("tauri builder missing");
         assert!(webview_gate < builder, "WebView2 must be ready before Tauri creates the window");
         assert!(source[webview_gate..builder].contains("instance_lock.release()"));
-        assert!(!source[webview_gate..builder].contains("ensure_runtime_before_window"), "runtime repair must not block the first Tauri window");
         assert!(source.contains("bootstrap::StartupProgress::new"));
         assert!(source.contains("startup_progress.show_stage(bootstrap::StartupStage::WebView)"));
         assert!(source.contains("startup_progress.show_stage(bootstrap::StartupStage::Runtime)"));
         assert!(source.contains("startup_progress.show_stage(bootstrap::StartupStage::Workbench)"));
+        let setup = source.find(".setup(|app|").expect("startup setup missing");
+        assert!(source[setup..].contains("initialize_local_state(app.handle().clone())"));
+        assert!(source[setup..].contains("perform_runtime_probe(app.handle().clone())"));
+        assert!(!source[builder..setup].contains("generate_handler![health, runtime_probe,"), "the old live probe command must not be exposed to the page");
     }
 
     #[test]

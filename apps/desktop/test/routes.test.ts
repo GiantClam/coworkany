@@ -482,7 +482,7 @@ test("desktop startup keeps a visible progress surface during runtime hydration"
   assert.match(appSource, /setRuntimePhase\("repair"\)/);
   assert.match(appSource, /const \[shellReady, setShellReady\] = useState\(false\)/u);
   assert.match(appSource, /if \(!shellReady\) return <DesktopBootstrapScreen/u);
-  assert.match(appSource, /if \(!runtimeReady\) \{/u);
+  assert.match(appSource, /disabled=\{Boolean\(props.activeRunId\) \|\| issues.length > 0\}/u);
   assert.match(appSource, /<DesktopBootstrapScreen locale=\{locale\}/);
   assert.match(indexSource, /id="boot-fallback"/);
   assert.match(indexSource, /boot-fallback-progress/);
@@ -1240,6 +1240,7 @@ test("desktop workflow actions use the current canvas definition and do not requ
   assert.match(modernSurface, /runBuilderOperation\("save", \(\) => props\.onSave\(localDefinition\)\)/);
   assert.match(modernSurface, /runBuilderOperation\("export", \(\) => props\.onExport\(localDefinition\)\)/);
   assert.match(modernSurface, /disabled=\{Boolean\(props\.activeRunId\) \|\| issues\.length > 0\}/);
+  assert.doesNotMatch(modernSurface, /props\.runtimeReady/);
   assert.doesNotMatch(modernSurface, /!props\.prompt\.trim\(\)/);
   assert.match(appSource, /saveCurrentWorkflow\("manual", definition\)/);
   assert.match(appSource, /exportCurrentWorkflow\(definition\)/);
@@ -1324,7 +1325,7 @@ test("desktop workflow recovery actions are hidden after a successful run", () =
   const builderSource = appSource.match(/function DesktopWorkflowBuilderSurface[\s\S]*?function DesktopWorkflowWorkspace/)?.[0] ?? "";
   assert.match(builderSource, /const canContinue = \["failed", "cancelled", "interrupted"\]\.includes\(terminalRun\)/);
   assert.match(builderSource, /\{canContinue \? <button className="ghost" type="button" onClick=\{\(\) => props\.onRerun\(localDefinition\)\}>\{copy\.rerun\}<\/button> : null\}/);
-  assert.match(builderSource, /\{canContinue \? <button className="ghost" type="button" onClick=\{props\.onContinue\}>\{copy\.continue\}<\/button> : null\}/);
+  assert.match(builderSource, /\{canContinue \? <button className="ghost" type="button" onClick=\{\(\) => props\.onContinue\}>\{copy\.continue\}<\/button> : null\}/);
   assert.doesNotMatch(builderSource, /\["failed", "cancelled", "interrupted", "succeeded"\]\.includes\(terminalRun\)/);
 });
 
@@ -1342,7 +1343,7 @@ test("desktop workflow recovery actions execute in the workflow canvas without n
   assert.match(appSource, /await runAgent\(undefined, undefined, undefined, retryDefinition/);
   assert.match(appSource, /const executableRecoveryDefinitionHash = workflowRetry \? hashWorkflowDefinition\(hostWorkflowDefinition\) : undefined/);
   assert.match(appSource, /recoveryDefinitionHash: executableRecoveryDefinitionHash/);
-  assert.match(appSource, /本地运行环境仍在准备中，请稍候再运行[\s\S]*?workflowLaunchLocksRef\.current\.delete\(workflowKey\)/);
+  assert.doesNotMatch(appSource, /本地运行环境未就绪，请先在设置中修复后再运行/);
 });
 
 test("desktop workflow persistence actions expose click progress and completion state", () => {

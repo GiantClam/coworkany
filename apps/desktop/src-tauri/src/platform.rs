@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 pub fn runtime_executable(component: &str) -> &str {
     #[cfg(windows)]
@@ -73,6 +74,24 @@ pub fn configure_child_command(command: &mut Command) {
     }
 }
 
+pub fn command_output_with_timeout(mut command: Command, timeout: Duration) -> std::io::Result<Option<Output>> {
+    configure_child_command(&mut command);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output().map(Some);
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 pub fn open_path_command(path: &Path) -> Command {
     #[cfg(target_os = "macos")]
     {
@@ -135,5 +154,13 @@ mod tests {
     fn distribution_root_defaults_to_the_executable_directory() {
         let executable = Path::new("release").join("coworkany");
         assert_eq!(distribution_root(&executable), PathBuf::from("release"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_timeout_stops_a_stalled_probe() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 1"]);
+        assert!(command_output_with_timeout(command, Duration::from_millis(30)).unwrap().is_none());
     }
 }
