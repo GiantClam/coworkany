@@ -237,10 +237,16 @@ export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, PromptInputTe
     const lineHeight = Number.parseFloat(window.getComputedStyle(node).lineHeight) || 24;
     const minHeight = lineHeight * Math.max(1, minRows);
     const rowMaxHeight = lineHeight * Math.max(minRows, maxRows);
+    // Override shared textarea bounds before measuring. Several consumers set a
+    // larger CSS min-height, which would otherwise inflate scrollHeight for an
+    // empty compact composer and make it start at the max row height.
+    node.style.minHeight = `${minHeight}px`;
+    node.style.maxHeight = `${rowMaxHeight}px`;
     node.style.height = "auto";
-    const nextHeight = Math.min(Math.max(node.scrollHeight, minHeight), rowMaxHeight);
+    const contentHeight = node.scrollHeight;
+    const nextHeight = Math.min(Math.max(contentHeight, minHeight), rowMaxHeight);
     node.style.height = `${nextHeight}px`;
-    node.style.overflowY = node.scrollHeight > rowMaxHeight ? "auto" : "hidden";
+    node.style.overflowY = contentHeight > rowMaxHeight ? "auto" : "hidden";
   }, [maxRows, minRows, resolvedValue]);
 
   return <textarea {...props} ref={(node) => { textareaRef.current = node; assignTextareaRef(forwardedRef, node); }} rows={props.rows ?? minRows} value={resolvedValue} onChange={(event) => { onChange?.(event); if (!event.defaultPrevented) onValueChange(event.target.value); }} className={cx("ai-elements-prompt-input-textarea", "wb-ai-prompt-textarea", className)} style={{ ...style, ...(maxHeight !== undefined ? { maxHeight: typeof maxHeight === "number" ? `${maxHeight}px` : maxHeight } : {}) }} disabled={disabled || status === "streaming"} aria-label={props["aria-label"] ?? (locale === "zh" ? "消息输入" : "Message input")} aria-busy={status === "streaming"} onCompositionStart={(event) => { composingRef.current = true; props.onCompositionStart?.(event); }} onCompositionEnd={(event) => { composingRef.current = false; props.onCompositionEnd?.(event); }} onKeyDown={(event) => { onKeyDown?.(event); if (event.defaultPrevented) return; const nativeComposing = Boolean((event.nativeEvent as unknown as { isComposing?: boolean }).isComposing); if (shouldSubmitPromptInput({ key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey, isComposing: nativeComposing }, composingRef.current, submitMode)) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />;
