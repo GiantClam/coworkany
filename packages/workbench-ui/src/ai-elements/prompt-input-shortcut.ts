@@ -1,10 +1,10 @@
+export type PromptInputSubmitMode = "modifier-enter" | "enter";
+
 export function shouldSubmitPromptInput(
-  event: { key: string; ctrlKey: boolean; shiftKey: boolean; isComposing: boolean },
+  event: { key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; isComposing: boolean },
   compositionActive: boolean,
+  mode: PromptInputSubmitMode = "modifier-enter",
 ) {
-  return event.key === "Enter"
-    && event.ctrlKey
-    && !event.shiftKey
-    && !event.isComposing
-    && !compositionActive;
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing || compositionActive) return false;
+  return mode === "enter" || event.ctrlKey || event.metaKey;
 }

@@ -2,12 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { shouldSubmitPromptInput } from "../src/ai-elements/prompt-input-shortcut";
 
-test("submits only for Ctrl+Enter outside composition", () => {
-  assert.equal(shouldSubmitPromptInput({ key: "Enter", ctrlKey: true, shiftKey: false, isComposing: false }, false), true);
-  assert.equal(shouldSubmitPromptInput({ key: "Enter", ctrlKey: false, shiftKey: false, isComposing: false }, false), false);
-  assert.equal(shouldSubmitPromptInput({ key: "Enter", ctrlKey: true, shiftKey: true, isComposing: false }, false), false);
-  assert.equal(shouldSubmitPromptInput({ key: "Enter", ctrlKey: true, shiftKey: false, isComposing: true }, false), false);
-  assert.equal(shouldSubmitPromptInput({ key: "Enter", ctrlKey: true, shiftKey: false, isComposing: false }, true), false);
-  assert.equal(shouldSubmitPromptInput({ key: "Enter", ctrlKey: false, shiftKey: false, isComposing: false }, false), false);
-  assert.equal(shouldSubmitPromptInput({ key: "x", ctrlKey: true, shiftKey: false, isComposing: false }, false), false);
+const enter = { key: "Enter", ctrlKey: false, metaKey: false, shiftKey: false, isComposing: false };
+
+test("keeps modifier-enter as the shared default", () => {
+  assert.equal(shouldSubmitPromptInput(enter, false), false);
+  assert.equal(shouldSubmitPromptInput({ ...enter, ctrlKey: true }, false), true);
+  assert.equal(shouldSubmitPromptInput({ ...enter, metaKey: true }, false), true);
+  assert.equal(shouldSubmitPromptInput({ ...enter, ctrlKey: true, shiftKey: true }, false), false);
+});
+
+test("supports ChatGPT-style Enter send as an opt-in mode", () => {
+  assert.equal(shouldSubmitPromptInput(enter, false, "enter"), true);
+  assert.equal(shouldSubmitPromptInput({ ...enter, shiftKey: true }, false, "enter"), false);
+  assert.equal(shouldSubmitPromptInput({ ...enter, isComposing: true }, false, "enter"), false);
+  assert.equal(shouldSubmitPromptInput(enter, true, "enter"), false);
+  assert.equal(shouldSubmitPromptInput({ ...enter, key: "x" }, false, "enter"), false);
 });

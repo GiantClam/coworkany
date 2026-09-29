@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, forwardRef, useCallback, useContext, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type FormEvent, type HTMLAttributes, type ReactNode, type RefObject, type TextareaHTMLAttributes } from "react";
+import React, { createContext, forwardRef, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type FormEvent, type HTMLAttributes, type ReactNode, type RefObject, type TextareaHTMLAttributes } from "react";
 import { useControllableState } from "@radix-ui/react-use-controllable-state";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Accordion from "@radix-ui/react-accordion";
@@ -14,7 +14,7 @@ import { Streamdown, type Components } from "streamdown";
 import { Check, ChevronDown, Copy, Download, ExternalLink, FileText, LoaderCircle, Paperclip, Plus, Search, Send, Square, X } from "lucide-react";
 import { MediaControlBar, MediaController, MediaDurationDisplay, MediaMuteButton, MediaPlayButton, MediaSeekBackwardButton, MediaSeekForwardButton, MediaTimeDisplay, MediaTimeRange, MediaVolumeRange } from "media-chrome/react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./collapsible";
-import { shouldSubmitPromptInput } from "./prompt-input-shortcut";
+import { shouldSubmitPromptInput, type PromptInputSubmitMode } from "./prompt-input-shortcut";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export type AIElementStatus = "queued" | "running" | "streaming" | "waiting" | "blocked" | "completed" | "succeeded" | "failed" | "cancelled" | "denied";
@@ -214,10 +214,36 @@ export function PromptInputTools({ children, className, ...props }: HTMLAttribut
 export function PromptInputActions({ children, className, ...props }: HTMLAttributes<HTMLDivElement>) { return <div {...props} className={cx("ai-elements-prompt-input-actions", "wb-ai-prompt-actions", className)} data-slot="prompt-input-actions">{children}</div>; }
 export function PromptInputAction({ children, tooltip, className, ...props }: { children: ReactNode; tooltip?: ReactNode; className?: string } & HTMLAttributes<HTMLSpanElement>) { return <span {...props} className={cx("ai-elements-prompt-input-action", className)} title={typeof tooltip === "string" ? tooltip : undefined} data-slot="prompt-input-action">{children}</span>; }
 
-export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(function PromptInputTextarea({ className, onChange, onKeyDown, style, value: inputValue, ...props }, ref) {
+type PromptInputTextareaProps = TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  submitMode?: PromptInputSubmitMode;
+  minRows?: number;
+  maxRows?: number;
+};
+
+function assignTextareaRef(ref: React.ForwardedRef<HTMLTextAreaElement>, node: HTMLTextAreaElement | null) {
+  if (typeof ref === "function") ref(node);
+  else if (ref) ref.current = node;
+}
+
+export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, PromptInputTextareaProps>(function PromptInputTextarea({ className, onChange, onKeyDown, style, value: inputValue, submitMode = "modifier-enter", minRows = 1, maxRows, ...props }, forwardedRef) {
   const { value, onValueChange, status, disabled, maxHeight, locale } = usePromptInputContext();
   const composingRef = useRef(false);
-  return <textarea {...props} ref={ref} value={inputValue ?? value} onChange={(event) => { onChange?.(event); if (!event.defaultPrevented) onValueChange(event.target.value); }} className={cx("ai-elements-prompt-input-textarea", "wb-ai-prompt-textarea", className)} style={{ ...style, ...(maxHeight !== undefined ? { maxHeight: typeof maxHeight === "number" ? `${maxHeight}px` : maxHeight } : {}) }} disabled={disabled || status === "streaming"} aria-label={props["aria-label"] ?? (locale === "zh" ? "消息输入" : "Message input")} aria-busy={status === "streaming"} onCompositionStart={(event) => { composingRef.current = true; props.onCompositionStart?.(event); }} onCompositionEnd={(event) => { composingRef.current = false; props.onCompositionEnd?.(event); }} onKeyDown={(event) => { onKeyDown?.(event); if (event.defaultPrevented) return; const nativeComposing = Boolean((event.nativeEvent as unknown as { isComposing?: boolean }).isComposing); if (shouldSubmitPromptInput({ key: event.key, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, isComposing: nativeComposing }, composingRef.current)) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />;
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const resolvedValue = inputValue ?? value;
+
+  useLayoutEffect(() => {
+    const node = textareaRef.current;
+    if (!node || maxRows === undefined) return;
+    const lineHeight = Number.parseFloat(window.getComputedStyle(node).lineHeight) || 24;
+    const minHeight = lineHeight * Math.max(1, minRows);
+    const rowMaxHeight = lineHeight * Math.max(minRows, maxRows);
+    node.style.height = "auto";
+    const nextHeight = Math.min(Math.max(node.scrollHeight, minHeight), rowMaxHeight);
+    node.style.height = `${nextHeight}px`;
+    node.style.overflowY = node.scrollHeight > rowMaxHeight ? "auto" : "hidden";
+  }, [maxRows, minRows, resolvedValue]);
+
+  return <textarea {...props} ref={(node) => { textareaRef.current = node; assignTextareaRef(forwardedRef, node); }} rows={props.rows ?? minRows} value={resolvedValue} onChange={(event) => { onChange?.(event); if (!event.defaultPrevented) onValueChange(event.target.value); }} className={cx("ai-elements-prompt-input-textarea", "wb-ai-prompt-textarea", className)} style={{ ...style, ...(maxHeight !== undefined ? { maxHeight: typeof maxHeight === "number" ? `${maxHeight}px` : maxHeight } : {}) }} disabled={disabled || status === "streaming"} aria-label={props["aria-label"] ?? (locale === "zh" ? "消息输入" : "Message input")} aria-busy={status === "streaming"} onCompositionStart={(event) => { composingRef.current = true; props.onCompositionStart?.(event); }} onCompositionEnd={(event) => { composingRef.current = false; props.onCompositionEnd?.(event); }} onKeyDown={(event) => { onKeyDown?.(event); if (event.defaultPrevented) return; const nativeComposing = Boolean((event.nativeEvent as unknown as { isComposing?: boolean }).isComposing); if (shouldSubmitPromptInput({ key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey, isComposing: nativeComposing }, composingRef.current, submitMode)) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />;
 });
 
 export function PromptInputSubmit({ children, className, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {

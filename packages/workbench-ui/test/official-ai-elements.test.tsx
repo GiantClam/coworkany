@@ -19,6 +19,12 @@ test("official PromptInput compound exposes the documented slots and submit sema
   assert.match(markup, /type="submit"/);
 });
 
+test("official PromptInput textarea exposes opt-in compact rows", () => {
+  const markup = renderToStaticMarkup(<PromptInput value="hello" onValueChange={() => undefined} onSubmit={() => undefined}><PromptInputBody><PromptInputTextarea minRows={1} maxRows={3} submitMode="enter" /></PromptInputBody></PromptInput>);
+  assert.match(markup, /rows="1"/);
+  assert.match(markup, /data-slot="prompt-input-body"/);
+});
+
 test("official PromptInput provider exposes composable controller state", () => {
   const markup = renderToStaticMarkup(<PromptInputProvider initialInput="provider text"><PromptInputControllerProbe /><PromptInput onSubmit={() => undefined}><PromptInputBody><PromptInputTextarea name="message" /></PromptInputBody><PromptInputFooter><PromptInputSubmit /></PromptInputFooter></PromptInput></PromptInputProvider>);
   assert.match(markup, /data-controller-value="provider text"/);
