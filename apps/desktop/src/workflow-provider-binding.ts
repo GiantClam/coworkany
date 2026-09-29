@@ -1,4 +1,4 @@
-import { capabilityForWorkflowAction, configuredModelOptions, providerForCapability, providerForId, supportsProviderCapability, type DesktopProviderConfig } from "./provider-config";
+import { capabilityForWorkflowAction, configuredModelOptions, providerForCapability, providerForId, supportsProviderCapability, supportsRunningHubWorkflowCapability, type DesktopProviderConfig } from "./provider-config";
 import type { WorkflowDefinitionEnvelope, WorkflowNodeType } from "@coworkany/workflow-core";
 
 type WorkflowProviderConfig = {
@@ -52,12 +52,11 @@ export function bindWorkflowProviderDefaults(definition: WorkflowDefinitionEnvel
       const capability = capabilityForWorkflowAction(node.type as WorkflowNodeType);
       const selectedProviderId = typeof nodeConfig.selectedProviderId === "string" ? nodeConfig.selectedProviderId.trim() : "";
       const selectedProfile = selectedProviderId ? config.providers?.[selectedProviderId] : undefined;
-      const provider = selectedProfile && supportsProviderCapability(selectedProfile, capability)
+      const runningHubCapability = runningHubWorkflowCapabilityForNode(node);
+      const provider = selectedProfile && (supportsProviderCapability(selectedProfile, capability) || (runningHubCapability && supportsRunningHubWorkflowCapability(selectedProfile, runningHubCapability)))
         ? providerForId(config, selectedProviderId)
-        : selectedProfile && node.type === "agent_execute" && node.config.operation === "audio_transcription" && selectedProfile.source?.trim().toLowerCase() === "runninghub" && selectedProfile.workflows?.some((workflow) => workflow.capability === "audio_transcription")
-          ? providerForId(config, selectedProviderId)
         : providerForCapability(config, capability);
-      const workflowCapability = runningHubWorkflowCapabilityForNode(node);
+      const workflowCapability = runningHubCapability;
       const registeredWorkflows = isRunningHubProvider(provider) && workflowCapability
         ? provider.workflows?.filter((workflow) => workflow.capability === workflowCapability) ?? []
         : [];

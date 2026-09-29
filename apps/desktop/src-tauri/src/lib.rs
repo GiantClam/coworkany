@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 use std::fs;
 mod storage;
@@ -627,6 +627,29 @@ fn merge_portable_provider_config(current: &serde_json::Value, imported: &serde_
         let mut defaults = merged.get("defaults").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
         for (capability, provider_id) in imported_defaults { defaults.insert(capability.clone(), provider_id.clone()); }
         merged["defaults"] = serde_json::Value::Object(defaults);
+    }
+    merged
+}
+
+/// 同步客户包内置的 Provider 配置，不覆盖用户数据。
+/// 客户包中的 Provider 和默认路由以种子配置为准，用户工作目录、运行时路径等设置保持不变。
+fn merge_customer_seed_provider_config(current: &serde_json::Value, seed: &serde_json::Value) -> serde_json::Value {
+    let mut merged = current.clone();
+    if is_default_portable_text_config(current) {
+        if let Some(provider) = seed.get("provider") { merged["provider"] = provider.clone(); }
+    }
+    if let Some(seed_profiles) = seed.get("providers").and_then(serde_json::Value::as_object) {
+        let mut profiles = merged.get("providers").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
+        for (id, profile) in seed_profiles { profiles.insert(id.clone(), profile.clone()); }
+        merged["providers"] = serde_json::Value::Object(profiles);
+    }
+    if let Some(seed_defaults) = seed.get("defaults").and_then(serde_json::Value::as_object) {
+        let mut defaults = merged.get("defaults").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
+        for (capability, provider_id) in seed_defaults { defaults.insert(capability.clone(), provider_id.clone()); }
+        merged["defaults"] = serde_json::Value::Object(defaults);
+    }
+    if seed.get("packageType").and_then(serde_json::Value::as_str) == Some("customer") {
+        merged["packageType"] = serde_json::Value::String("customer".to_string());
     }
     merged
 }
@@ -1394,6 +1417,16 @@ fn write_config(app: tauri::AppHandle, value: serde_json::Value) -> Result<(), S
 }
 
 #[tauri::command]
+fn append_diagnostic_log(app: tauri::AppHandle, event: String, details: serde_json::Value, run_id: Option<String>) -> Result<(), String> {
+    let data = data_dir(&app)?;
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_millis()).unwrap_or(0);
+    let record = serde_json::json!({ "timestamp": timestamp, "component": "desktop-ui", "event": event, "details": details });
+    let stream = run_id.as_deref().filter(|value| !value.trim().is_empty()).unwrap_or("desktop");
+    logs::append(&data, stream, &record.to_string());
+    Ok(())
+}
+
+#[tauri::command]
 fn runtime_paths(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let distribution_root = platform::distribution_root(&executable);
@@ -1585,11 +1618,12 @@ fn relaunch_customer_package() -> Result<bool, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let app_bundle = executable.parent().and_then(Path::parent).and_then(Path::parent).ok_or_else(|| "macos_app_bundle_missing".to_string())?;
     let package_root = platform::distribution_root(&executable);
-    let customer_marker = app_bundle.join("Contents/Resources/customer-package.flag");
-    if !customer_marker.is_file() { return Ok(false); }
+    let bundled_marker = app_bundle.join("Contents/Resources/customer-package.flag");
+    let adjacent_marker = package_root.join("customer-package.flag");
+    if !bundled_marker.is_file() && !adjacent_marker.is_file() { return Ok(false); }
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return Ok(false); };
     let downloads = home.join("Downloads");
-    let marker = fs::read_to_string(&customer_marker).unwrap_or_default();
+    let marker = fs::read_to_string(if bundled_marker.is_file() { &bundled_marker } else { &adjacent_marker }).unwrap_or_default();
     let Some(package_name) = customer_package_id(&marker, &package_root, &downloads) else { return Ok(false); };
     let destination = home.join("Library/Application Support/CoworkAny/customer-packages").join(package_name);
     if package_root == destination { return Ok(false); }
@@ -1610,6 +1644,14 @@ fn relaunch_customer_package() -> Result<bool, String> {
             if !source.is_file() { return Err(format!("customer_package_seed_missing:{name}")); }
             fs::copy(source, target).map_err(|error| format!("customer_package_seed_copy_failed:{name}:{error}"))?;
         }
+    }
+    let seed_config = seed.join("config.json");
+    let target_config = data.join("config.json");
+    if seed_config.is_file() && target_config.is_file() {
+        let current = config::read(&target_config, &data)?;
+        let seed_value = config::read(&seed_config, seed.parent().unwrap_or(seed.as_path()))?;
+        let merged = merge_customer_seed_provider_config(&current, &seed_value);
+        if merged != current { config::write(&target_config, &merged)?; }
     }
     Command::new("/usr/bin/open").args(["-n"]).arg(&copied_app).spawn().map_err(|error| format!("customer_package_relaunch_failed: {error}"))?;
     Ok(true)
@@ -1665,7 +1707,7 @@ pub fn run() {
             *state.0.lock().map_err(|_| "startup_state_poisoned")? = Some(StartupResults { local_state, runtime });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, apply_workflow_ai_operation, list_workflow_ai_operation_groups, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
+        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, append_diagnostic_log, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, apply_workflow_ai_operation, list_workflow_ai_operation_groups, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
     let app = builder.build(tauri::generate_context!()).expect("error while building CoworkAny");
     drop(startup_progress);
     app.run(|app, event| {
@@ -1699,7 +1741,7 @@ fn adjacent_instance_lock_path(data_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, customer_package_id, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, customer_package_id, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, merge_customer_seed_provider_config, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
     #[cfg(target_os = "macos")]
     use super::macos_workflow_output_save_script;
     use std::fs;
@@ -1727,6 +1769,32 @@ mod tests {
         assert_eq!(customer_package_id("customer-custom-intel-v0.1.36\n", package, downloads).as_deref(), Some("customer-custom-intel-v0.1.36"));
         assert_eq!(customer_package_id("../escape", package, downloads), None);
         assert_eq!(customer_package_id("", Path::new("/Users/customer/Downloads/legacy-customer"), downloads).as_deref(), Some("legacy-customer"));
+    }
+
+    #[test]
+    fn customer_seed_merges_provider_profiles_without_replacing_user_workspace_settings() {
+        let current = serde_json::json!({
+            "schemaVersion": 1,
+            "packageType": "customer",
+            "workspacePath": "/user/projects",
+            "runtime": { "source": "private" },
+            "provider": { "id": "local", "source": "local", "model": "" },
+            "providers": { "user-provider": { "id": "user-provider", "source": "openai-compatible", "model": "user-model" } },
+            "defaults": { "text": "user-provider" }
+        });
+        let seed = serde_json::json!({
+            "packageType": "customer",
+            "provider": { "id": "text-main", "source": "deepseek", "model": "customer-model" },
+            "providers": { "image-main": { "id": "image-main", "source": "pptoken", "model": "gpt-image-2.5" } },
+            "defaults": { "image": "image-main" }
+        });
+        let merged = merge_customer_seed_provider_config(&current, &seed);
+        assert_eq!(merged["workspacePath"], "/user/projects");
+        assert_eq!(merged["runtime"]["source"], "private");
+        assert_eq!(merged["provider"]["id"], "text-main");
+        assert!(merged["providers"]["user-provider"].is_object());
+        assert_eq!(merged["providers"]["image-main"]["model"], "gpt-image-2.5");
+        assert_eq!(merged["defaults"]["image"], "image-main");
     }
 
     #[cfg(target_os = "macos")]

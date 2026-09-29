@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { configuredModelOptions, configuredProviderEntries, isDevelopmentRunningHubWorkflowId, modelOptionsForProvider, preferredConfiguredModel, providerForCapability, providerForId, supportsProviderCapability, usableRunningHubWorkflowId, type DesktopProviderConfig } from "../src/provider-config";
+import { configuredModelOptions, configuredProviderEntries, isDevelopmentRunningHubWorkflowId, modelOptionsForProvider, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, supportsProviderCapability, usableRunningHubWorkflowId, type DesktopProviderConfig } from "../src/provider-config";
 
 const text: DesktopProviderConfig = { id: "text", model: "text/model", baseUrl: "https://text.test/v1" };
 const image: DesktopProviderConfig = { id: "image", model: "image/model", baseUrl: "https://image.test/v1" };
@@ -114,6 +114,24 @@ test("legacy top-level providers remain visible in settings", () => {
   const provider: DesktopProviderConfig = { id: "local", source: "pptoken", model: "gpt-image-2.5" };
   assert.deepEqual(configuredProviderEntries({ provider }), [["local", provider]]);
   assert.deepEqual(configuredProviderEntries({ provider: { id: "local", source: "local", model: "" } }), []);
+});
+
+test("provider imports accept full config and preserve RunningHub workflows", () => {
+  const imported = parseProviderImport({
+    provider: { id: "fallback", source: "openai-compatible", model: "text/model" },
+    providers: { runninghub: { source: "runninghub", models: ["workflow-1"], workflows: [{ id: "workflow-1", remoteWorkflowId: "workflow-1" }] } },
+    defaults: { video: "runninghub" },
+    workspacePath: "/ignored",
+  });
+  assert.equal(imported.provider?.id, "fallback");
+  assert.equal(imported.providers.runninghub?.workflows?.[0].remoteWorkflowId, "workflow-1");
+  assert.equal(imported.defaults?.video, "runninghub");
+});
+
+test("provider imports reject malformed profiles", () => {
+  assert.throws(() => parseProviderImport({ providers: { broken: { models: [42] } } }), /provider_import_models_invalid/);
+  assert.throws(() => parseProviderImport({ providers: { broken: { workflows: [{}] } } }), /provider_import_workflows_invalid/);
+  assert.throws(() => parseProviderImport({ providers: { image }, defaults: { image: "missing" } }), /provider_import_defaults_invalid/);
 });
 
 test("capability defaults recover from an existing incompatible profile", () => {

@@ -98,7 +98,9 @@ test("built workflow-host completes a local file workflow without network egress
     }, 20_000);
     const event = (terminal.data as Record<string, unknown>).event as Record<string, unknown>;
     assert.equal(event.event, "done", JSON.stringify(event));
-    assert.equal(child.stderr.join(""), "");
+    const diagnostics = child.stderr.join("").trim().split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line) as { component?: string; event?: string });
+    assert.ok(diagnostics.length > 0);
+    assert.ok(diagnostics.every((entry) => entry.component === "workflow-host" && typeof entry.event === "string"));
   } finally {
     if (child.child.exitCode === null) {
       const stopped = new Promise<void>((resolveClose) => child.child.once("close", () => resolveClose()));

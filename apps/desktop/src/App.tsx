@@ -17,7 +17,7 @@ import { buildAgencyAgentGroups } from "./agency-agent-catalog";
 import { closeDesktopMediaTab, createDesktopMediaTab, openDesktopMediaTab, syncDesktopMediaTabModel, type DesktopMediaTabState } from "./media-tabs";
 import { PROVIDER_PLATFORM_OPTIONS, platformIdForProvider, providerPlatformForId } from "./provider-platforms";
 import { capabilityEnglish, desktopCopy, desktopWriterCopy, homeGroupLabels, mediaEnglish, mediaFieldEnglish, mediaOptionEnglish, mediaPlaceholderEnglish, mediaSubmitEnglish, mediaSummaryEnglish, quickPromptsForDesktopRoute, resolveDesktopLocale, workflowActionEnglish, writerContentTypeEnglish, writerLanguageEnglish, writerModeEnglish, writerPlatformEnglish, type DesktopLocalePreference } from "./i18n";
-import { capabilityForWorkflowAction, configuredModelOptions, configuredProviderEntries, isDevelopmentRunningHubWorkflowId, isMediaProviderConfigured, modelOptionsForProvider, preferredConfiguredModel, providerForCapability, providerForId, requiresConfiguredProviderForWorkflowAction, supportsProviderCapability, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "./provider-config";
+import { capabilityForWorkflowAction, configuredModelOptions, configuredProviderEntries, isDevelopmentRunningHubWorkflowId, isMediaProviderConfigured, modelOptionsForProvider, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, requiresConfiguredProviderForWorkflowAction, supportsProviderCapability, supportsRunningHubWorkflowCapability, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "./provider-config";
 import { bindWorkflowProviderDefaults, isMediaWorkflowNodeType } from "./workflow-provider-binding";
 import { applyConfiguredMediaModels } from "./media-model-options";
 import { buildDesktopImageRunInput, getDesktopImageParameterSchema, normalizeDesktopImageSettings, resolveDesktopImageModelKind } from "./image-model-parameters";
@@ -224,6 +224,24 @@ function embeddingPayload(config: DesktopConfig): EmbeddingConfig {
   return config.embedding?.mode === "remote"
     ? { mode: "remote", baseUrl: config.embedding.baseUrl, model: config.embedding.model, apiKey: config.embedding.apiKey }
     : { mode: "local", baseUrl: "http://127.0.0.1:11434", model: "nomic-embed-text" };
+}
+
+function diagnosticProviderSummary(provider: DesktopProviderConfig | undefined) {
+  if (!provider) return null;
+  return {
+    id: provider.id ?? "",
+    source: provider.source ?? "",
+    model: provider.model ?? "",
+    hasBaseUrl: Boolean(provider.baseUrl?.trim()),
+    hasApiKey: Boolean(provider.apiKey?.trim()),
+    workflowCount: Array.isArray(provider.workflows) ? provider.workflows.length : 0,
+    workflowCapabilities: Array.isArray(provider.workflows) ? [...new Set(provider.workflows.map((workflow) => workflow.capability))] : [],
+  };
+}
+
+function appendDesktopDiagnostic(event: string, details: Record<string, unknown>, runId?: string) {
+  if (!isTauriBridgeAvailable()) return;
+  void tauriBridge.invoke("append_diagnostic_log", { event, details, ...(runId ? { runId } : {}) }).catch(() => undefined);
 }
 type SavedWorkflow = { id: string; name: string; definition_json: string; updated_at: string };
 type WorkflowStatus = "draft" | "live" | "archived";
@@ -3628,6 +3646,7 @@ function DesktopSettingsPanel({
   copy,
   onConfigChange,
   onDiscoverModels,
+  onImportProviders,
   onLocalePreferenceChange,
   onClose,
   onSave,
@@ -3643,6 +3662,7 @@ function DesktopSettingsPanel({
   copy: typeof desktopCopy.zh | typeof desktopCopy.en;
   onConfigChange: (next: DesktopConfig) => void;
   onDiscoverModels: (provider: Pick<DesktopProviderConfig, "source" | "id" | "baseUrl" | "apiKey">, capability: ProviderCapability) => Promise<readonly string[]>;
+  onImportProviders: (file: File) => Promise<void>;
   onLocalePreferenceChange: (next: DesktopLocalePreference) => void;
   onClose: () => void;
   onSave: () => void;
@@ -3660,6 +3680,7 @@ function DesktopSettingsPanel({
   };
   const [profilesText, setProfilesText] = useState(() => JSON.stringify(config.providers ?? {}, null, 2));
   const [settingsSection, setSettingsSection] = useState<"workspace" | "providers" | "runtime">("workspace");
+  const providerImportInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { setProfilesText(JSON.stringify(config.providers ?? {}, null, 2)); }, [config.providers]);
   const updateProvider = (patch: Partial<DesktopConfig["provider"]>) => onConfigChange({ ...config, provider: { ...config.provider, ...patch } });
   const updateEmbedding = (patch: Partial<EmbeddingConfig>) => onConfigChange({ ...config, embedding: { mode: config.embedding?.mode ?? "local", ...config.embedding, ...patch } });
@@ -3691,7 +3712,7 @@ function DesktopSettingsPanel({
     <label>{ui.index}<input value={config.obsidianIndexPath ?? ""} onChange={(event) => onConfigChange({ ...config, obsidianIndexPath: event.target.value || undefined })} placeholder={ui.indexPlaceholder} /></label>
     <label>{ui.embeddingMode}<select value={config.embedding?.mode ?? "local"} onChange={(event) => updateEmbedding({ mode: event.target.value as EmbeddingConfig["mode"] })}><option value="local">{ui.localEmbedding}</option><option value="remote">{ui.remoteEmbedding}</option></select></label>
     {config.embedding?.mode === "remote" ? <><label>{ui.embeddingBaseUrl}<input value={config.embedding.baseUrl ?? ""} onChange={(event) => updateEmbedding({ baseUrl: event.target.value })} placeholder="https://…/v1" /></label><label>{ui.embeddingModel}<input value={config.embedding.model ?? ""} onChange={(event) => updateEmbedding({ model: event.target.value })} /></label><label>{ui.embeddingApiKey}<SettingsSecretInput value={config.embedding.apiKey ?? ""} onChange={(apiKey) => updateEmbedding({ apiKey })} /></label><p className="settings-inline-hint">{ui.remoteEmbeddingHint}</p></> : <p className="settings-inline-hint">{ui.localEmbeddingHint}</p>}
-    <div id="settings-providers" className="settings-section-heading"><strong>{locale === "zh" ? "Provider 与模型" : "Providers & models"}</strong><span>{locale === "zh" ? "按能力路由文本、图片、视频和音频" : "Route text, image, video, and audio by capability"}</span></div>
+    <div id="settings-providers" className="settings-section-heading settings-provider-section-heading"><div><strong>{locale === "zh" ? "Provider 与模型" : "Providers & models"}</strong><span>{locale === "zh" ? "按能力路由文本、图片、视频和音频" : "Route text, image, video, and audio by capability"}</span></div><input ref={providerImportInputRef} type="file" accept="application/json,.json" hidden onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void onImportProviders(file); }} /><button type="button" className="ghost" onClick={() => providerImportInputRef.current?.click()}>{locale === "zh" ? "导入 Provider" : "Import providers"}</button></div>
     <DesktopConfiguredProviderProfiles config={config} locale={locale} onConfigChange={onConfigChange} onDiscoverModels={onDiscoverModels} />
     <details className="settings-provider-advanced"><summary>{locale === "zh" ? "高级 Provider 配置（音频与兼容回退）" : "Advanced Provider configuration (audio and fallback)"}</summary><div className="settings-provider-advanced-grid"><label>{ui.profiles}<textarea value={profilesText} onChange={(event) => updateProfiles(event.target.value)} spellCheck={false} /></label><p className="settings-inline-hint">{ui.profilesHint}</p><label>{ui.audioDefault}<select value={config.defaults?.audio ?? ""} onChange={(event) => updateDefault("audio", event.target.value)}><option value="">{config.provider.id}（fallback）</option>{profileIdsFor("audio").map((id) => <option key={`audio-${id}`} value={id}>{id}</option>)}</select></label><label>{locale === "zh" ? "兼容回退模型" : "Fallback model"}<input value={config.provider.model} onChange={(event) => updateProvider({ model: event.target.value, models: event.target.value.trim() ? [event.target.value.trim()] : [] })} placeholder={ui.modelPlaceholder} /></label><label>{locale === "zh" ? "兼容回退 Base URL" : "Fallback Base URL"}<input value={config.provider.baseUrl ?? ""} onChange={(event) => updateProvider({ baseUrl: event.target.value, source: event.target.value ? "openai-compatible" : "local" })} placeholder={ui.baseUrlPlaceholder} /></label><label>{locale === "zh" ? "兼容回退 API Key" : "Fallback API key"}<SettingsSecretInput value={config.provider.apiKey ?? ""} onChange={(apiKey) => updateProvider({ apiKey })} /></label></div></details>
     <div id="settings-runtime" className="settings-section-heading"><strong>{locale === "zh" ? "运行环境与诊断" : "Runtime & diagnostics"}</strong><span>{locale === "zh" ? "离线运行时、索引和诊断工具" : "Offline runtime, indexing, and diagnostics"}</span></div>
@@ -3866,7 +3887,7 @@ export function App() {
   const providerForWorkflowNode = (nodeType: string, selectedProviderId?: string) => {
     const capability = capabilityForWorkflowAction(nodeType);
     const selectedProfile = selectedProviderId ? config.providers?.[selectedProviderId] : undefined;
-    const selectedAudioTranscription = nodeType === "agent_execute" && selectedProfile?.source?.trim().toLowerCase() === "runninghub" && selectedProfile.workflows?.some((workflow) => workflow.capability === "audio_transcription");
+    const selectedAudioTranscription = nodeType === "agent_execute" && supportsRunningHubWorkflowCapability(selectedProfile ?? {}, "audio_transcription");
     return selectedProfile && (supportsProviderCapability(selectedProfile, capability) || selectedAudioTranscription)
       ? providerForId(config, selectedProviderId)
       : providerForCapability(config, capability);
@@ -3959,6 +3980,13 @@ export function App() {
       const snapshot = configRef.current;
       settingsConfigSaveQueueRef.current = settingsConfigSaveQueueRef.current.catch(() => undefined).then(async () => {
         try {
+          appendDesktopDiagnostic("settings_config_persist", {
+            revision,
+            profileIds: Object.keys(snapshot.providers ?? {}),
+            profileCount: Object.keys(snapshot.providers ?? {}).length,
+            defaults: snapshot.defaults ?? {},
+            hasPrimaryProvider: Boolean(snapshot.provider?.id),
+          });
           await tauriBridge.invoke("write_config", { value: snapshot });
           if (settingsConfigSaveRevisionRef.current === revision) setRunStatus(locale === "zh" ? "设置已自动保存到本机 config.json" : "Settings auto-saved to local config.json");
         } catch (error) {
@@ -3973,6 +4001,37 @@ export function App() {
       void write();
     }, 450);
     return Promise.resolve();
+  }
+
+  async function importProvidersFromFile(file: File) {
+    const fileName = file.name.replace(/^.*[\\/]/u, "").slice(0, 160);
+    appendDesktopDiagnostic("provider_import_started", { fileName });
+    try {
+      const imported = parseProviderImport(JSON.parse(await file.text()));
+      const current = configRef.current;
+      const importedProviders = Object.keys(imported.providers).length ? { ...(current.providers ?? {}), ...imported.providers } : current.providers;
+      const nextConfig: DesktopConfig = {
+        ...current,
+        provider: imported.provider ? { ...current.provider, ...imported.provider, model: imported.provider.model?.trim() || current.provider.model } : current.provider,
+        ...(importedProviders ? { providers: importedProviders } : {}),
+        ...(imported.defaults ? { defaults: { ...(current.defaults ?? {}), ...imported.defaults } } : {}),
+      };
+      appendDesktopDiagnostic("provider_import_applied", {
+        fileName,
+        importedProfileIds: Object.keys(imported.providers),
+        importedProfileCount: Object.keys(imported.providers).length,
+        mergedProfileIds: Object.keys(nextConfig.providers ?? {}),
+        mergedProfileCount: Object.keys(nextConfig.providers ?? {}).length,
+        importedDefaults: imported.defaults ?? {},
+        defaults: nextConfig.defaults ?? {},
+        importedPrimaryProvider: diagnosticProviderSummary(imported.provider),
+      });
+      await persistSettingsConfig(nextConfig, true);
+      setRunStatus(locale === "zh" ? `已导入 ${Object.keys(imported.providers).length} 个 Provider，并保存到本机 config.json` : `Imported ${Object.keys(imported.providers).length} providers and saved to local config.json`);
+    } catch (error) {
+      appendDesktopDiagnostic("provider_import_failed", { fileName, error: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240) });
+      setRunStatus(error instanceof Error ? (locale === "zh" ? `Provider 导入失败：${error.message}` : `Provider import failed: ${error.message}`) : (locale === "zh" ? "Provider 导入失败" : "Provider import failed"));
+    }
   }
 
   const updateSettingsLocalePreference = (nextLocale: DesktopLocalePreference) => {
@@ -4635,15 +4694,24 @@ export function App() {
         };
         const migratedStored = stored ? { ...stored, provider: { ...migrateProvider(stored.provider), model: stored.provider.model ?? "" }, ...(stored.providers ? { providers: Object.fromEntries(Object.entries(stored.providers).map(([id, profile]) => [id, migrateProvider(profile)])) } : {}) } : stored;
          let activeConfig = migratedStored;
-         if (migratedStored) {
-           const selectedProvider = { ...migratedStored.provider, model: preferredConfiguredModel(migratedStored.provider) };
-           const configChanged = JSON.stringify(migratedStored) !== JSON.stringify(stored) || selectedProvider.model !== migratedStored.provider.model;
-           activeConfig = configChanged ? { ...migratedStored, provider: selectedProvider } : migratedStored;
+          if (migratedStored) {
+            const selectedProvider = { ...migratedStored.provider, model: preferredConfiguredModel(migratedStored.provider) };
+            const configChanged = JSON.stringify(migratedStored) !== JSON.stringify(stored) || selectedProvider.model !== migratedStored.provider.model;
+            activeConfig = configChanged ? { ...migratedStored, provider: selectedProvider } : migratedStored;
+           configRef.current = activeConfig;
            setConfig(activeConfig);
            setSkillIdState(activeConfig.provider.skillId ?? "auto");
            setLocalePreference(activeConfig.locale ?? "auto");
-           if (configChanged) void tauriBridge.invoke("write_config", { value: activeConfig }).catch(() => undefined);
-         }
+            if (configChanged) await tauriBridge.invoke("write_config", { value: activeConfig }).catch(() => undefined);
+          }
+         appendDesktopDiagnostic("provider_config_loaded", {
+           source: "startup",
+           configPresent: Boolean(activeConfig),
+           profileIds: Object.keys(activeConfig?.providers ?? {}),
+           profileCount: Object.keys(activeConfig?.providers ?? {}).length,
+           defaults: activeConfig?.defaults ?? {},
+           primaryProvider: diagnosticProviderSummary(activeConfig?.provider),
+         });
         // Release the shell before hydrating the potentially large artifact,
         // run, and conversation collections. Native file inspection must not
         // make the whole desktop window look frozen.
@@ -4701,16 +4769,23 @@ export function App() {
         window.setTimeout(() => { void hydrateWorkbench(); }, 0);
          setRuntimePhase("runtime");
          setRuntimeStatus(locale === "zh" ? "正在读取桌面启动时的运行环境检查结果…" : "Reading the runtime checks completed during desktop startup…");
-        const runtime = await tauriBridge.invoke<RuntimeProbe>("runtime_status");
+         const runtime = await tauriBridge.invoke<RuntimeProbe>("runtime_status");
          if (migratedStored) {
-           const selectedRuntime = { ...migratedStored.runtime, ...(runtime.paths?.node ? { nodePath: runtime.paths.node } : {}), ...(runtime.paths?.opencode ? { opencodePath: runtime.paths.opencode } : {}), ...(runtime.paths?.python ? { pythonPath: runtime.paths.python } : {}), ...(runtime.paths?.host ? { hostPath: runtime.paths.host } : {}), ...(runtime.paths?.skills ? { skillsPath: runtime.paths.skills } : {}), ...(runtime.paths?.fonts ? { fontsPath: runtime.paths.fonts } : {}), ...(runtime.paths?.lancedb ? { lancedbPath: runtime.paths.lancedb } : {}), ...(runtime.paths?.embedding ? { embeddingPath: runtime.paths.embedding } : {}) };
-           const runtimeChanged = selectedRuntime.nodePath !== migratedStored.runtime.nodePath || selectedRuntime.opencodePath !== migratedStored.runtime.opencodePath || selectedRuntime.pythonPath !== migratedStored.runtime.pythonPath || selectedRuntime.hostPath !== migratedStored.runtime.hostPath || selectedRuntime.skillsPath !== migratedStored.runtime.skillsPath || selectedRuntime.fontsPath !== migratedStored.runtime.fontsPath || selectedRuntime.lancedbPath !== migratedStored.runtime.lancedbPath || selectedRuntime.embeddingPath !== migratedStored.runtime.embeddingPath;
-           if (runtimeChanged) {
-             activeConfig = { ...activeConfig!, runtime: selectedRuntime };
-             configRef.current = activeConfig;
-             setConfig(activeConfig);
-             void tauriBridge.invoke("write_config", { value: activeConfig }).catch(() => undefined);
-           }
+           const currentConfig = configRef.current;
+           const selectedRuntime = { ...currentConfig.runtime, ...(runtime.paths?.node ? { nodePath: runtime.paths.node } : {}), ...(runtime.paths?.opencode ? { opencodePath: runtime.paths.opencode } : {}), ...(runtime.paths?.python ? { pythonPath: runtime.paths.python } : {}), ...(runtime.paths?.host ? { hostPath: runtime.paths.host } : {}), ...(runtime.paths?.skills ? { skillsPath: runtime.paths.skills } : {}), ...(runtime.paths?.fonts ? { fontsPath: runtime.paths.fonts } : {}), ...(runtime.paths?.lancedb ? { lancedbPath: runtime.paths.lancedb } : {}), ...(runtime.paths?.embedding ? { embeddingPath: runtime.paths.embedding } : {}) };
+           const runtimeChanged = selectedRuntime.nodePath !== currentConfig.runtime.nodePath || selectedRuntime.opencodePath !== currentConfig.runtime.opencodePath || selectedRuntime.pythonPath !== currentConfig.runtime.pythonPath || selectedRuntime.hostPath !== currentConfig.runtime.hostPath || selectedRuntime.skillsPath !== currentConfig.runtime.skillsPath || selectedRuntime.fontsPath !== currentConfig.runtime.fontsPath || selectedRuntime.lancedbPath !== currentConfig.runtime.lancedbPath || selectedRuntime.embeddingPath !== currentConfig.runtime.embeddingPath;
+            if (runtimeChanged) {
+              activeConfig = { ...currentConfig, runtime: selectedRuntime };
+              configRef.current = activeConfig;
+              setConfig(activeConfig);
+              appendDesktopDiagnostic("runtime_config_merge", {
+                profileIds: Object.keys(activeConfig.providers ?? {}),
+                profileCount: Object.keys(activeConfig.providers ?? {}).length,
+                defaults: activeConfig.defaults ?? {},
+                runtimePathsUpdated: true,
+              });
+              void tauriBridge.invoke("write_config", { value: activeConfig }).catch(() => undefined);
+            }
          }
         if (!runtime.ready && runtime.development) {
           setRuntimeStatus(locale === "zh" ? "开发运行环境就绪（使用本机组件）" : "Development runtime ready (using local components)");
@@ -5996,10 +6071,25 @@ export function App() {
         return [node.nodeKey, allocated.relativePath] as const;
       })));
       await Promise.all(mediaNodes.map((node) => {
-         const nodeProvider = typeof node.config.provider === "string" && node.config.provider.trim() ? node.config.provider.trim() : selectedProvider.id;
-         const nodeModel = typeof node.config.model === "string" && node.config.model.trim() ? node.config.model.trim() : selectedProvider.model;
+          const nodeProvider = typeof node.config.provider === "string" && node.config.provider.trim() ? node.config.provider.trim() : selectedProvider.id;
+          const nodeModel = typeof node.config.model === "string" && node.config.model.trim() ? node.config.model.trim() : selectedProvider.model;
         return tauriBridge.invoke("record_run_attempt", { idempotencyKey: `${runId}:${node.nodeKey}:1`, runId, nodeKey: node.nodeKey, provider: nodeProvider || null, providerTaskId: null, status: "queued", payloadJson: JSON.stringify({ executorId: node.type, nodeKey: node.nodeKey, provider: nodeProvider, model: nodeModel, idempotencyKey: `${runId}:${node.nodeKey}:1`, status: "queued" }) });
       }));
+        appendDesktopDiagnostic("workflow_run_payload", {
+          actionId,
+          nodeCount: hostWorkflowDefinition.nodes.length,
+          nodes: hostWorkflowDefinition.nodes.map((node) => ({
+            nodeKey: node.nodeKey,
+            type: node.type,
+            provider: typeof node.config.provider === "string" ? node.config.provider : undefined,
+            model: typeof node.config.model === "string" ? node.config.model : undefined,
+          })),
+          profileIds: Object.keys(launchConfig.providers ?? {}),
+          profileCount: Object.keys(launchConfig.providers ?? {}).length,
+          defaults: launchConfig.defaults ?? {},
+          selectedProvider: diagnosticProviderSummary(selectedProvider),
+          providerMapPresent: Boolean(launchConfig.providers && Object.keys(launchConfig.providers).length),
+        }, runId);
         // The image-assistant route does not pass a mediaFeatureId because the
         // route itself selects image_generate. Use the resolved action here so
         // it can never fall through to the text/OpenCode conversation path.
@@ -6030,10 +6120,12 @@ export function App() {
           setSavedWorkflows((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
         }
         await sendHostMessage({ version: 1, requestId: runId, runId, type: "workflow.run", payload: { workspacePath: launchConfig.workspacePath, provider: selectedProvider, media: selectedProvider, providers: launchConfig.providers, vaultPath: launchConfig.obsidianVaultPath, indexPath: launchConfig.obsidianIndexPath, ...(launchConfig.runtime?.opencodePath ? { executable: launchConfig.runtime.opencodePath } : {}), mediaTempDirectories, definition: hostWorkflowDefinition, ...(workflowRetry ? { completed: workflowRetry.completed, recoveryDefinitionHash: executableRecoveryDefinitionHash } : {}) } });
+        appendDesktopDiagnostic("workflow_run_sent", { nodeCount: hostWorkflowDefinition.nodes.length, mediaNodeCount: mediaNodes.length }, runId);
       }
       if (!isWorkflowRun && runIsVisible()) setPrompt("");
       setDomainStatus(locale === "zh" ? "已发送，等待本地 Agent 事件…" : "Sent; waiting for local Agent events…");
     } catch (error) {
+      appendDesktopDiagnostic("workflow_run_error", { error: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240) }, runId);
       if (workflowKey) workflowLaunchLocksRef.current.delete(workflowKey);
       if (isWorkflowRun && workflowKey) updateWorkflowTracking(workflowKey, (current) => ({ ...current, status: "failed", snapshots: finalizeWorkflowNodeSnapshots(current.snapshots, "failed") }));
       const detail = error instanceof Error ? error.message : (locale === "zh" ? "本地 Agent 启动失败" : "Local Agent failed to start");
@@ -6134,7 +6226,7 @@ export function App() {
       <DesktopMediaHistoryContext.Provider value={mediaHistory}>
       <WorkbenchShell navItems={sidebarRoutes.map((item) => ({ ...item, icon: <RouteIcon name={item.iconKey} /> }))} activePath={activePath} onNavigate={workbenchClient.navigation.go} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((current) => !current)} locale={locale} onLocaleChange={(nextLocale) => { if (nextLocale !== locale) setLocalePreference(nextLocale); }} onLocaleToggle={toggleLocale} localLabel={copy.localWorkspace} status={<div className="wb-runtime-status" data-runtime-status={runtimeStatus} title={localizeRuntimeStatus(runtimeStatus, locale)}><span className="wb-runtime-status-icon"><WorkbenchRouteIcon name="runtime" size={15} /></span><span className="wb-runtime-status-copy"><span className="wb-runtime-status-label">{localizeRuntimeStatus(runtimeStatus, locale)}</span><span className="muted">{locale === "zh" ? "本地运行环境" : "Local runtime"}</span></span></div>} sessions={conversations.map((conversation) => ({ path: conversationRoute(conversation), title: conversation.title, updatedAt: formatDateTime(conversation.updated_at, locale), agentId: conversation.agent_id ?? undefined, status: runs.some((run) => run.conversation_id === conversation.id && run.status === "running") ? "running" as const : undefined }))} sessionsLabel={conversationScope === "entry:writer" ? (locale === "zh" ? "写作会话" : "Writing sessions") : conversationScope === "entry:image-assistant" ? (locale === "zh" ? "图片助手会话" : "Image assistant sessions") : locale === "zh" ? "最近会话" : "Recent chats"} activeSessionAgentId={conversationScope} activeSessionAgentLabel={activeAgentCard?.title ?? activeChatRoute.label} hideSessionScopes={["entry:image-assistant"]} newSessionLabel={locale === "zh" ? "新建会话" : "New chat"} onNewSession={() => void startNewConversation()}>
       <section ref={workspaceRef} className={`workspace ${selected.path === "/dashboard" ? "workspace-home" : ""} ${immersivePage ? "workspace-immersive" : ""}`.trim()}>
-      {settingsOpen && <DesktopSettingsPanel config={config} locale={locale} localePreference={localePreference} copy={copy} onConfigChange={(nextConfig) => { void persistSettingsConfig(nextConfig); }} onDiscoverModels={discoverProviderModels} onLocalePreferenceChange={updateSettingsLocalePreference} onClose={() => { void persistSettingsConfig({ ...configRef.current, locale: localePreference }, true); if (selected.path === "/dashboard/settings") workbenchClient.navigation.go("/dashboard"); setSettingsOpen(false); }} onSave={() => void saveSettings()} onRebuildVault={() => void rebuildVaultIndex()} onPickDirectory={(kind) => void pickDirectory(kind)} onRepairRuntime={() => { setRunStatus(locale === "zh" ? "正在导入离线运行时…" : "Importing offline runtime…"); void tauriBridge.invoke<RuntimeProbe>("repair_runtime", runtimeRepairOptions(config)).then((runtime) => { setRuntimeReady(runtime.ready); setRuntimePhase(runtime.ready ? "ready" : "error"); setRuntimeStatus(runtime.ready ? (locale === "zh" ? "运行环境就绪" : "Runtime ready") : (locale === "zh" ? "运行环境需要修复" : "Runtime needs repair")); setRunStatus(runtime.ready ? (locale === "zh" ? "已导入离线运行时并完成复检" : "Offline runtime imported and rechecked") : (locale === "zh" ? "运行时仍不完整" : "Runtime is still incomplete")); }).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "离线运行时导入失败" : "Offline runtime import failed"))); }} onExportDiagnostics={() => { setRunStatus(locale === "zh" ? "正在导出诊断包…" : "Exporting diagnostics…"); void tauriBridge.invoke<{ path: string }>("export_diagnostics").then((result) => setRunStatus(locale === "zh" ? `诊断包已导出：${result.path}` : `Diagnostics exported: ${result.path}`)).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "诊断包导出失败" : "Diagnostics export failed"))); }} status={runStatus} />}
+      {settingsOpen && <DesktopSettingsPanel config={config} locale={locale} localePreference={localePreference} copy={copy} onConfigChange={(nextConfig) => { void persistSettingsConfig(nextConfig); }} onDiscoverModels={discoverProviderModels} onImportProviders={importProvidersFromFile} onLocalePreferenceChange={updateSettingsLocalePreference} onClose={() => { void persistSettingsConfig({ ...configRef.current, locale: localePreference }, true); if (selected.path === "/dashboard/settings") workbenchClient.navigation.go("/dashboard"); setSettingsOpen(false); }} onSave={() => void saveSettings()} onRebuildVault={() => void rebuildVaultIndex()} onPickDirectory={(kind) => void pickDirectory(kind)} onRepairRuntime={() => { setRunStatus(locale === "zh" ? "正在导入离线运行时…" : "Importing offline runtime…"); void tauriBridge.invoke<RuntimeProbe>("repair_runtime", runtimeRepairOptions(config)).then((runtime) => { setRuntimeReady(runtime.ready); setRuntimePhase(runtime.ready ? "ready" : "error"); setRuntimeStatus(runtime.ready ? (locale === "zh" ? "运行环境就绪" : "Runtime ready") : (locale === "zh" ? "运行环境需要修复" : "Runtime needs repair")); setRunStatus(runtime.ready ? (locale === "zh" ? "已导入离线运行时并完成复检" : "Offline runtime imported and rechecked") : (locale === "zh" ? "运行时仍不完整" : "Runtime is still incomplete")); }).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "离线运行时导入失败" : "Offline runtime import failed"))); }} onExportDiagnostics={() => { setRunStatus(locale === "zh" ? "正在导出诊断包…" : "Exporting diagnostics…"); void tauriBridge.invoke<{ path: string }>("export_diagnostics").then((result) => setRunStatus(locale === "zh" ? `诊断包已导出：${result.path}` : `Diagnostics exported: ${result.path}`)).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "诊断包导出失败" : "Diagnostics export failed"))); }} status={runStatus} />}
            {isHomeRoute ? <>
           <div className="home-shell"><div className="home-page-shell"><header className="home-topbar"><div className="home-topbar-status"><span className="public-signal" aria-hidden="true" /><span>{homeCopy.workspaceReady}</span></div><button type="button" className="home-credits-link" onClick={() => workbenchClient.navigation.go("/dashboard/tasks")}><span className="home-credits-icon"><WorkbenchRouteIcon name="sparkles" size={14} /></span><span>{homeCopy.viewUsage}</span><WorkbenchRouteIcon name="arrowUpRight" size={15} /></button></header><main className="home-main"><section className="home-welcome"><div className="home-welcome-kicker">COWORKANY WORKSPACE</div><h1>{homeCopy.welcomePrefix}{homeCopy.welcomeDefaultName}<span className="home-welcome-mark" aria-hidden="true">✦</span></h1><p>{homeCopy.welcomeSubtitle}</p></section>
           <section className="home-chat-workspace"><div className="chat-composer"><WorkbenchPromptInput value={prompt} onValueChange={setPrompt} onSubmit={() => void runAgent()} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} models={activeModels.map((item) => ({ id: item, label: formatWorkbenchModelLabel(item, { zh: "本地模型", en: "Local model" }, locale), provider: locale === "zh" ? "已配置模型" : "Configured models" }))} model={activeModel} onModelChange={updateModel} placeholder={copy.homePlaceholder} status={activeRunId ? "streaming" : "ready"} onStop={() => void cancelActiveRun()} locale={locale}><span className="sr-only" aria-live="polite">{localizeDesktopStatus(runStatus, locale)}</span>{knowledgeContextEnabled ? <div className="composer-knowledge-control"><button type="button" className="composer-knowledge-button" onClick={() => setKnowledgeContextEnabled(false)}>{locale === "zh" ? "⌑ Obsidian 知识库" : "⌑ Obsidian context"}</button><button type="button" className="composer-knowledge-close" aria-label={locale === "zh" ? "关闭 Obsidian 知识库上下文" : "Disable Obsidian knowledge"} onClick={() => setKnowledgeContextEnabled(false)}>×</button></div> : <button type="button" className="composer-knowledge-button" onClick={() => setKnowledgeContextEnabled(true)}>{locale === "zh" ? "⌑ 添加 Obsidian 知识库" : "⌑ Add Obsidian context"}</button>}<ModelControls locale={locale} model={activeModel} models={activeModels} providerSource={formatWorkbenchModelLabel(activeModel, { zh: "本地模型", en: "Local model" }, locale)} reasoningEffort={reasoningEffort} skillId={skillId} showSkill={false} hideModel onModelChange={updateModel} onReasoningChange={updateReasoning} onSkillChange={setSkillId} /></WorkbenchPromptInput></div></section>

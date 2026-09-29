@@ -491,6 +491,14 @@ test("desktop startup keeps a visible progress surface during runtime hydration"
   assert.match(styleSource, /@keyframes bootstrap-spin/);
 });
 
+test("runtime path persistence keeps a Provider imported during startup", () => {
+  const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const runtimeUpdate = appSource.slice(appSource.indexOf("const runtime = await tauriBridge.invoke<RuntimeProbe>(\"runtime_status\")"));
+  assert.match(runtimeUpdate, /const currentConfig = configRef\.current/u);
+  assert.match(runtimeUpdate, /activeConfig = \{ \.\.\.currentConfig, runtime: selectedRuntime \}/u);
+  assert.doesNotMatch(runtimeUpdate, /\.\.\.migratedStored\.runtime/u);
+});
+
 test("shared prompt input follows the AI Elements header, body, footer contract", () => {
   const source = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/ai-elements/source.tsx"), "utf8");
   const wrapperSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/prompt-input.tsx"), "utf8");

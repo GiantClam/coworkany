@@ -224,6 +224,23 @@ process.once("SIGINT", () => { void shutdownHost(); });
 function respond(command: HostCommand, data: unknown) { writeRpcResponse(process.stdout, { version: 1, requestId: command.requestId, ok: true, data }); }
 function fail(command: HostCommand, code: string, message: string) { writeRpcResponse(process.stdout, { version: 1, requestId: command.requestId, ok: false, error: { code, message, retryable: false } }); }
 
+function diagnosticLog(event: string, details: Record<string, unknown>, runId?: string) {
+  process.stderr.write(`${JSON.stringify({ timestamp: new Date().toISOString(), component: "workflow-host", event, ...(runId ? { runId } : {}), ...details })}\n`);
+}
+
+function providerDiagnosticSummary(provider: ProviderConfig | undefined) {
+  if (!provider) return null;
+  return {
+    id: provider.id ?? "",
+    source: provider.source ?? "",
+    model: provider.model ?? "",
+    hasBaseUrl: Boolean(provider.baseUrl?.trim()),
+    hasApiKey: Boolean(provider.apiKey?.trim()),
+    workflowCount: provider.workflows?.length ?? 0,
+    workflowCapabilities: [...new Set((provider.workflows ?? []).map((workflow) => workflow.capability))],
+  };
+}
+
 function markRunCancelledBeforeStart(runId: string) {
   const existing = pendingCancelledRuns.get(runId);
   if (existing) clearTimeout(existing);
@@ -726,11 +743,27 @@ async function runRunningHubAudioTranscription(command: HostCommand, runId: stri
   const configuredProvider = command.payload?.provider && typeof command.payload.provider === "object" ? command.payload.provider as Record<string, unknown> : undefined;
   const providerId = typeof config.provider === "string" && config.provider.trim() ? config.provider.trim() : typeof config.selectedProviderId === "string" && config.selectedProviderId.trim() ? config.selectedProviderId.trim() : typeof configuredProvider?.id === "string" ? configuredProvider.id : "";
   const provider = providerProfiles[providerId] ?? readProvider(configuredProvider);
-  if (!provider || provider.source?.trim().toLowerCase() !== "runninghub") throw new Error("runninghub_audio_transcription_provider_required");
+  diagnosticLog("asr_provider_resolution", {
+    nodeKey,
+    executorId: "audio_transcription",
+    requestedProviderId: providerId,
+    profileIds: Object.keys(providerProfiles),
+    profileCount: Object.keys(providerProfiles).length,
+    profileMatched: Boolean(providerProfiles[providerId]),
+    provider: providerDiagnosticSummary(provider),
+    hasConfigModel: Boolean(typeof config.model === "string" && config.model.trim()),
+  }, runId);
+  if (!provider || provider.source?.trim().toLowerCase() !== "runninghub") {
+    diagnosticLog("workflow_provider_missing", { nodeKey, executorId: "audio_transcription", requestedProviderId: providerId, reason: "runninghub_provider_required" }, runId);
+    throw new Error("runninghub_audio_transcription_provider_required");
+  }
   const workflows = provider.workflows?.filter((workflow) => workflow.capability === "audio_transcription") ?? [];
   const requestedWorkflow = typeof config.selectedModelId === "string" && config.selectedModelId.trim() ? config.selectedModelId.trim() : typeof config.model === "string" ? config.model.trim() : "";
   const registration = workflows.find((workflow) => workflow.id === requestedWorkflow || workflow.remoteWorkflowId === requestedWorkflow) ?? (workflows.length === 1 ? workflows[0] : undefined);
-  if (!registration || registration.request?.kind !== "ai-app") throw new Error("runninghub_audio_transcription_registration_required");
+  if (!registration || registration.request?.kind !== "ai-app") {
+    diagnosticLog("workflow_provider_missing", { nodeKey, executorId: "audio_transcription", providerId, requestedWorkflow, workflowCount: workflows.length, reason: "audio_transcription_registration_required" }, runId);
+    throw new Error("runninghub_audio_transcription_registration_required");
+  }
   const providerOptions = { provider: (provider.id ?? providerId) as MediaProviderId, baseUrl: provider.baseUrl ?? "https://www.runninghub.cn", apiKey: provider.apiKey ?? "", fetchImpl: fetch, workspacePath };
   const inputSource = { ...config, ...inputs };
   const resolvedInputs = await resolveRegisteredWorkflowInputs(registration, inputSource, providerOptions, { signal, throwIfCancelled() { if (signal?.aborted) throw new Error("media_cancelled"); } });
@@ -816,6 +849,7 @@ function readProvider(value: unknown): ProviderConfig | undefined {
     ...(record.chunkTimeout === false || (typeof record.chunkTimeout === "number" && Number.isFinite(record.chunkTimeout) && record.chunkTimeout >= 0) ? { chunkTimeout: record.chunkTimeout } : {}),
     ...(typeof record.endpoint === "string" ? { endpoint: record.endpoint } : {}),
     ...(typeof record.queryEndpoint === "string" ? { queryEndpoint: record.queryEndpoint } : {}),
+    ...(Array.isArray(record.capabilities) ? { capabilities: record.capabilities.filter((value): value is string => typeof value === "string") } : {}),
     ...(typeof record.workflowId === "string" ? { workflowId: record.workflowId } : {}),
     ...(typeof record.digitalHumanWorkflowId === "string" ? { digitalHumanWorkflowId: record.digitalHumanWorkflowId } : {}),
     ...(typeof record.videoEnhanceWorkflowId === "string" ? { videoEnhanceWorkflowId: record.videoEnhanceWorkflowId } : {}),
@@ -1108,6 +1142,20 @@ async function runWorkflow(command: HostCommand) {
   const definition = command.payload?.definition;
   if (!definition || typeof definition !== "object") return fail(command, "invalid_workflow", "workflow definition is required");
   const runId = command.runId ?? randomUUID(); const workspacePath = workspacePathFromPayload(command.payload?.workspacePath) || process.cwd();
+  const providerProfiles = readProviderMap(command.payload?.providers);
+  const workflowNodes = Array.isArray((definition as { nodes?: unknown }).nodes) ? (definition as { nodes: unknown[] }).nodes : [];
+  diagnosticLog("workflow_run_received", {
+    nodeCount: workflowNodes.length,
+    nodes: workflowNodes.map((node) => {
+      const value = node && typeof node === "object" ? node as Record<string, unknown> : {};
+      const config = value.config && typeof value.config === "object" ? value.config as Record<string, unknown> : {};
+      return { nodeKey: typeof value.nodeKey === "string" ? value.nodeKey : "", type: typeof value.type === "string" ? value.type : "", provider: typeof config.provider === "string" ? config.provider : undefined, model: typeof config.model === "string" ? config.model : undefined };
+    }),
+    profileIds: Object.keys(providerProfiles),
+    profileCount: Object.keys(providerProfiles).length,
+    provider: providerDiagnosticSummary(readProvider(command.payload?.provider)),
+    media: providerDiagnosticSummary(readProvider(command.payload?.media)),
+  }, runId);
   respond(command, { runId });
   const normalizedDefinition = migrateWorkflowDefinitionToCurrent(definition as WorkflowDefinitionEnvelope);
   const controller = new AbortController(); workflowControllers.set(runId, controller);
@@ -1233,6 +1281,7 @@ async function runWorkflow(command: HostCommand) {
   const recoveryDefinitionHash = typeof command.payload?.recoveryDefinitionHash === "string" && command.payload.recoveryDefinitionHash.trim() ? command.payload.recoveryDefinitionHash.trim() : undefined;
   try { result = await executeWorkflow(normalizedDefinition, { runId, signal: controller.signal, recovering: readWorkflowRecovery(command.payload?.recovering), ...(recoveryDefinitionHash ? { recoveryDefinitionHash } : {}), ...(command.payload?.completed && typeof command.payload.completed === "object" ? { completed: command.payload.completed as Record<string, Record<string, unknown>> } : {}), ports }); } catch (error) {
     workflowControllers.delete(runId);
+    diagnosticLog("workflow_run_error", { stage: "execute_workflow", error: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240) }, runId);
     emit(command, { event: "runtime_error", code: "workflow_invalid", message: error instanceof Error ? error.message : String(error), retryable: false, runId });
     return;
   }
@@ -1241,6 +1290,7 @@ async function runWorkflow(command: HostCommand) {
     const artifacts = Array.isArray(output.artifacts) ? output.artifacts : output.artifact ? [output.artifact] : [];
     for (const artifact of artifacts) emit(command, { event: "tool_event", tool: `artifact:${nodeKey}`, phase: "completed", message: JSON.stringify(artifact).slice(0, 64 * 1024), runId });
   }
+  diagnosticLog("workflow_run_finished", { status: result.status, outputNodeCount: Object.keys(result.outputs).length, error: result.error ?? null }, runId);
   if (result.status === "succeeded") emit(command, { event: "done", runId });
   else emit(command, { event: "runtime_error", code: "workflow_failed", message: result.error ?? result.status, retryable: result.status !== "cancelled", runId });
 }
@@ -1368,6 +1418,17 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   const provider = typeof config.provider === "string" ? config.provider : typeof configuredMedia?.id === "string" ? configuredMedia.id : typeof textProvider?.id === "string" ? textProvider.id : "";
   const configuredMediaProfile = providerProfiles[provider] ?? readProvider(configuredMedia);
   const profile = configuredMediaProfile ?? readProvider(textProvider);
+  diagnosticLog("workflow_provider_resolution", {
+    nodeKey,
+    executorId,
+    requestedProviderId: provider,
+    profileIds: Object.keys(providerProfiles),
+    profileCount: Object.keys(providerProfiles).length,
+    profileMatched: Boolean(providerProfiles[provider]),
+    profile: providerDiagnosticSummary(profile),
+    configHasBaseUrl: Boolean(typeof config.baseUrl === "string" && config.baseUrl.trim()),
+    configHasApiKey: Boolean(typeof config.apiKey === "string" && config.apiKey.trim()),
+  }, runId);
   const imageCapability = executorId === "image_generate";
   // Image nodes are rebound from the desktop `defaults.image` profile before
   // reaching the host. Keep legacy node fields only as a fallback when an
@@ -1376,6 +1437,7 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
     ? profile?.baseUrl ?? ""
     : (typeof config.baseUrl === "string" ? config.baseUrl : profile?.baseUrl ?? "");
   if (!provider || !baseUrl) {
+    diagnosticLog("workflow_provider_missing", { nodeKey, executorId, requestedProviderId: provider, reason: !provider ? "provider_id_missing" : "base_url_missing", profileMatched: Boolean(configuredMediaProfile) }, runId);
     const error = new Error(`provider_configuration_required:${executorId}`); (error as Error & { code?: string }).code = "provider_configuration_required"; throw error;
   }
   const defaultEndpoints: Record<string, string> = { image_generate: "/images/generations", video_generate: "/videos/generations", digital_human: "/videos/generations", music_generate: "/audio/generations", voice_synthesis: "/audio/speech", voice_clone: "/voice_clone", audio_generate: "/audio/generations" };
@@ -1465,6 +1527,7 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   // media profile supplies transport credentials, but must not overwrite the
   // model selected on an individual image node.
   const modelId = requestedModel || profile?.model || "default";
+  diagnosticLog("workflow_provider_selected", { nodeKey, executorId, providerId: provider, source: profile?.source ?? provider, model: modelId, hasBaseUrl: Boolean(baseUrl), hasApiKey: Boolean(apiKey?.trim()), workflowCapability: workflowCapability ?? null, registeredWorkflow: registeredWorkflow?.id ?? null }, runId);
   const mediaInput = buildMediaCapabilityInput(executorId, config, inputs);
   if (executorId === "video_generate" && !registeredWorkflow) assertVideoMediaCapability(resolveVideoMediaCapabilities(providerKind, modelId), mediaInput);
   const localAttachments = Array.isArray(mediaInput.localAttachments) ? mediaInput.localAttachments.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [];
