@@ -1550,6 +1550,59 @@
     color: #8a8a8a;
   }
 
+  .compact-ai-composer {
+    min-height: 0;
+  }
+
+  .compact-ai-composer-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: end;
+    gap: 8px;
+    min-height: 44px;
+  }
+
+  .compact-ai-composer .wb-ai-prompt-body {
+    min-width: 0;
+  }
+
+  .compact-ai-composer .wb-ai-prompt-textarea {
+    min-height: 24px;
+    max-height: 72px;
+    padding: 8px 0;
+    line-height: 24px;
+    overflow-y: hidden;
+  }
+
+  .compact-ai-composer .wb-ai-prompt-submit,
+  .compact-ai-composer .wb-ai-prompt-stop,
+  .compact-ai-composer .wb-ai-model-reasoning-trigger,
+  .compact-ai-composer .composer-add {
+    height: 40px;
+  }
+
+  .compact-ai-composer .wb-ai-prompt-submit,
+  .compact-ai-composer .wb-ai-prompt-stop {
+    width: 40px;
+    padding: 0;
+  }
+
+  @media (max-width: 640px) {
+    .compact-ai-composer-row {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+
+    .compact-ai-composer .wb-ai-model-reasoning-trigger {
+      max-width: 42px;
+      overflow: hidden;
+      padding-inline: 8px;
+    }
+
+    .compact-ai-composer .wb-ai-model-reasoning-summary-full {
+      display: none;
+    }
+  }
+
   .send-button {
     height: 44px;
     border: 1px solid color-mix(in srgb, var(--primary) 78%, #111 22%);

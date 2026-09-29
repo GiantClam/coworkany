@@ -41,3 +41,18 @@ test("AI Entry can load portable conversation messages through an injected Workb
   assert.match(source, /response: \{ ok: true, status: 200 \}/)
   assert.match(source, /taskRuns: \[\]/)
 })
+
+test("AI Entry uses one compact AI Elements composer in both entry modes", () => {
+  const source = readFileSync(resolve(process.cwd(), "components/ai-entry/ai-entry-workspace.tsx"), "utf8")
+
+  assert.equal(source.match(/<PromptInput\b/g)?.length, 2)
+  assert.equal(source.match(/<PromptInputTextarea[^>]*maxRows=\{3\}[^>]*submitMode="enter"/g)?.length, 2)
+  assert.equal(source.match(/<WorkbenchModelReasoningSelector/g)?.length, 1)
+  assert.match(source, /<PromptInputActionMenu\b/)
+  assert.match(source, /PromptInputActionAddAttachments/)
+  assert.match(source, /knowledgePickerOpen/)
+  assert.match(source, /enterpriseKnowledge:/)
+  assert.match(source, /modelConfig:/)
+  assert.doesNotMatch(source, /ref=\{fileInputRef\}/)
+  assert.doesNotMatch(source, /<SelectTrigger/)
+})

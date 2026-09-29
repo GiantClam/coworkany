@@ -19,7 +19,6 @@ import {
   MoreHorizontal,
   Paperclip,
   Plus,
-  Send,
   Sparkles,
   X,
 } from "lucide-react"
@@ -41,25 +40,22 @@ import {
 } from "@/lib/assistant-task-store"
 import {
   PromptInput,
-  PromptInputAction,
-  PromptInputActions,
+  PromptInputActionMenu,
+  PromptInputActionAddAttachments,
+  PromptInputActionMenuContent,
+  PromptInputActionMenuItem,
+  PromptInputActionMenuTrigger,
+  PromptInputBody,
+  PromptInputHeader,
+  PromptInputSubmit,
   PromptInputTextarea,
 } from "@coworkany/workbench-ui"
+import { WorkbenchModelReasoningSelector } from "@coworkany/workbench-ui"
 import { useI18n } from "@/components/locale-provider"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { TextMorph } from "@/components/ui/text-morph"
 import { TypingIndicator } from "@/components/ui/typing-indicator"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -1542,12 +1538,9 @@ export function AiEntryWorkspace({
   const [modelsLoading, setModelsLoading] = useState(true)
   const [modelProviderId, setModelProviderId] = useState<string | null>(null)
   const [models, setModels] = useState<ModelOption[]>([])
-  const [modelGroups, setModelGroups] = useState<ModelGroupOption[]>([])
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
-  const [modelSelectOpen, setModelSelectOpen] = useState(false)
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState<ReasoningEffort>("auto")
   const [reasoningHydrated, setReasoningHydrated] = useState(false)
-  const [reasoningSelectOpen, setReasoningSelectOpen] = useState(false)
   const [restoredConversationModelId, setRestoredConversationModelId] = useState<string | null>(null)
 
   const [agents, setAgents] = useState<AgentOption[]>([])
@@ -1561,7 +1554,6 @@ export function AiEntryWorkspace({
   const previousMessageCountRef = useRef(0)
   const messagesLengthRef = useRef(messages.length)
   const taskRunsRef = useRef(taskRuns)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const latestConversationIdRef = useRef<string | null>(initialConversationId)
   const isLoadingRef = useRef(false)
   const activeRequestAbortControllerRef = useRef<AbortController | null>(null)
@@ -1722,7 +1714,6 @@ export function AiEntryWorkspace({
     setIsResponseLoading(false)
     setIsConversationLoading(false)
     setIsPreparingAttachments(false)
-    if (fileInputRef.current) fileInputRef.current.value = ""
   }, [])
   const showLanding =
     !embedded &&
@@ -2153,13 +2144,6 @@ export function AiEntryWorkspace({
               : null
         setModelProviderId(selectedProviderId)
         setModels(normalizedModels)
-        setModelGroups(
-          dedupedModelGroups.length > 0
-            ? dedupedModelGroups
-            : normalizedModels.length > 0
-              ? [{ family: "all", label: "All models", models: normalizedModels }]
-              : [],
-        )
         const preferredFromCatalog =
           typeof payload?.selectedModelId === "string" ? payload.selectedModelId : null
         const catalogDefaultModelId = preferredFromCatalog
@@ -2222,7 +2206,6 @@ export function AiEntryWorkspace({
         console.error("ai-entry.models.load.failed", error)
         setModelProviderId(null)
         setModels([])
-        setModelGroups([])
         setSelectedModelId(null)
       } finally {
         if (!cancelled) setModelsLoading(false)
@@ -2954,27 +2937,6 @@ export function AiEntryWorkspace({
     }
   }, [activePendingAgentId, conversationId, conversationState, copy, fetchConversationMessages, isZh, pendingTaskRefreshKey])
 
-  const renderModelSelectContent = useCallback(() => {
-    if (modelsLoading) return <SelectItem value="__loading" disabled>{copy.modelLoading}</SelectItem>
-    if (models.length === 0) return <SelectItem value="__empty" disabled>{copy.modelEmpty}</SelectItem>
-    return modelGroups.map((group, idx) => (
-      <SelectGroup key={`${group.family}-${idx}`}>
-        <SelectLabel>{group.label}</SelectLabel>
-        {group.models.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
-        {idx < modelGroups.length - 1 ? <SelectSeparator /> : null}
-      </SelectGroup>
-    ))
-  }, [copy.modelEmpty, copy.modelLoading, modelGroups, models.length, modelsLoading])
-
-  const renderReasoningSelectContent = useCallback(
-    () => reasoningCapabilities.map((item) => (
-      <SelectItem key={item.effort} value={item.effort}>
-        {isZh ? item.zh : item.en}
-      </SelectItem>
-    )),
-    [isZh, reasoningCapabilities],
-  )
-
   const handleCopyMessage = useCallback(async (messageId: string, content: string) => {
     try {
       await navigator.clipboard.writeText(content)
@@ -3070,7 +3032,6 @@ export function AiEntryWorkspace({
         }
       } finally {
         setIsPreparingAttachments(false)
-        if (fileInputRef.current) fileInputRef.current.value = ""
       }
     },
     [attachments.length, isZh],
@@ -3913,84 +3874,28 @@ export function AiEntryWorkspace({
     shouldLockModel,
   ])
 
-  const renderSelectors = (buttonHeight: "h-10" | "h-9") => (
-    <div className="flex min-w-0 items-center gap-2 px-1">
-      {shouldLockModel ? (
-        <>
-          <div
-            className={`model-select inline-flex min-w-0 max-w-[44vw] items-center text-xs text-foreground sm:max-w-[260px] ${buttonHeight}`}
-            title={selectedModel?.name || lockedConsultingModelId}
-          >
-            <span className="truncate">
-              {copy.modelLabel}: {selectedModel?.name || lockedConsultingModelId}
-            </span>
-          </div>
-          <Select
-            open={reasoningSelectOpen}
-            onOpenChange={setReasoningSelectOpen}
-            value={resolvedReasoningEffort}
-            onValueChange={(nextValue) => {
-              const nextReasoningEffort = normalizeReasoningEffort(nextValue, {
-                providerId: selectedModel?.providerId || modelProviderId,
-                modelId: selectedModel?.modelId || selectedModel?.runtimeId || selectedModelId,
-              })
-              setSelectedReasoningEffort(nextReasoningEffort)
-              persistReasoningEffort(nextReasoningEffort)
-              setReasoningSelectOpen(false)
-            }}
-            disabled={isResponseLoading || modelsLoading || reasoningCapabilities.length <= 1}
-          >
-            <SelectTrigger className={`model-select min-w-0 w-[112px] max-w-[36vw] rounded-[8px] px-3 text-xs text-foreground outline-none focus:border-primary sm:w-[150px] sm:max-w-[150px] ${buttonHeight}`}>
-              <span className="model-select-label">{copy.reasoningLabel}</span>
-              <SelectValue placeholder={copy.reasoningAuto} />
-            </SelectTrigger>
-            <SelectContent>{renderReasoningSelectContent()}</SelectContent>
-          </Select>
-        </>
-      ) : (
-        <>
-          <Select
-            open={modelSelectOpen}
-            onOpenChange={setModelSelectOpen}
-            value={selectedModelId ?? undefined}
-            onValueChange={(nextValue) => {
-              const nextModelId = nextValue || null
-              setSelectedModelId(nextModelId)
-              persistSelectedModelId(nextModelId)
-              setModelSelectOpen(false)
-            }}
-            disabled={isResponseLoading || modelsLoading || models.length === 0}
-          >
-              <SelectTrigger className={`model-select min-w-0 w-[140px] max-w-[44vw] rounded-[8px] px-3 text-xs text-foreground outline-none focus:border-primary sm:w-[220px] sm:max-w-[220px] ${buttonHeight}`}>
-              <span className="model-select-label">{copy.modelLabel}</span>
-              <SelectValue placeholder={modelsLoading ? copy.modelLoading : copy.modelEmpty} />
-            </SelectTrigger>
-            <SelectContent>{renderModelSelectContent()}</SelectContent>
-          </Select>
-          <Select
-            open={reasoningSelectOpen}
-            onOpenChange={setReasoningSelectOpen}
-            value={resolvedReasoningEffort}
-            onValueChange={(nextValue) => {
-              const nextReasoningEffort = normalizeReasoningEffort(nextValue, {
-                providerId: selectedModel?.providerId || modelProviderId,
-                modelId: selectedModel?.modelId || selectedModel?.runtimeId || selectedModelId,
-              })
-              setSelectedReasoningEffort(nextReasoningEffort)
-              persistReasoningEffort(nextReasoningEffort)
-              setReasoningSelectOpen(false)
-            }}
-            disabled={isResponseLoading || modelsLoading || reasoningCapabilities.length <= 1}
-          >
-            <SelectTrigger className={`model-select min-w-0 w-[112px] max-w-[36vw] rounded-[8px] px-3 text-xs text-foreground outline-none focus:border-primary sm:w-[150px] sm:max-w-[150px] ${buttonHeight}`}>
-              <span className="model-select-label">{copy.reasoningLabel}</span>
-              <SelectValue placeholder={copy.reasoningAuto} />
-            </SelectTrigger>
-            <SelectContent>{renderReasoningSelectContent()}</SelectContent>
-          </Select>
-        </>
-      )}
-    </div>
+  const renderSelectors = () => (
+    <WorkbenchModelReasoningSelector
+      models={models.map((item) => ({ id: item.id, label: item.name, provider: item.providerLabel || item.providerId || undefined }))}
+      modelId={selectedModelId ?? undefined}
+      reasoningOptions={reasoningCapabilities.map((item) => ({ id: item.effort, label: isZh ? item.zh : item.en, shortLabel: item.effort === "auto" ? (isZh ? "自" : "Auto") : item.effort }))}
+      reasoningId={resolvedReasoningEffort}
+      modelLocked={shouldLockModel}
+      disabled={isResponseLoading || modelsLoading || models.length === 0}
+      locale={isZh ? "zh" : "en"}
+      onModelChange={(nextModelId) => {
+        setSelectedModelId(nextModelId)
+        persistSelectedModelId(nextModelId)
+      }}
+      onReasoningChange={(nextValue) => {
+        const nextReasoningEffort = normalizeReasoningEffort(nextValue, {
+          providerId: selectedModel?.providerId || modelProviderId,
+          modelId: selectedModel?.modelId || selectedModel?.runtimeId || selectedModelId,
+        })
+        setSelectedReasoningEffort(nextReasoningEffort)
+        persistReasoningEffort(nextReasoningEffort)
+      }}
+    />
   )
 
   const renderSelectedAttachments = () => {
@@ -4031,9 +3936,8 @@ export function AiEntryWorkspace({
     return (
       <div className="flex items-center gap-1">
         <Popover open={knowledgePickerOpen} onOpenChange={setKnowledgePickerOpen}>
-          <PromptInputAction tooltip={copy.knowledgeChoose}>
-            <PopoverTrigger asChild>
-              <Button
+        <PopoverTrigger asChild>
+          <Button
                 type="button"
                 size="sm"
                 variant="outline"
@@ -4043,9 +3947,8 @@ export function AiEntryWorkspace({
                 <Database className="h-3.5 w-3.5 shrink-0" />
                 <span className="truncate">{copy.knowledgeLabel}</span>
                 <span className="truncate text-muted-foreground">{knowledgeSummaryLabel}</span>
-              </Button>
-            </PopoverTrigger>
-          </PromptInputAction>
+          </Button>
+        </PopoverTrigger>
           <PopoverContent className="w-80 p-0" align="start">
             <Command>
               <div className="border-b border-border px-3 py-3">
@@ -4095,18 +3998,6 @@ export function AiEntryWorkspace({
             </Command>
           </PopoverContent>
         </Popover>
-        <PromptInputAction tooltip={copy.disableKnowledge}>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="dashboard-button-secondary h-9 px-2.5"
-            disabled={isResponseLoading || isConversationLoading || isPreparingAttachments}
-            onClick={disableKnowledge}
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        </PromptInputAction>
       </div>
     )
   }
@@ -4126,49 +4017,18 @@ export function AiEntryWorkspace({
   }
 
   const renderAttachmentPicker = () => (
-    <Popover open={addMenuOpen} onOpenChange={setAddMenuOpen}>
-      <PromptInputAction tooltip={copy.addMenu}>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="composer-add"
-            disabled={isResponseLoading || isConversationLoading || isPreparingAttachments}
-          >
-            <Plus className="h-5 w-5" />
-          </Button>
-        </PopoverTrigger>
-      </PromptInputAction>
-      <PopoverContent className="w-56 p-2" align="start">
-        <div className="space-y-1">
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-[6px] px-3 py-2 text-left text-sm transition hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
-            onClick={() => {
-              setAddMenuOpen(false)
-              fileInputRef.current?.click()
-            }}
-            disabled={attachments.length >= AI_ENTRY_MAX_ATTACHMENTS}
-          >
-            <Paperclip className="h-4 w-4 shrink-0" />
-            <span>{copy.uploadFile}</span>
-          </button>
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-[6px] px-3 py-2 text-left text-sm transition hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
-            onClick={() => {
-              setAddMenuOpen(false)
-              setKnowledgeEnabled(true)
-              setKnowledgePickerOpen(true)
-            }}
-          >
-            <Database className="h-4 w-4 shrink-0" />
-            <span>{copy.knowledgeAdd}</span>
-          </button>
-        </div>
-      </PopoverContent>
-    </Popover>
+    <PromptInputActionMenu open={addMenuOpen} onOpenChange={setAddMenuOpen}>
+      <PromptInputActionMenuTrigger disabled={isResponseLoading || isConversationLoading || isPreparingAttachments} aria-label={copy.addMenu} className="composer-add">
+        <Plus className="h-5 w-5" />
+      </PromptInputActionMenuTrigger>
+      <PromptInputActionMenuContent className="w-56 p-2">
+        <PromptInputActionAddAttachments disabled={attachments.length >= AI_ENTRY_MAX_ATTACHMENTS} label={copy.uploadFile} />
+        <PromptInputActionMenuItem onSelect={() => { setKnowledgeEnabled(true); setKnowledgePickerOpen(true) }}>
+          <Database className="h-4 w-4 shrink-0" />
+          <span>{copy.knowledgeAdd}</span>
+        </PromptInputActionMenuItem>
+      </PromptInputActionMenuContent>
+    </PromptInputActionMenu>
   )
 
   if (showLanding) {
@@ -4205,37 +4065,19 @@ export function AiEntryWorkspace({
 
             <div className="sticky bottom-0 z-20 shrink-0 bg-background/95 px-4 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/85 lg:px-0">
               <div className="dashboard-panel mx-auto max-w-5xl rounded-[12px] p-4 shadow-sm">
-                <PromptInput value={input} onValueChange={setInput} onSubmit={handleSend} isLoading={isResponseLoading} maxHeight={220} className="border-0 bg-transparent p-0 shadow-none">
+                <PromptInput value={input} onValueChange={setInput} onSubmit={handleSend} onAddAttachments={(files) => void handleAttachmentFiles(files)} attachments={[]} accept="image/*,.txt,.md,.docx,.pdf,.csv,.json,text/*,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" isLoading={isResponseLoading} locale={isZh ? "zh" : "en"} className="compact-ai-composer border-0 bg-transparent p-0 shadow-none">
                   {isAgentSelectionExplicit && selectedAgent ? (
                     <div className="px-1 pb-2 text-xs text-muted-foreground">
                       {copy.selectedAgent}: <span className="font-medium text-foreground">{selectedAgent.name}</span>
                     </div>
                   ) : null}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    accept="image/*,.txt,.md,.docx,.pdf,.csv,.json,text/*,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    className="hidden"
-                    onChange={(event) => void handleAttachmentFiles(event.target.files)}
-                  />
-                  {renderSelectedAttachments()}
-                  <PromptInputTextarea aria-label={isZh ? "消息输入" : "Message input"} placeholder={workspacePlaceholder} className="min-h-[120px] text-base" />
-                  <PromptInputActions>
-                    <div className="flex items-center gap-2">
-                      {renderAttachmentPicker()}
-                      {renderKnowledgeControl()}
-                    </div>
-                    <div className="flex min-w-0 items-center gap-2">
-                      {renderSelectors("h-10")}
-                      <PromptInputAction tooltip={copy.send}>
-                        <Button type="button" size="sm" className="dashboard-button-primary h-10 shrink-0 px-4" onClick={() => void handleSend()} disabled={(!input.trim() && attachments.length === 0) || isResponseLoading || isConversationLoading || isPreparingAttachments || modelsLoading}>
-                          {isResponseLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="mr-1.5 h-3.5 w-3.5" />}
-                          {copy.send}
-                        </Button>
-                      </PromptInputAction>
-                    </div>
-                  </PromptInputActions>
+                  <PromptInputHeader>{renderSelectedAttachments()}{knowledgeEnabled ? renderKnowledgeControl() : null}</PromptInputHeader>
+                  <div className="compact-ai-composer-row">
+                    {renderAttachmentPicker()}
+                    <PromptInputBody><PromptInputTextarea minRows={1} maxRows={3} submitMode="enter" aria-label={isZh ? "消息输入" : "Message input"} placeholder={workspacePlaceholder} className="text-base" /></PromptInputBody>
+                    {renderSelectors()}
+                    <PromptInputSubmit disabled={(!input.trim() && attachments.length === 0) || isConversationLoading || isPreparingAttachments || modelsLoading} />
+                  </div>
                 </PromptInput>
               </div>
             </div>
@@ -4512,9 +4354,12 @@ export function AiEntryWorkspace({
               value={input}
               onValueChange={setInput}
               onSubmit={handleSend}
+              onAddAttachments={(files) => void handleAttachmentFiles(files)}
+              attachments={[]}
+              accept="image/*,.txt,.md,.docx,.pdf,.csv,.json,text/*,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               isLoading={isResponseLoading}
-              maxHeight={220}
-              className="border-0 bg-transparent p-0 shadow-none"
+              locale={isZh ? "zh" : "en"}
+              className="compact-ai-composer border-0 bg-transparent p-0 shadow-none"
             >
               {isAgentSelectionExplicit && selectedAgent ? (
                 <div className="px-1 pb-2 text-xs text-muted-foreground">
@@ -4526,31 +4371,13 @@ export function AiEntryWorkspace({
                   ) : null}
                 </div>
               ) : null}
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="image/*,.txt,.md,.docx,.pdf,.csv,.json,text/*,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                className="hidden"
-                onChange={(event) => void handleAttachmentFiles(event.target.files)}
-              />
-              {renderSelectedAttachments()}
-              <PromptInputTextarea aria-label={isZh ? "消息输入" : "Message input"} placeholder={workspacePlaceholder} className={cn("composer-input", compactEmbedded ? "min-h-[88px]" : undefined)} />
-              <PromptInputActions className="items-end gap-3 p-0">
-                <div className="flex items-center gap-2">
-                  {renderAttachmentPicker()}
-                  {renderKnowledgeControl()}
-                </div>
-                <div className="flex min-w-0 items-center gap-2">
-                  {renderSelectors("h-9")}
-                  <PromptInputAction tooltip={copy.send}>
-                    <Button type="button" size="sm" className="send-button shrink-0 px-5" onClick={() => void handleSend()} disabled={(!input.trim() && attachments.length === 0) || isResponseLoading || isConversationLoading || isPreparingAttachments || modelsLoading || (selectedAgentId?.startsWith("business-") === true && !sessionReady && !sessionReadyError)}>
-                      {isResponseLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
-                      {copy.send}
-                    </Button>
-                  </PromptInputAction>
-                </div>
-              </PromptInputActions>
+              <PromptInputHeader>{renderSelectedAttachments()}{knowledgeEnabled ? renderKnowledgeControl() : null}</PromptInputHeader>
+              <div className="compact-ai-composer-row">
+                {renderAttachmentPicker()}
+                <PromptInputBody><PromptInputTextarea minRows={1} maxRows={3} submitMode="enter" aria-label={isZh ? "消息输入" : "Message input"} placeholder={workspacePlaceholder} className="composer-input" /></PromptInputBody>
+                {renderSelectors()}
+                <PromptInputSubmit disabled={(!input.trim() && attachments.length === 0) || isConversationLoading || isPreparingAttachments || modelsLoading || (selectedAgentId?.startsWith("business-") === true && !sessionReady && !sessionReadyError)} />
+              </div>
             </PromptInput>
           </div>
         </div>
