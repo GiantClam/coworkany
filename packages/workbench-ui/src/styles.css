@@ -723,6 +723,7 @@
 .shared-workflow-node-actions button { width: 25px; height: 25px; }
 .shared-workflow-status { position: absolute; right: 12px; bottom: -11px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid currentColor; border-radius: 999px; padding: 3px 7px; font-size: 9px; font-weight: 700; }
 .shared-workflow-status i { width: 6px; height: 6px; border-radius: 50%; }
+.shared-workflow-config-warning { position: absolute; top: -10px; left: 12px; z-index: 2; border: 1px solid #b45309; border-radius: 999px; padding: 3px 7px; background: #fffbeb; color: #92400e; font-size: 9px; font-weight: 700; line-height: 1.2; }
 .shared-workflow-node-port-list { position: absolute; inset: 0; pointer-events: none; }
 .shared-workflow-port { position: absolute; z-index: 10; width: 14px; height: 14px; border: 2px solid var(--wb-card, #fff); border-radius: 50%; transform: translateY(-50%); box-shadow: 0 1px 4px rgba(17,17,17,.18); }
 .shared-workflow-port.aggregate { top: 42px; }
@@ -1076,6 +1077,43 @@
 .wb-ai-artifact-text-preview { max-height: 24rem; overflow: auto; padding: .85rem 1rem; background: var(--ai-elements-surface); }
 .wb-ai-artifact-text-preview .ai-elements-message-response { font-size: .9rem; }
 .wb-ai-artifact-pdf-preview { display: block; height: min(32rem, 60vh); width: 100%; border: 0; background: #f5f5f2; }
+.wb-ai-office-preview { position: relative; min-height: 20rem; max-height: min(40rem, 70vh); overflow: auto; background: #f5f5f2; }
+.wb-ai-office-preview-canvas { min-height: 20rem; }
+.wb-ai-office-preview-status { position: absolute; inset: 0; display: grid; place-items: center; padding: 1rem; color: var(--ai-elements-muted); text-align: center; background: color-mix(in srgb, #f5f5f2 92%, transparent); }
+.wb-ai-preview-results { display: grid; gap: .75rem; margin-top: 1rem; max-width: 52rem; }
+.wb-ai-preview { min-width: 0; --ai-elements-surface: var(--wb-card, #fff); --ai-elements-foreground: var(--wb-foreground, #111); --ai-elements-ink: var(--wb-foreground, #111); --ai-elements-border: var(--wb-border, #e5e5e0); --ai-elements-muted: var(--wb-muted-foreground, #777); }
+.wb-ai-preview-card .ai-elements-artifact-header { align-items: center; display: flex; gap: .75rem; justify-content: space-between; }
+.wb-ai-preview-card .ai-elements-artifact-actions { flex-wrap: wrap; justify-content: flex-end; }
+.wb-ai-preview-card .ai-elements-artifact-action { border: 0; background: transparent; cursor: pointer; }
+.wb-ai-preview-text-action { border: 0; padding: .25rem .4rem; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: .75rem; font-weight: 700; }
+.wb-ai-preview-state { display: grid; min-height: 10rem; place-content: center; gap: .45rem; padding: 1.5rem; background: color-mix(in srgb, var(--ai-elements-brand) 5%, var(--ai-elements-surface)); color: var(--ai-elements-muted); text-align: center; }
+.wb-ai-preview-state strong { color: var(--ai-elements-foreground); }
+.wb-ai-preview-action-error { padding: .5rem .75rem; color: var(--ai-elements-destructive, #dc2626); font-size: .75rem; }
+.wb-ai-preview-image, .wb-ai-preview-video { display: block; width: 100%; max-height: 24rem; object-fit: contain; background: #111; }
+.wb-ai-preview-audio { width: 100%; margin: 1rem 0; }
+.wb-ai-web-preview-inline iframe { min-height: 20rem; }
+.wb-ai-preview-backdrop { position: fixed; z-index: 400; inset: 0; display: flex; justify-content: flex-end; background: rgba(17,17,17,.36); backdrop-filter: blur(2px); }
+.wb-ai-preview-expanded { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(76vw, 1180px); max-width: 100%; height: 100dvh; overflow: hidden; border-left: 1px solid color-mix(in srgb, var(--ai-elements-border) 80%, transparent); background: var(--ai-elements-surface); color: var(--ai-elements-foreground); box-shadow: -24px 0 70px rgba(0,0,0,.24); animation: wb-ai-preview-panel-in .18s ease-out; }
+.wb-ai-preview-expanded > header, .wb-ai-preview-expanded > footer { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .75rem 1rem; }
+.wb-ai-preview-expanded > header { border-bottom: 1px solid var(--ai-elements-border); }
+.wb-ai-preview-expanded > header > div { display: grid; min-width: 0; gap: .15rem; }
+.wb-ai-preview-expanded > header > .wb-ai-preview-expanded-header-actions { display: flex; align-items: center; gap: .5rem; }
+.wb-ai-preview-expanded > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-ai-preview-expanded > header span { color: var(--ai-elements-muted); font-size: .75rem; }
+.wb-ai-preview-expanded > header button, .wb-ai-preview-expanded > footer button { border: 1px solid var(--ai-elements-border); border-radius: .45rem; padding: .4rem .65rem; background: var(--ai-elements-surface); color: inherit; cursor: pointer; font: inherit; font-size: .78rem; }
+.wb-ai-preview-expanded > header .wb-ai-preview-expanded-header-actions button:not(.wb-ai-preview-close) { display: inline-flex; align-items: center; gap: .4rem; }
+.wb-ai-preview-expanded > header button { display: inline-grid; width: 2rem; height: 2rem; flex: 0 0 2rem; place-items: center; padding: 0; }
+.wb-ai-preview-expanded > header .wb-ai-preview-expanded-header-actions .wb-ai-preview-close { display: inline-grid; }
+.wb-ai-preview-expanded > footer { justify-content: flex-end; flex-wrap: wrap; border-top: 1px solid var(--ai-elements-border); }
+.wb-ai-preview-expanded-content { min-height: 0; overflow: hidden; background: color-mix(in srgb, var(--ai-elements-surface) 94%, #000); }
+.wb-ai-preview-expanded-content > .ai-elements-web-preview, .wb-ai-web-preview-expanded { height: 100%; border: 0; border-radius: 0; }
+.wb-ai-preview-expanded-content > .ai-elements-web-preview { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.wb-ai-web-preview-expanded iframe { height: 100%; min-height: 0; }
+.wb-ai-preview-expanded-content .wb-ai-preview-image, .wb-ai-preview-expanded-content .wb-ai-preview-video { width: 100%; height: 100%; max-height: none; object-fit: contain; }
+.wb-ai-preview-expanded-content .wb-ai-preview-audio { width: min(560px, 90%); justify-self: center; align-self: center; }
+@keyframes wb-ai-preview-panel-in { from { transform: translateX(2rem); opacity: .65; } to { transform: translateX(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .wb-ai-preview-expanded { animation: none; } }
+@media (max-width: 760px) { .wb-ai-preview-expanded { width: 100%; } }
 .wb-ai-unavailable-part { border-left: 2px solid var(--ai-elements-brand); color: var(--ai-elements-muted-foreground); font-size: .8rem; padding: .5rem .75rem; }
 
 .ai-elements-sources { display: grid; gap: 0.5rem; }
@@ -1435,8 +1473,7 @@
   cursor: pointer;
 }
 .workflow-ai-sidebar-header button:hover { border-color: var(--wb-border, #e5e5e0); background: var(--wb-muted, #efefea); color: var(--wb-foreground, #111); }
-.workflow-ai-sidebar-header button:focus-visible,
-.workflow-ai-provider-trigger:focus-visible { outline: 2px solid var(--wb-ring, #ffd000); outline-offset: 2px; }
+.workflow-ai-sidebar-header button:focus-visible { outline: 2px solid var(--wb-ring, #ffd000); outline-offset: 2px; }
 .workflow-ai-sidebar-body { display: grid; grid-template-rows: minmax(0, 1fr); flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
 .workflow-ai-sidebar .wb-ai-message-surface { min-height: 0; border: 0; background: transparent; }
 .workflow-ai-sidebar .wb-ai-message-surface .ai-elements-conversation-content { gap: 14px; padding: 14px 12px 28px; }
@@ -1456,9 +1493,8 @@
 .workflow-ai-composer .ai-elements-prompt-input { border-radius: 8px; box-shadow: none; }
 .workflow-ai-composer .ai-elements-prompt-input-textarea { min-height: 48px; font-size: 13px; }
 .workflow-ai-error { margin-bottom: 7px; color: var(--wb-destructive, #d4183d); font-size: 11px; line-height: 1.45; }
-.workflow-ai-provider-trigger { display: inline-flex; height: 30px; min-width: 0; max-width: 190px; align-items: center; gap: 5px; border: 1px solid var(--wb-border, #e5e5e0); border-radius: 6px; background: var(--wb-background, #fdfdfb); color: var(--wb-muted-foreground, #777); cursor: pointer; font: inherit; font-size: 10px; padding: 0 8px; }
-.workflow-ai-provider-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workflow-ai-provider-trigger:hover { border-color: color-mix(in srgb, var(--wb-primary, #ffd000) 65%, var(--wb-border, #e5e5e0)); color: var(--wb-foreground, #111); }
+.workflow-ai-model-selector { min-width: 0; max-width: 190px; }
+.workflow-ai-model-selector .wb-ai-model-trigger { height: 30px; min-height: 30px; min-width: 0; max-width: 190px; font-size: 10px; padding: 0 8px; }
 
 @media (max-width: 720px) {
   .workflow-ai-sidebar {

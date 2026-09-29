@@ -10,6 +10,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 
 const WEBVIEW2_BOOTSTRAPPER_URL: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 fn webview_repair_progress_messages_for(chinese: bool) -> [&'static str; 3] {
@@ -211,8 +212,11 @@ pub fn show_startup_error(error: &str) {
         let message: Vec<u16> = message_text.encode_utf16().chain(once(0)).collect();
         unsafe { MessageBoxW(std::ptr::null_mut(), message.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR); }
     }
+    #[cfg(not(windows))]
+    let _ = error;
 }
 
+#[cfg(any(windows, test))]
 fn startup_error_messages_for(chinese: bool, error: &str) -> (String, String) {
     if chinese {
         ("CoworkAny 启动失败".to_string(), format!("无法准备 Windows 本地运行环境。\\n\\n{error}\\n请检查网络或运行时安装包后重新启动。"))

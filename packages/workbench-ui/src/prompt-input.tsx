@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useRef, type ReactNode } from "react";
-import { Attachment, AttachmentInfo, AttachmentPreview, AttachmentRemove, Attachments, ModelSelectorLogo, ModelSelectorName, PromptInput, PromptInputActionAddAttachments, PromptInputActionMenu, PromptInputActionMenuContent, PromptInputActionMenuTrigger, PromptInputBody, PromptInputFooter, PromptInputSelect, PromptInputSubmit, PromptInputTextarea, PromptInputTools, PromptInputHeader } from "./ai-elements/index";
+import { Plus } from "lucide-react";
+import { Attachment, AttachmentInfo, AttachmentPreview, AttachmentRemove, Attachments, ModelSelectorLogo, ModelSelectorName, PromptInput, PromptInputBody, PromptInputButton, PromptInputFooter, PromptInputSelect, PromptInputSubmit, PromptInputTextarea, PromptInputTools, PromptInputHeader, usePromptInputAttachments } from "./ai-elements/index";
 
 export type WorkbenchAttachmentItem = { readonly id: string; readonly name: string; readonly mediaType?: string; readonly uri?: string; readonly status?: "queued" | "uploading" | "ready" | "failed"; readonly error?: string };
 export type WorkbenchModelOption = { readonly id: string; readonly label: string; readonly provider?: string; readonly description?: string };
@@ -21,7 +22,12 @@ export function WorkbenchAttachments({ attachments, variant = "inline", onRemove
   return <Attachments variant={variant} items={attachments}><>{attachments.map((attachment) => <Attachment key={attachment.id} item={attachment} onRemove={onRemove ? () => onRemove(attachment.id) : undefined} className={attachment.status === "failed" ? "is-failed" : undefined}><AttachmentPreview /><AttachmentInfo />{attachment.status === "failed" ? <button type="button" className="ai-elements-attachment-retry wb-ai-attachment-retry" onClick={() => retry(attachment.id)} aria-label={`${locale === "zh" ? "重试附件" : "Retry attachment"}: ${attachment.name}`}>{locale === "zh" ? "重试" : "Retry"}</button> : null}<AttachmentRemove label={locale === "zh" ? "移除附件" : "Remove attachment"} /></Attachment>)}</></Attachments>;
 }
 
-export function WorkbenchModelSelector({ models, value, onChange, disabled = false, locale = "zh" }: { models: readonly WorkbenchModelOption[]; value?: string; onChange: (value: string) => void; disabled?: boolean; locale?: "zh" | "en" }) {
+function PromptInputOpenAttachmentsButton({ label }: { label: string }) {
+  const attachments = usePromptInputAttachments();
+  return <PromptInputButton aria-label={label} onClick={attachments.openFileDialog}><Plus size={16} aria-hidden="true" /></PromptInputButton>;
+}
+
+export function WorkbenchModelSelector({ models, value, onChange, disabled = false, locale = "zh", placeholder, ariaLabel, className }: { models: readonly WorkbenchModelOption[]; value?: string; onChange: (value: string) => void; disabled?: boolean; locale?: "zh" | "en"; placeholder?: string; ariaLabel?: string; className?: string }) {
   const selected = models.find((model) => model.id === value);
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -88,9 +94,9 @@ export function WorkbenchModelSelector({ models, value, onChange, disabled = fal
     setOpen(false);
     triggerRef.current?.focus();
   };
-  return <div className="wb-ai-model-selector" aria-disabled={disabled || undefined}>
-    <button ref={triggerRef} type="button" className="ai-elements-model-selector-trigger wb-ai-model-trigger" aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? menuId : undefined} disabled={disabled} aria-label={locale === "zh" ? `选择模型${value ? `：${selected?.label ?? ""}` : ""}` : `Select model${value ? `: ${selected?.label ?? ""}` : ""}`} onClick={() => setOpen((current) => !current)}>
-      <span className="wb-ai-model-trigger-value">{selected ? <><ModelSelectorLogo>{modelBadge(selected.provider)}</ModelSelectorLogo><ModelSelectorName>{selected.label}</ModelSelectorName></> : locale === "zh" ? "选择模型" : "Select model"}</span><span aria-hidden="true">⌄</span>
+  return <div className={`wb-ai-model-selector${className ? ` ${className}` : ""}`} data-slot="model-selector" aria-disabled={disabled || undefined}>
+    <button ref={triggerRef} type="button" className="ai-elements-model-selector-trigger wb-ai-model-trigger" aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? menuId : undefined} disabled={disabled} aria-label={ariaLabel ?? (locale === "zh" ? `选择模型${value ? `：${selected?.label ?? ""}` : ""}` : `Select model${value ? `: ${selected?.label ?? ""}` : ""}`)} onClick={() => setOpen((current) => !current)}>
+      <span className="wb-ai-model-trigger-value">{selected ? <><ModelSelectorLogo>{modelBadge(selected.provider)}</ModelSelectorLogo><ModelSelectorName>{selected.label}</ModelSelectorName></> : placeholder ?? (locale === "zh" ? "选择模型" : "Select model")}</span><span aria-hidden="true">⌄</span>
     </button>
     {open ? <div ref={menuRef} id={menuId} className="wb-ai-model-popover" style={menuStyle} data-model-menu role="listbox" aria-label={locale === "zh" ? "可用模型" : "Available models"}>
       <input data-model-search className="wb-ai-model-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={locale === "zh" ? "搜索模型" : "Search models"} aria-label={locale === "zh" ? "搜索模型" : "Search models"} />
@@ -123,7 +129,7 @@ export function WorkbenchPromptInput({ value, onValueChange, onSubmit, attachmen
     <PromptInputHeader>{headerChildren.length ? <div className="wb-ai-prompt-context">{headerChildren}</div> : null}<WorkbenchAttachments attachments={attachments} variant="inline" onRemove={onRemoveAttachment} locale={locale} /></PromptInputHeader>
     <PromptInputBody><PromptInputTextarea ref={textareaRef} value={value} autoFocus={autoFocus} onFocus={() => { textareaWasFocused.current = true; }} onChange={(event) => onValueChange(event.target.value)} placeholder={placeholder} /></PromptInputBody>
     <PromptInputFooter><PromptInputTools>
-      {onAddAttachments ? <PromptInputActionMenu><PromptInputActionMenuTrigger aria-label={locale === "zh" ? "添加附件" : "Add attachment"} /><PromptInputActionMenuContent><PromptInputActionAddAttachments label={locale === "zh" ? "上传本地文件" : "Upload local file"} /></PromptInputActionMenuContent></PromptInputActionMenu> : null}
+      {onAddAttachments ? <PromptInputOpenAttachmentsButton label={locale === "zh" ? "添加附件" : "Add attachment"} /> : null}
       {models.length && onModelChange ? <PromptInputSelect className="wb-ai-prompt-model-select"><WorkbenchModelSelector models={models} value={model} onChange={onModelChange} disabled={disabled || status === "streaming"} locale={locale} /></PromptInputSelect> : null}
       {toolChildren.length ? <div className="wb-ai-prompt-custom-tools" data-slot="prompt-input-custom-tools">{toolChildren}</div> : null}
     </PromptInputTools><div className="wb-ai-prompt-trailing"><PromptInputSubmit aria-label={submitLabel || (status === "streaming" ? (locale === "zh" ? "停止生成" : "Stop generating") : (locale === "zh" ? "发送" : "Send"))} onClick={status === "streaming" ? onStop : undefined} /></div></PromptInputFooter>

@@ -64,8 +64,9 @@ function isPreviewServerTool(part: Record<string, unknown>) {
     input?.cmd,
     input?.script,
   ];
-  return candidates.some(value => /start-preview-server\.mjs|preview:start/iu.test(String(value ?? "")));
+  return candidates.some(value => /start-preview-server\.mjs|preview:start|render_goal_deck|(?:svg_editor|confirm_ui|spec_review)[\\/]server\.py|(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+(?:dev|preview|start)(?:\s|$)|(?:^|\s)(?:vite|next\s+dev|python(?:3)?\s+-m\s+http\.server|npx\s+serve)(?:\s|$)/iu.test(String(value ?? "")));
 }
+
 function isRecoverablePromptSubmissionError(error: unknown) {
   if (error instanceof TypeError) return true;
   const message = (error instanceof Error ? error.message : safe(error)).toLowerCase();
@@ -189,6 +190,9 @@ export class OpenCodeServeClient {
       OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
       OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1",
       OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
+      // Preview UI belongs to the desktop conversation. Known Python/Node
+      // launchers honor BROWSER=none even if a tool omits its no-browser flag.
+      BROWSER: "none",
     };
     this.runtimeEnvironment = isolatedEnvironment;
     this.runtimeEnvironmentSignature = runtimeEnvironmentSignature(isolatedEnvironment);

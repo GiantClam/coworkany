@@ -1,13 +1,21 @@
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
+#[cfg(windows)]
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(windows)]
+use std::process::Stdio;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, UNIX_EPOCH};
-use tauri::{Emitter, Manager};
+use std::time::{Duration, UNIX_EPOCH};
+#[cfg(windows)]
+use std::time::Instant;
+use tauri::Manager;
+#[cfg(windows)]
+use tauri::Emitter;
 use std::fs;
 mod storage;
 mod supervisor;
@@ -306,6 +314,7 @@ fn write_runtime_probe_cache(data: &Path, fingerprint: &str, result: &serde_json
     }
 }
 
+#[cfg(windows)]
 fn invalidate_runtime_probe_cache(data: &Path) {
     let _ = fs::remove_file(data.join(RUNTIME_PROBE_CACHE_FILE));
 }
@@ -409,19 +418,23 @@ fn system_executable(command: &str) -> Option<PathBuf> {
 
 #[derive(Debug, Deserialize, Default)]
 struct RuntimeRepairOptions {
+    #[cfg(windows)]
     #[serde(rename = "offlineZip")]
     offline_zip: Option<String>,
 }
 
+#[cfg(windows)]
 #[derive(Clone, Debug, Serialize)]
 struct RuntimeProgressEvent {
     message: String,
 }
 
+#[cfg(windows)]
 fn emit_runtime_progress(app: &tauri::AppHandle, message: impl Into<String>) {
     let _ = app.emit("desktop://runtime-progress", RuntimeProgressEvent { message: message.into() });
 }
 
+#[cfg(windows)]
 fn discover_offline_runtime_zip(resource: &Path) -> Option<PathBuf> {
     let executable = std::env::current_exe().ok();
     let mut candidates = vec![resource.join("CoworkAny-Runtime-x64.zip")];
@@ -430,6 +443,7 @@ fn discover_offline_runtime_zip(resource: &Path) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file()).and_then(|path| std::fs::canonicalize(path).ok()).map(bootstrap::powershell_compatible_path)
 }
 
+#[cfg(any(windows, test))]
 fn configured_offline_runtime_zip(data: &Path) -> Option<PathBuf> {
     let value = config::read(&data.join("config.json"), data).ok()?;
     let configured = value.get("offlineRuntimeZipPath").and_then(serde_json::Value::as_str)?.trim();
@@ -862,6 +876,7 @@ fn write_file_atomically(target: &std::path::Path, bytes: &[u8]) -> Result<(), S
     result
 }
 
+#[cfg(windows)]
 fn powershell_quote(value: &str) -> String { value.replace('\'', "''") }
 
 fn archive_diagnostics(staging: &std::path::Path, zip_path: &std::path::Path) -> Result<(), String> {
@@ -945,6 +960,44 @@ fn open_workspace(app: tauri::AppHandle) -> Result<(), String> {
     platform::open_path_command(&root).spawn().map(|_| ()).map_err(|error| format!("workspace_open_failed: {error}"))
 }
 
+fn is_allowed_external_preview_url(value: &str) -> bool {
+    if value.is_empty() || value.chars().any(|character| character.is_whitespace() || character.is_control()) {
+        return false;
+    }
+    let Some(authority_and_path) = value.strip_prefix("http://") else { return false; };
+    let authority = authority_and_path.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') { return false; }
+    let Some((host, port)) = authority.rsplit_once(':') else { return false; };
+    let host = host.to_ascii_lowercase();
+    if !matches!(host.as_str(), "127.0.0.1" | "localhost" | "[::1]") { return false; }
+    port.parse::<u16>().is_ok_and(|port| port > 0)
+}
+
+#[tauri::command]
+fn open_external_preview(url: String) -> Result<(), String> {
+    if !is_allowed_external_preview_url(&url) { return Err("external_preview_url_rejected".into()); }
+    platform::open_url_command(&url).spawn().map(|_| ()).map_err(|error| format!("external_preview_open_failed: {error}"))
+}
+
+#[cfg(test)]
+mod external_preview_url_tests {
+    use super::is_allowed_external_preview_url;
+
+    #[test]
+    fn allows_http_loopback_preview_urls() {
+        for url in ["http://127.0.0.1:5321/", "http://localhost:5173/index.html", "http://[::1]:8080/?view=1"] {
+            assert!(is_allowed_external_preview_url(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_local_or_non_http_urls() {
+        for url in ["https://127.0.0.1:5321/", "http://example.com:5321/", "http://localhost/", "http://localhost:0/", "http://user@localhost:5321/", "http://localhost:5321/\n"] {
+            assert!(!is_allowed_external_preview_url(url), "{url}");
+        }
+    }
+}
+
 #[tauri::command]
 fn pick_directory(initial_path: Option<String>) -> Result<Option<String>, String> {
     #[cfg(windows)]
@@ -990,9 +1043,10 @@ fn workflow_file_mime_type(path: &Path) -> &'static str {
         "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "gif" => "image/gif",
         "mp4" => "video/mp4", "mov" => "video/quicktime", "webm" => "video/webm",
         "mp3" => "audio/mpeg", "wav" => "audio/wav", "m4a" => "audio/mp4", "ogg" => "audio/ogg",
-        "pdf" => "application/pdf", "txt" => "text/plain", "md" => "text/markdown", "csv" => "text/csv", "json" => "application/json",
-        "doc" => "application/msword", "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "ppt" => "application/vnd.ms-powerpoint", "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "pdf" => "application/pdf", "txt" => "text/plain", "md" => "text/markdown", "csv" => "text/csv", "json" => "application/json", "rtf" => "application/rtf",
+        "doc" => "application/msword", "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "odt" => "application/vnd.oasis.opendocument.text",
+        "ppt" => "application/vnd.ms-powerpoint", "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation", "odp" => "application/vnd.oasis.opendocument.presentation",
+        "xls" => "application/vnd.ms-excel", "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "ods" => "application/vnd.oasis.opendocument.spreadsheet",
         _ => "application/octet-stream",
     }
 }
@@ -1665,7 +1719,7 @@ pub fn run() {
             *state.0.lock().map_err(|_| "startup_state_poisoned")? = Some(StartupResults { local_state, runtime });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, apply_workflow_ai_operation, list_workflow_ai_operation_groups, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
+        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, open_external_preview, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, apply_workflow_ai_operation, list_workflow_ai_operation_groups, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
     let app = builder.build(tauri::generate_context!()).expect("error while building CoworkAny");
     drop(startup_progress);
     app.run(|app, event| {
@@ -1699,7 +1753,9 @@ fn adjacent_instance_lock_path(data_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, customer_package_id, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, customer_package_id, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    #[cfg(windows)]
+    use super::powershell_quote;
     #[cfg(target_os = "macos")]
     use super::macos_workflow_output_save_script;
     use std::fs;

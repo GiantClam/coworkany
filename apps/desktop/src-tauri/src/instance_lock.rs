@@ -126,6 +126,7 @@ fn process_matches_current_executable(pid: u32) -> bool {
     })
 }
 
+#[cfg(windows)]
 fn paths_equal(left: &Path, right: &Path) -> bool {
     #[cfg(windows)]
     {

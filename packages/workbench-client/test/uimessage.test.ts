@@ -139,6 +139,35 @@ test("emits AI SDK UI message chunks for native and typed data parts", () => {
   assert.deepEqual(workbenchEventToUIMessageChunks({ type: "text", delta: "hi" }), [{ type: "text-delta", id: "text:assistant", delta: "hi" }]);
   const chunks = workbenchEventToUIMessageChunks({ type: "artifact", artifact: { id: "artifact-1", relativePath: "assets/a.png", title: "a.png", mimeType: "image/png", byteLength: 1, sha256: "hash" } });
   assert.equal(chunks[0]?.type, "data-artifact");
+  const previewChunks = workbenchEventToUIMessageChunks({ type: "preview", preview: { kind: "ppt", title: "Deck preview", url: "http://127.0.0.1:5200/", previewSessionId: "dashi:5200", engine: "dashi-ppt", interactive: true, status: "ready" } });
+  assert.equal(previewChunks[0]?.type, "data-preview");
+});
+
+test("updates one stable preview part and persists its session descriptor", () => {
+  const initial = createDesktopUIMessage({ id: "assistant-preview", role: "assistant", conversationId: "conversation-preview", runId: "run-preview" });
+  const loading = applyWorkbenchRunEventToUIMessage(initial, event({
+    type: "preview",
+    preview: { kind: "ppt", title: "Deck preview", previewSessionId: "ppt-session-1", engine: "ppt-master", interactive: true, status: "loading" },
+    sequence: 1,
+  }));
+  const ready = applyWorkbenchRunEventToUIMessage(loading, event({
+    type: "preview",
+    preview: { kind: "ppt", title: "Deck preview", url: "http://127.0.0.1:6060/", previewSessionId: "ppt-session-1", engine: "ppt-master", interactive: true, status: "ready" },
+    sequence: 2,
+  }));
+  const duplicate = applyWorkbenchRunEventToUIMessage(ready, event({
+    type: "preview",
+    preview: { kind: "ppt", title: "Duplicate", url: "http://127.0.0.1:6060/", previewSessionId: "ppt-session-1", engine: "ppt-master", status: "ready" },
+    sequence: 2,
+  }));
+  const previews = ready.parts.filter((part) => part.type === "data-preview");
+  assert.equal(previews.length, 1);
+  assert.equal(previews[0]?.id, "preview:ppt-session-1");
+  assert.equal(previews[0]?.data.status, "ready");
+  assert.equal(duplicate, ready);
+  const stored = desktopUIMessageStorage(ready);
+  const restored = parseDesktopUIMessage({ id: ready.id, role: ready.role, parts: JSON.parse(stored.parts_json), metadata: JSON.parse(stored.metadata_json) });
+  assert.deepEqual(restored.parts.find((part) => part.type === "data-preview"), previews[0]);
 });
 
 test("serializes and restores UIMessage parts and metadata without losing text", () => {
@@ -227,6 +256,7 @@ test("replays every UIMessage part family into stable native or typed chunks", (
     { type: "attachment", attachment: { id: "file-1", name: "brief.pdf", mediaType: "application/pdf", status: "ready" } },
     { type: "media", media: { artifactId: "media-1", kind: "image", title: "封面", mimeType: "image/png", relativePath: "artifacts/cover.png", previewable: true } },
     { type: "artifact", artifact: { id: "artifact-1", relativePath: "artifacts/a.png", title: "封面", mimeType: "image/png", byteLength: 1, sha256: "hash" } },
+    { type: "preview", preview: { kind: "web", title: "网站预览", url: "http://localhost:5300/", previewSessionId: "web-1", engine: "generic-web", interactive: true, status: "ready" } },
   ];
   const chunks = events.flatMap(workbenchEventToUIMessageChunks);
   assert.deepEqual(chunks.map((chunk) => chunk.type), [
@@ -238,11 +268,13 @@ test("replays every UIMessage part family into stable native or typed chunks", (
     "data-attachment",
     "data-media",
     "data-artifact",
+    "data-preview",
   ]);
   assert.equal(chunks[2]?.type === "tool-input-available" && chunks[2].toolCallId, "tool-1");
   assert.equal(chunks[4]?.type === "source-url" && chunks[4].sourceId, "source-1");
   assert.equal(chunks[6]?.type === "data-media" && chunks[6].data.kind, "image");
   assert.equal(chunks[7]?.type === "data-artifact" && chunks[7].data.mimeType, "image/png");
+  assert.equal(chunks[8]?.type === "data-preview" && chunks[8].data.previewSessionId, "web-1");
 });
 
 test("reconstructs the same rich UIMessage after event replay and persistence", () => {
@@ -255,13 +287,14 @@ test("reconstructs the same rich UIMessage after event replay and persistence", 
     { type: "attachment", attachment: { id: "file-1", name: "brief.pdf", mediaType: "application/pdf", status: "ready" }, sequence: 6 },
     { type: "media", media: { artifactId: "media-1", kind: "image", title: "封面", mimeType: "image/png", relativePath: "artifacts/cover.png" }, sequence: 7 },
     { type: "artifact", artifact: { id: "artifact-1", relativePath: "artifacts/result.md", title: "结果", mimeType: "text/markdown", byteLength: 8, sha256: "hash" }, sequence: 8 },
-    { type: "status", status: "succeeded", sequence: 9 },
+    { type: "preview", preview: { kind: "ppt", title: "演示文稿", url: "http://127.0.0.1:5200/", previewSessionId: "dashi-5200", engine: "dashi-ppt", status: "ready" }, sequence: 9 },
+    { type: "status", status: "succeeded", sequence: 10 },
   ];
   const initial = createDesktopUIMessage({ id: "assistant-replay", role: "assistant", conversationId: "conversation-replay", runId: "run-replay", providerId: "deepseek", modelId: "deepseek-v4-flash" });
   const replayed = events.reduce(applyWorkbenchRunEventToUIMessage, initial);
   const stored = desktopUIMessageStorage(replayed);
   const restored = parseDesktopUIMessage({ id: replayed.id, role: replayed.role, parts: JSON.parse(stored.parts_json), metadata: JSON.parse(stored.metadata_json) });
   assert.deepEqual(JSON.parse(JSON.stringify(restored.parts)), JSON.parse(JSON.stringify(replayed.parts)));
-  assert.equal(restored.metadata?.lastSequence, 9);
+  assert.equal(restored.metadata?.lastSequence, 10);
   assert.equal(restored.metadata?.runStatus, "completed");
 });

@@ -3,7 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -464,15 +464,15 @@ test("workflow-host registers a PPT artifact when the presentation skill writes 
   const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-ppt-artifact-"));
   const fixture = join(desktopRoot, "test", "fixtures", "fake-opencode-serve.mjs");
-  const child = startHost(desktopRoot, { COWORKANY_OPENCODE_PATH: fixture, OPENCODE_RUNTIME_DIR: workspace });
+  const child = startHost(desktopRoot, { COWORKANY_OPENCODE_PATH: fixture, OPENCODE_RUNTIME_DIR: workspace, FAKE_OPENCODE_PPT_PREVIEW: "1" });
   try {
     const provider = { id: "configured", source: "openai-compatible", model: "configured/model" };
     const sessionRequestId = randomUUID();
-    child.child.stdin.write(encodeRpcMessage({ version: 1, requestId: sessionRequestId, type: "session.create", payload: { conversationId: "conversation-ppt-artifact", workspacePath: workspace, model: provider.model, provider, allowArtifacts: true } }));
+    child.child.stdin.write(encodeRpcMessage({ version: 1, requestId: sessionRequestId, type: "session.create", payload: { conversationId: "conversation-ppt-artifact", workspacePath: workspace, model: provider.model, provider, allowArtifacts: false } }));
     const sessionResponse = await child.waitFor((frame) => frame.requestId === sessionRequestId && frame.ok === true);
     const sessionId = String((sessionResponse.data as Record<string, unknown>).sessionId ?? "");
     const runId = `ppt-artifact-${randomUUID()}`;
-    child.child.stdin.write(encodeRpcMessage({ version: 1, requestId: runId, runId, sessionId, type: "session.prompt", payload: { prompt: "Create ppt-master artifact", model: provider.model, provider, allowArtifacts: true, skillId: "ppt-master" } }));
+    child.child.stdin.write(encodeRpcMessage({ version: 1, requestId: runId, runId, sessionId, type: "session.prompt", payload: { prompt: "Create ppt-master artifact", model: provider.model, provider, allowArtifacts: false, skillId: "ppt-master" } }));
     await child.waitFor((frame) => {
       const event = (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined;
       return event?.event === "done" && event.runId === runId;
@@ -486,6 +486,41 @@ test("workflow-host registers a PPT artifact when the presentation skill writes 
       .filter((frame) => frame.type === "service_request" && frame.method === "workflow.artifact.register")
       .map((frame) => frame.payload as Record<string, unknown>);
     assert.equal(registrations.some((payload) => payload.runId === runId && payload.relativePath === "workflow-deck.pptx" && payload.mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation"), true);
+    assert.equal(artifacts.some((event) => (event?.artifact as Record<string, unknown> | undefined)?.relativePath === "workflow-preview.html"), false);
+    assert.equal(registrations.some((payload) => payload.runId === runId && payload.relativePath === "workflow-preview.html"), false);
+  } finally {
+    if (child.child.exitCode === null) child.child.kill();
+    child.child.stdin.destroy();
+    await rm(workspace, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test("workflow authoring runs as the shared restricted Agent with its native Skill command", async () => {
+  const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-workflow-agent-"));
+  const skills = join(workspace, "skills");
+  await mkdir(join(skills, "workflow-authoring"), { recursive: true });
+  await writeFile(join(skills, "workflow-authoring", "SKILL.md"), "---\nname: workflow-authoring\ndescription: Fixture\n---\nReturn a workflow plan.", "utf8");
+  const requestLog = join(workspace, "requests.jsonl");
+  const fixture = join(desktopRoot, "test", "fixtures", "fake-opencode-serve.mjs");
+  const child = startHost(desktopRoot, { COWORKANY_OPENCODE_PATH: fixture, COWORKANY_SKILLS_DIR: skills, COWORKANY_OPENCODE_CONFIG_DIR: join(workspace, "config"), OPENCODE_RUNTIME_DIR: workspace, FAKE_OPENCODE_REQUEST_LOG: requestLog });
+  try {
+    const provider = { id: "configured", source: "openai-compatible", model: "configured/model", baseUrl: "https://provider.test/v1" };
+    const sessionRequestId = randomUUID();
+    child.child.stdin.write(encodeRpcMessage({ version: 1, requestId: sessionRequestId, type: "session.create", payload: { conversationId: "workflow-ai:workflow-1", workspacePath: workspace, model: provider.model, provider, allowArtifacts: false, agentId: "workflow-ai" } }));
+    const sessionResponse = await child.waitFor((frame) => frame.requestId === sessionRequestId && frame.ok === true);
+    const sessionId = String((sessionResponse.data as Record<string, unknown>).sessionId ?? "");
+    const runId = `workflow-agent-${randomUUID()}`;
+    child.child.stdin.write(encodeRpcMessage({ version: 1, requestId: runId, runId, sessionId, type: "session.prompt", payload: { prompt: "Create a text workflow.", model: provider.model, provider, skillId: "workflow-authoring", agentId: "workflow-ai", allowArtifacts: false } }));
+    await child.waitFor((frame) => {
+      const event = (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined;
+      return event?.event === "done" && event.runId === runId;
+    });
+    const requests = (await readFile(requestLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { path: string; payload: Record<string, unknown> });
+    const skillRequest = requests.find((item) => item.path.endsWith("/command"));
+    assert.equal(skillRequest?.payload.command, "workflow-authoring");
+    assert.equal(skillRequest?.payload.agent, "workflow-ai");
+    assert.equal(skillRequest?.payload.arguments, "Create a text workflow.");
   } finally {
     if (child.child.exitCode === null) child.child.kill();
     child.child.stdin.destroy();

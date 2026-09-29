@@ -52,6 +52,20 @@ function context(): WorkflowAiContext {
       { id: "gemini", label: "Gemini", models: ["gemini-2.5-pro"], capabilities: ["text", "vision"], available: true },
       { id: "offline", label: "Offline", models: ["none"], capabilities: ["text"], available: false },
     ],
+    goldenTemplates: [{
+      templateKey: "image-campaign",
+      templateVersion: 1,
+      capabilities: ["text-generation", "image-generation", "result-composition"],
+      nodeTypes: ["text_input", "llm_generate", "image_generate", "product_store"],
+      requiredProviderCapabilities: ["text", "image"],
+      definition: {
+        schemaVersion: 2,
+        revision: 1,
+        definitionHash: "b".repeat(64),
+        nodes: [{ nodeKey: "image", type: "image_generate", nodeVersion: 1, title: "Image", positionX: 400, positionY: 0, config: { prompt: "Generate a campaign image", selectedProviderId: "private-provider", selectedModelId: "private-model", baseUrl: "https://private.test", apiKey: "secret", localPath: "/Users/alice/image.png" } }],
+        edges: [{ edgeKey: "input-image", sourceNodeKey: "input", sourcePortId: "text", targetNodeKey: "image", targetPortId: "text" }],
+      },
+    }],
     viewport: { x: 100, y: 50, scale: 0.8 },
   };
 }
@@ -87,13 +101,63 @@ test("creates a prompt with sanitized context and user text", () => {
   assert.equal(prompt.includes("sk-user-secret"), false);
   assert.equal(prompt.includes("/home/alice"), false);
   assert.match(prompt, /Do not run the workflow unless the user explicitly asks/);
+  assert.match(prompt, /workflow-authoring/);
+  assert.match(prompt, /"schemaVersion":1/);
+  assert.match(prompt, /"templateKey":"image-campaign"/);
+});
+
+test("serializes the versioned authoring skill and prompt-safe golden templates", () => {
+  const metadata = workflowAiContextToMetadata(context()) as {
+    authoringSkill: { id: string; protocolVersion: number };
+    goldenTemplates: Array<Record<string, unknown>>;
+  };
+  assert.deepEqual(metadata.authoringSkill, { id: "workflow-authoring", protocolVersion: 1 });
+  assert.deepEqual(metadata.goldenTemplates, [{
+    templateKey: "image-campaign",
+    templateVersion: 1,
+    capabilities: ["text-generation", "image-generation", "result-composition"],
+    nodeTypes: ["text_input", "llm_generate", "image_generate", "product_store"],
+    requiredProviderCapabilities: ["text", "image"],
+    definition: {
+      nodes: [{ nodeKey: "image", type: "image_generate", nodeVersion: 1, title: "Image", positionX: 400, positionY: 0, config: { prompt: "Generate a campaign image" } }],
+      edges: [{ edgeKey: "input-image", sourceNodeKey: "input", sourcePortId: "text", targetNodeKey: "image", targetPortId: "text" }],
+    },
+  }]);
+  const serialized = JSON.stringify(metadata.goldenTemplates);
+  for (const secret of ["private-provider", "private-model", "private.test", "secret", "/Users/alice"]) assert.equal(serialized.includes(secret), false);
 });
 
 test("workflow prompt gives the model the canonical mutation command shape", () => {
   const prompt = createWorkflowAiPrompt(context(), "Rename the input node");
   assert.match(prompt, /"type":"update_node","nodeKey":"node-key","patch":\{"title":"New title"\}/);
   assert.match(prompt, /Never put validate_workflow, focus_nodes, run_preflight, or run_workflow inside operationGroup\.commands/);
+  assert.match(prompt, /plan\.operations array is the canonical mutation list/);
+  assert.match(prompt, /derives an operation group from plan\.operations when it is omitted/);
+  assert.match(prompt, /status must be exactly valid, invalid, or needs_configuration/);
+  assert.match(prompt, /Missing Provider configuration does not make an otherwise valid graph invalid/);
   assert.match(prompt, /Use the type field, never name/);
+});
+
+test("workflow prompt exposes executable node capabilities and forbids title-only capability changes", () => {
+  const prompt = createWorkflowAiPrompt(context(), "当前工作流应该是生成图文混排的文章");
+  const metadata = workflowAiContextToMetadata(context()) as {
+    availableNodeTypes: Array<{ type: string; inputs: Array<{ id: string; valueKind: string }>; outputs: Array<{ id: string; valueKind: string }> }>;
+  };
+  const writer = metadata.availableNodeTypes.find((node) => node.type === "writer");
+  const imageGenerator = metadata.availableNodeTypes.find((node) => node.type === "image_generate");
+  const productStore = metadata.availableNodeTypes.find((node) => node.type === "product_store");
+
+  assert.match(prompt, /"type":"writer"/);
+  assert.match(prompt, /"type":"image_generate"/);
+  assert.match(prompt, /"type":"product_store"/);
+  assert.match(prompt, /"id":"text","valueKind":"text"/);
+  assert.match(prompt, /"id":"image","valueKind":"image"/);
+  assert.match(prompt, /Changing a node title never changes its capability/);
+  assert.match(prompt, /use separate writer and image_generate nodes/);
+  assert.deepEqual(writer?.outputs, [{ id: "text", valueKind: "text", cardinality: "many" }]);
+  assert.deepEqual(imageGenerator?.outputs, [{ id: "image", valueKind: "image", cardinality: "many" }]);
+  assert.equal(productStore?.inputs.some((port) => port.id === "text" && port.valueKind === "text"), true);
+  assert.equal(productStore?.inputs.some((port) => port.id === "images" && port.valueKind === "image"), true);
 });
 
 test("accepts only the named workflow tools", () => {

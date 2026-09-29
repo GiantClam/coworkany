@@ -62,7 +62,7 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${hostname}:${port}`);
   if (request.method === "GET" && url.pathname === "/session/status") return json(response, 200, sessionStatuses);
   if (request.method === "GET" && url.pathname === "/session/recovered-session/message") return json(response, 200, sessionMessages.get("recovered-session") ?? []);
-  if (request.method === "GET" && url.pathname === "/command") return json(response, 200, [{ name: "ppt-master", source: "skill" }, { name: "dashi-ppt", source: "skill" }]);
+  if (request.method === "GET" && url.pathname === "/command") return json(response, 200, [{ name: "ppt-master", source: "skill" }, { name: "dashi-ppt", source: "skill" }, { name: "workflow-authoring", source: "skill" }]);
   if (request.method === "GET" && url.pathname === "/question") return json(response, 200, pendingQuestion ? [pendingQuestion] : []);
   if (request.method === "POST" && /^\/question\/question-1\/(reply|reject)$/.test(url.pathname)) {
     let body = "";
@@ -241,6 +241,7 @@ const server = createServer(async (request, response) => {
     }
     if (typeof prompt === "string" && prompt.includes("ppt-master")) {
       writeFileSync("workflow-deck.pptx", Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00]));
+      if (process.env.FAKE_OPENCODE_PPT_PREVIEW === "1") writeFileSync("workflow-preview.html", "<h1>Preview</h1>", "utf8");
     }
     if (prompt === "Create chat artifact") writeFileSync("chat-final.md", "final chat artifact\n", "utf8");
     const answer = prompt === "First turn" ? "First answer" : prompt === "Second turn" ? "Second answer" : prompt === "Create artifact" ? "Artifact created" : "Recovered answer";
@@ -258,7 +259,8 @@ const server = createServer(async (request, response) => {
       }
       sendEvent({ payload: { type: "message.updated", properties: { ...sessionProperty, info: { id: "assistant-1", role: "assistant", time: { completed: Date.now() } } } } });
       sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "text-1", messageID: "assistant-1", type: "text", text: answer } } } });
-      sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "tool-1", messageID: "assistant-1", type: "tool", tool: createdArtifactPath ? "bash" : tool, state: { status: "completed", title: "saved", ...(prompt === "Create chat artifact" ? { input: { filePath: "chat-final.md", content: "final chat artifact\\n" }, output: { path: "chat-final.md" } } : createdArtifactPath ? { output: { path: createdArtifactPath } } : {}) } } } } });
+      const pptPreviewPath = process.env.FAKE_OPENCODE_PPT_PREVIEW === "1" && typeof prompt === "string" && prompt.includes("ppt-master") ? "workflow-preview.html" : undefined;
+      sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "tool-1", messageID: "assistant-1", type: "tool", tool: createdArtifactPath ? "bash" : tool, state: { status: "completed", title: "saved", ...(prompt === "Create chat artifact" ? { input: { filePath: "chat-final.md", content: "final chat artifact\\n" }, output: { path: "chat-final.md" } } : createdArtifactPath ? { output: { path: createdArtifactPath, ...(pptPreviewPath ? { result: { path: pptPreviewPath } } : {}) } } : {}) } } } } });
       sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "usage-1", messageID: "assistant-1", type: "step-finish", tokens: { input: 11, output: 7 }, cost: 0.02 } } } });
       sendEvent({ payload: { type: "session.status", properties: { ...sessionProperty, status: { type: "idle" } } } });
     }, 25);
@@ -278,3 +280,4 @@ const shutdown = () => process.exit(0);
 process.once("SIGTERM", shutdown);
 process.once("SIGINT", shutdown);
 server.listen(port, hostname);
+/* global Buffer, URL, clearTimeout, process, setTimeout */

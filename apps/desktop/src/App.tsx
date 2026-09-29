@@ -1,17 +1,17 @@
-import { createContext, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type SetStateAction } from "react";
+import { createContext, lazy, startTransition, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type SetStateAction } from "react";
 import { ArrowLeft, Copy as CopyIcon, Eye, FileText, ImagePlus, Maximize2, Sparkles, Trash2 } from "lucide-react";
-import { AudioPlayer, Image, MessageResponse, Queue, Suggestion, Suggestions, buildOnlineAgentGroups, formatWorkbenchModelLabel, getWorkbenchTaskStatusLabel, isWorkbenchTaskActive, isWorkbenchTaskRetryable, normalizeWorkbenchTaskStatus, resolveWorkbenchMediaFeature, workbenchSessionScope, WORKBENCH_HOME_COPY, WORKBENCH_HOME_GROUPS, WORKBENCH_MEDIA_FEATURES, WORKBENCH_MESSAGE_FRAME, WORKBENCH_ROUTE_MANIFEST, WORKBENCH_THEME, WORKBENCH_WRITER_CONTENT_TYPES, WORKBENCH_WRITER_LANGUAGES, WORKBENCH_WRITER_MODES, WORKBENCH_WRITER_PLATFORMS, WORKBENCH_WRITER_QUICK_PROMPTS, WORKFLOW_PALETTE_DRAG_EVENT, WORKFLOW_PALETTE_DROP_EVENT, WorkbenchAgentDirectory, WorkbenchCapabilityCenter, WorkbenchMessageSurface, WorkbenchPromptInput, WorkbenchRouteIcon, WorkbenchShell, WorkbenchTask, WorkbenchWorkflowCanvas, WorkbenchWorkflowDirectory, WorkbenchWorkflowParameterFields, WorkflowAiSidebar, type ModelOption, type WorkbenchAgentDirectoryGroup, type WorkbenchCapabilityCenterGroup, type WorkbenchMediaFeatureId, type WorkbenchWorkflowDirectoryAction, type WorkbenchWorkflowDirectoryRun, type WorkbenchWorkflowDirectoryTemplate, type WorkbenchWorkflowDirectoryWorkflow } from "@coworkany/workbench-ui";
-import { MessageAction } from "@coworkany/workbench-ui";
-import type { WorkbenchArtifactSource, WorkbenchMediaSource, WorkflowCanvasExecutionSnapshot } from "@coworkany/workbench-ui";
+import { AudioPlayer, Image, MessageResponse, Queue, Suggestion, Suggestions, buildOnlineAgentGroups, formatWorkbenchModelLabel, getWorkbenchTaskStatusLabel, isWorkbenchTaskActive, isWorkbenchTaskRetryable, normalizeWorkbenchTaskStatus, resolveWorkbenchMediaFeature, workbenchSessionScope, WORKBENCH_HOME_COPY, WORKBENCH_HOME_GROUPS, WORKBENCH_MEDIA_FEATURES, WORKBENCH_MESSAGE_FRAME, WORKBENCH_ROUTE_MANIFEST, WORKBENCH_THEME, WORKBENCH_WRITER_CONTENT_TYPES, WORKBENCH_WRITER_LANGUAGES, WORKBENCH_WRITER_MODES, WORKBENCH_WRITER_PLATFORMS, WORKBENCH_WRITER_QUICK_PROMPTS, WORKFLOW_PALETTE_DRAG_EVENT, WORKFLOW_PALETTE_DROP_EVENT, WorkbenchAgentDirectory, WorkbenchCapabilityCenter, WorkbenchMessageSurface, WorkbenchPromptInput, WorkbenchRouteIcon, WorkbenchShell, WorkbenchTask, WorkbenchWorkflowDirectory, WorkbenchWorkflowParameterFields, WorkflowAiSidebar, type ModelOption, type WorkbenchAgentDirectoryGroup, type WorkbenchCapabilityCenterGroup, type WorkbenchMediaFeatureId, type WorkbenchWorkflowDirectoryAction, type WorkbenchWorkflowDirectoryRun, type WorkbenchWorkflowDirectoryTemplate, type WorkbenchWorkflowDirectoryWorkflow } from "@coworkany/workbench-ui/desktop";
+import { MessageAction } from "@coworkany/workbench-ui/desktop";
+import type { WorkbenchArtifactSource, WorkbenchMediaSource, WorkbenchPreviewContext, WorkbenchPreviewSource, WorkflowCanvasExecutionSnapshot } from "@coworkany/workbench-ui/desktop";
 import { createUniqueWorkflowNodeKey, repairWorkflowNodeKeys } from "./workflow-node-keys";
 import { applyWorkflowNodeEvent, createWorkflowNodeSnapshots, finalizeWorkflowNodeSnapshots } from "./workflow-node-status";
 import { localFileUploadErrorCode, persistLocalFile } from "./local-file-upload";
-import { areWorkflowPortsCompatible, hashWorkflowDefinition, migrateWorkflowDefinitionToCurrent, validateWorkflowDefinition, workflowNodeRegistry, type WorkflowDefinitionEnvelope, type WorkflowDefinitionNodeV2 } from "@coworkany/workflow-core";
+import { hashWorkflowDefinition, migrateWorkflowDefinitionToCurrent, validateWorkflowDefinition, workflowNodeRegistry, type WorkflowDefinitionEnvelope, type WorkflowDefinitionNodeV2 } from "@coworkany/workflow-core";
 import { applyDesktopUIMessageRunEventToParts as applyWorkbenchRunEventToParts, createDesktopUIMessage, createWorkflowAiPrompt, desktopUIMessageText, parseDesktopUIMessage } from "@coworkany/workbench-client";
-import type { DesktopArtifactData, DesktopMediaData, DesktopUIMessage, DesktopUIMessagePart, WorkbenchArtifact, WorkbenchClient, WorkbenchKnowledgeResult, WorkbenchRun, WorkbenchRunDetail, WorkbenchWorkflow, WorkflowAiContext, WorkflowAiOperationGroup } from "@coworkany/workbench-client";
+import type { DesktopArtifactData, DesktopMediaData, DesktopPreviewData, DesktopUIMessage, DesktopUIMessagePart, WorkbenchArtifact, WorkbenchClient, WorkbenchKnowledgeResult, WorkbenchRun, WorkbenchRunDetail, WorkbenchWorkflow, WorkflowAiContext, WorkflowAiOperationGroup } from "@coworkany/workbench-client";
 import type { ChatTransport } from "ai";
 import { isTauriBridgeAvailable, tauriBridge } from "./tauri";
-import { createDesktopChatTransport, createDesktopWorkbenchClient, createDesktopWorkflowAiChatTransport } from "./workbench-client";
+import { createDesktopChatTransport, createDesktopWorkbenchClient, type DesktopChatTransportOptions } from "./workbench-client";
 import { useDesktopChat } from "./use-desktop-chat";
 import { buildAgencyAgentGroups } from "./agency-agent-catalog";
 import { closeDesktopMediaTab, createDesktopMediaTab, openDesktopMediaTab, syncDesktopMediaTabModel, type DesktopMediaTabState } from "./media-tabs";
@@ -33,8 +33,9 @@ import { writerImageArtifactsForArticle } from "./writer-preview";
 import { replayPersistedRunToConversationMessage } from "./conversation-run-replay";
 import { WorkflowOutputPreview } from "./workflow-output-view";
 import { createRunningHubAudioTranscriptionRegistration, createRunningHubWorkflowRegistration, migrateLegacyRunningHubWorkflows, parseRunningHubWorkflowJson, runningHubWorkflowIdFromUrl, type RunningHubWorkflowCapability, type RunningHubWorkflowRegistration, type RunningHubWorkflowRequestKind } from "./runninghub-workflow";
-import { buildCharacterSwapVideoWorkflowDefinition, workflowPromptFromDefinition } from "./workflow-templates";
-import { promptRequestsArtifact } from "./artifact-intent";
+import { buildCampaignImageWorkflowDefinition, buildCharacterSwapVideoWorkflowDefinition, workflowPromptFromDefinition } from "./workflow-templates";
+import { createWorkflowGoldenTemplateRegistry } from "./workflow-golden-template-registry";
+import { chatAllowsArtifactRegistration } from "./artifact-intent";
 import { filterAssetLibraryItems, type AssetLibraryTab } from "./asset-library-filter";
 import { ConversationMemoryCache } from "./conversation-cache";
 import { NativeQuestions } from "./native-questions";
@@ -43,10 +44,14 @@ import { isWorkbenchQuestionToolEvent } from "@coworkany/workbench-client";
 import { questionConversationForRoute, questionSessionIdForRoute } from "./question-session-route";
 import { isCurrentWorkflowRestore, type WorkflowRestoreToken } from "./workflow-restore-guard";
 import { ImageMaskEditor } from "./image-mask-editor";
-import { createWorkflowAiController, parseWorkflowAiAssistantResponse, workflowAiProviderOptions, type WorkflowAiController } from "./workflow-ai-controller";
+import { createWorkflowAiController, parseWorkflowAiAssistantResponse, recordWorkflowAiRepairAttempt, resolveWorkflowAiTextProvider, shouldRetryWorkflowAiRepair, workflowAiProviderOptions, type WorkflowAiController } from "./workflow-ai-controller";
+import { DesktopPreviewSessionRegistry, resolveDesktopLoopbackPreviewUrl, resolveDesktopPreviewRuntimeUrl } from "./preview-session";
+import { createWorkflowHistory, shouldResetWorkflowHistory, type WorkflowHistoryState } from "./workflow-history";
+
+const WorkbenchWorkflowCanvas = lazy(() => import("../../../packages/workbench-ui/src/workflow-canvas").then(({ WorkflowCanvas }) => ({ default: WorkflowCanvas })));
 
 function escapeWriterHtml(value: string) {
-  return value.replace(/[&<>\"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character] ?? character).replace(/\r?\n/g, "<br />");
+  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character] ?? character).replace(/\r?\n/g, "<br />");
 }
 
 function createDesktopChatUserMessage(input: {
@@ -216,10 +221,7 @@ export function runtimeRepairOptions(config: Pick<DesktopConfig, "offlineRuntime
 }
 
 let activeMediaProviderConfigured = false;
-let openWorkflowProviderSettings = () => undefined;
 let desktopVoiceLoader: (() => Promise<readonly MiniMaxVoiceOption[]>) | undefined;
-const localizedRunStatus = "";
-const canContinue = false;
 function embeddingPayload(config: DesktopConfig): EmbeddingConfig {
   return config.embedding?.mode === "remote"
     ? { mode: "remote", baseUrl: config.embedding.baseUrl, model: config.embedding.model, apiKey: config.embedding.apiKey }
@@ -228,6 +230,11 @@ function embeddingPayload(config: DesktopConfig): EmbeddingConfig {
 type SavedWorkflow = { id: string; name: string; definition_json: string; updated_at: string };
 type WorkflowStatus = "draft" | "live" | "archived";
 type WorkflowMetadata = { title: string; description: string; status: WorkflowStatus };
+const UNBOUND_MEDIA_PROVIDER: DesktopProviderConfig = { id: "", source: "unconfigured", baseUrl: "", model: "", capabilities: [] };
+
+export function projectOpenedWorkflowDefinition(definition: WorkflowDefinitionEnvelope, metadata: Pick<WorkflowMetadata, "description" | "status">): WorkflowDefinitionEnvelope {
+  return sanitizeWorkflowDefinitionForStorage({ ...definition, metadata: { ...(definition.metadata ?? {}), description: metadata.description, status: metadata.status } });
+}
 type ArtifactRow = { id: string; relative_path: string; mime_type: string; byte_length: number; sha256: string; created_at: string; available?: boolean };
 type LocalMediaPreview = { mimeType: string; data: number[] };
 type RunRow = { id: string; conversation_id?: string | null; status: string; model?: string | null; started_at: string; finished_at?: string | null };
@@ -297,12 +304,21 @@ function isTextArtifact(mimeType: string, relativePath: string) {
   return normalizedMime.startsWith("text/") || ["md", "markdown", "mdown", "json", "csv", "tsv", "xml", "yaml", "yml", "js", "jsx", "ts", "tsx", "css"].includes(extension);
 }
 
+function isNativeOfficePreviewArtifact(mimeType: string, relativePath: string) {
+  const normalizedMime = mimeType.toLowerCase().split(";", 1)[0] ?? "";
+  const extension = relativePath.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? "";
+  return ["pptx", "docx", "xlsx"].includes(extension)
+    || ["application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"].includes(normalizedMime);
+}
+
 async function resolveDesktopArtifactSource(artifact: DesktopArtifactData): Promise<WorkbenchArtifactSource | null> {
   if (!artifact.relativePath) return null;
   if (!isTauriBridgeAvailable()) return { url: artifact.relativePath };
+  const office = isNativeOfficePreviewArtifact(artifact.mimeType, artifact.relativePath);
   const payload = await tauriBridge.invoke<LocalMediaPreview>("read_artifact", { relativePath: artifact.relativePath, mimeType: artifact.mimeType });
   const bytes = new Uint8Array(payload.data);
   const mimeType = payload.mimeType || artifact.mimeType;
+  if (office) return { data: bytes.slice().buffer, mimeType };
   const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
   return {
     url,
@@ -310,6 +326,48 @@ async function resolveDesktopArtifactSource(artifact: DesktopArtifactData): Prom
     text: isTextArtifact(mimeType, artifact.relativePath) ? new TextDecoder().decode(bytes) : undefined,
     revoke: () => URL.revokeObjectURL(url),
   };
+}
+
+const desktopPreviewSessions = new DesktopPreviewSessionRegistry(undefined, (message) => console.warn(message));
+
+async function resolveDesktopPreviewSource(preview: DesktopPreviewData, context: WorkbenchPreviewContext): Promise<WorkbenchPreviewSource | null> {
+  if (preview.url) {
+    const url = await desktopPreviewSessions.reconnect(preview, context);
+    return url ? { url } : null;
+  }
+  if (!preview.relativePath || !isTauriBridgeAvailable()) return null;
+  const payload = await tauriBridge.invoke<LocalMediaPreview>("read_artifact", { relativePath: preview.relativePath, mimeType: preview.mimeType ?? "application/octet-stream" });
+  const url = URL.createObjectURL(new Blob([new Uint8Array(payload.data)], { type: payload.mimeType || preview.mimeType }));
+  return { url, revoke: () => URL.revokeObjectURL(url) };
+}
+
+async function openDesktopPreviewInBrowser(preview: DesktopPreviewData) {
+  const url = resolveDesktopPreviewRuntimeUrl(preview);
+  if (!url) throw new Error("preview_external_url_rejected");
+  if (!isTauriBridgeAvailable()) throw new Error("preview_external_browser_unavailable");
+  await tauriBridge.invoke("open_external_preview", { url });
+}
+
+async function exportDesktopPreview(preview: DesktopPreviewData, onArtifactDownload?: (artifactId: string) => void | Promise<void>) {
+  if (preview.artifactId) {
+    await onArtifactDownload?.(preview.artifactId);
+    return;
+  }
+  if (preview.engine === "ppt-master") throw new Error("preview_export_artifact_missing");
+  if (preview.engine !== "dashi-ppt") throw new Error("preview_export_unsupported");
+  const source = resolveDesktopPreviewRuntimeUrl(preview);
+  if (!source) return;
+  const endpoint = new URL("/api/export-editable-pptx", source);
+  const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  if (!response.ok) throw new Error(`preview_export_failed:${response.status}`);
+  const result = await response.json() as { downloadUrl?: unknown; downloadName?: unknown };
+  if (typeof result.downloadUrl !== "string") throw new Error("preview_export_download_missing");
+  const downloadUrl = resolveDesktopLoopbackPreviewUrl(new URL(result.downloadUrl, source).toString());
+  if (!downloadUrl) throw new Error("preview_export_download_rejected");
+  const anchor = document.createElement("a");
+  anchor.href = downloadUrl;
+  anchor.download = typeof result.downloadName === "string" ? result.downloadName : "presentation.pptx";
+  anchor.click();
 }
 
 type WorkflowRetryState = { completed: Record<string, Record<string, unknown>>; recoveryDefinitionHash: string };
@@ -392,32 +450,17 @@ function toSavedWorkflow(workflow: WorkbenchWorkflow): SavedWorkflow {
   return { id: workflow.id, name: workflow.title, definition_json: JSON.stringify(workflow.definition), updated_at: workflow.updatedAt };
 }
 
-function parseSavedWorkflowDefinition(workflow: SavedWorkflow): WorkflowDefinitionEnvelope | null {
+export function parseSavedWorkflowDefinition(workflow: SavedWorkflow, options: { readonly migrate?: boolean } = {}): WorkflowDefinitionEnvelope | null {
   try {
     const definition: unknown = JSON.parse(workflow.definition_json);
     if (!definition || typeof definition !== "object" || Array.isArray(definition) || !Array.isArray((definition as { nodes?: unknown }).nodes) || !Array.isArray((definition as { edges?: unknown }).edges)) return null;
-    const migrated = migrateWorkflowDefinitionToCurrent(definition as Parameters<typeof migrateWorkflowDefinitionToCurrent>[0]);
-    return isWorkflowDefinition(migrated) ? migrated : null;
+    const readable = options.migrate
+      ? migrateWorkflowDefinitionToCurrent(definition as Parameters<typeof migrateWorkflowDefinitionToCurrent>[0])
+      : definition;
+    return isWorkflowDefinition(readable) ? readable : null;
   } catch {
     return null;
   }
-}
-
-function hasLegacyStillVideoComposition(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const definition = value as { nodes?: unknown; edges?: unknown };
-  if (!Array.isArray(definition.nodes) || !Array.isArray(definition.edges)) return false;
-  return definition.nodes.some((node) => {
-    if (!node || typeof node !== "object" || Array.isArray(node)) return false;
-    const candidate = node as { nodeKey?: unknown; type?: unknown; config?: Record<string, unknown> };
-    if (candidate.type !== "video_generate" || candidate.config?.requiresSubtitleBinding !== true || typeof candidate.nodeKey !== "string") return false;
-    const incoming = definition.edges as Array<Record<string, unknown>>;
-    const edges = incoming.filter((edge) => edge.targetNodeKey === candidate.nodeKey);
-    return edges.some((edge) => ["image", "images", "referenceImages"].includes(String(edge.targetPortId)))
-      && edges.some((edge) => ["audio", "audios", "referenceAudios"].includes(String(edge.targetPortId)))
-      && edges.some((edge) => edge.targetPortId === "subtitle")
-      && !edges.some((edge) => ["video", "videos", "referenceVideos"].includes(String(edge.targetPortId)));
-  });
 }
 
 function toArtifactRow(artifact: WorkbenchArtifact): ArtifactRow {
@@ -665,14 +708,6 @@ function outputInputPort(value: string) {
 
 type WorkflowParameterValue = string | number | boolean;
 type WorkflowDynamicOption = { value: string; label: string; description?: string };
-type WorkflowParameterView = {
-  key: string;
-  label: string;
-  value: WorkflowParameterValue;
-  rendererId?: string;
-  valueType?: string;
-  options?: Array<{ label: string; value: string }>;
-};
 
 function conversationIdFromPath(path: string): string | null {
   const match = path.match(/^\/dashboard\/(?:ai|writer|image-assistant)\/([^/?]+)/u);
@@ -762,24 +797,6 @@ function readDesktopTaskMetadata(detail: RunDetail): DesktopTaskMetadata | null 
   }
 }
 
-function getWorkflowParameterViews(node: WorkflowDefinitionNodeV2, locale: "zh" | "en"): WorkflowParameterView[] {
-  const definition = workflowNodeRegistry.get(node.type);
-  const schema = definition?.configSchema ?? [];
-  const schemaKeys = new Set(schema.map((field) => field.id));
-  const schemaViews = schema.flatMap((field) => {
-    const value = node.config[field.id] ?? field.defaultValue;
-    if (value === undefined || value === null || typeof value === "object") return [];
-    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return [];
-    return [{ key: field.id, label: field.label[locale] ?? field.label.en ?? field.id, value, rendererId: field.rendererId, valueType: field.valueType, options: field.options }];
-  });
-  const extraViews = Object.entries(node.config).flatMap(([key, value]) => {
-    if (schemaKeys.has(key) || (key === "provider" && schemaKeys.has("selectedProviderId")) || (key === "model" && schemaKeys.has("selectedModelId")) || /apiKey|token|secret|baseUrl|endpoint|queryEndpoint/iu.test(key) || value === undefined || value === null || typeof value === "object") return [];
-    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return [];
-    return [{ key, label: key, value }];
-  });
-  return [...schemaViews, ...extraViews];
-}
-
 function buildDesktopWorkflowNodeConfig(type: WorkflowAction, prompt: string, model: string, providerId = "local") {
   const definition = workflowNodeRegistry.get(type);
   const config: Record<string, unknown> = { ...(definition?.defaultConfig ?? {}) };
@@ -797,10 +814,6 @@ function buildDesktopWorkflowNodeConfig(type: WorkflowAction, prompt: string, mo
     else config[field.id] = "";
   }
   return config;
-}
-
-function formatWorkflowParameterValue(value: WorkflowParameterValue) {
-  return typeof value === "string" ? value.replace(/\s+/gu, " ").trim() : String(value);
 }
 
 export function buildWorkflowDefinition(prompt: string, actionId: WorkflowAction, provider: Pick<DesktopProviderConfig, "id" | "model" | "baseUrl">, extraConfig: Record<string, unknown> = {}, locale: "zh" | "en" = "zh"): WorkflowDefinitionEnvelope {
@@ -1064,11 +1077,15 @@ function buildLocalAgentGroups(skills: LocalSkillCatalog["skills"], locale: "zh"
 export function desktopExecutionPrompt(_skillId: SkillId, prompt: string, _locale: "zh" | "en") {
   // The selected Skill owns the task workflow. Do not append desktop-specific
   // generation, artifact, or confirmation rules to the user's message.
+  void _skillId;
+  void _locale;
   return prompt;
 }
 
 export function localizedSkillSystemPrompt(_skillId: SkillId, _locale: "zh" | "en") {
   // Skill selection is carried by the native command, not a system override.
+  void _skillId;
+  void _locale;
   return "";
 }
 
@@ -1142,8 +1159,6 @@ function DesktopConversationWorkspace({
   onArtifactDownload,
   activeAssistantParts,
   toolEvents,
-  conversations,
-  onNavigate,
   knowledgeEnabled,
   onKnowledgeToggle,
   onAssistantTextChange,
@@ -1187,7 +1202,7 @@ function DesktopConversationWorkspace({
   chatTransport: ChatTransport<DesktopUIMessage>;
   chatReady: boolean;
   providerId: string;
-  onArtifactDownload?: (artifactId: string) => void;
+  onArtifactDownload?: (artifactId: string) => void | Promise<void>;
   activeAssistantParts?: readonly DesktopUIMessagePart[];
   toolEvents: string[];
   conversations: Array<{ id: string; title: string; updated_at: string; agent_id?: string | null }>;
@@ -1196,7 +1211,7 @@ function DesktopConversationWorkspace({
   knowledgeEnabled: boolean;
   onKnowledgeToggle: () => void;
   artifacts: Array<{ id: string; relative_path: string; mime_type: string; byte_length?: number }>;
-  onArtifactOpen: (relativePath: string, mimeType: string) => void;
+  onArtifactOpen: (relativePath: string, mimeType: string) => void | Promise<void>;
   model: string;
   models?: readonly string[];
   reasoningEffort: string;
@@ -1228,7 +1243,6 @@ function DesktopConversationWorkspace({
   }, [chatTransport, desktopChat.stop, onCancel]);
   const resolvedChatReady = chatReady || !conversationId;
   const isWriter = route.mode === "writer";
-  const copy = desktopCopy[locale];
   const localizedStatus = localizeDesktopStatus(runStatus, locale);
   const localizedRunStatus = isDesktopErrorStatus(localizedStatus) ? "" : localizedStatus;
   const quickPrompts = quickPromptsForDesktopRoute(route.path, locale);
@@ -1263,6 +1277,9 @@ function DesktopConversationWorkspace({
     observer.observe(dock);
     return () => observer.disconnect();
   }, [isWriter, showLanding]);
+  useEffect(() => () => {
+    if (conversationId) void desktopPreviewSessions.closeConversation(conversationId);
+  }, [conversationId]);
   if (isWriter) return <DesktopWriterCloudWorkspace locale={locale} route={route} prompt={prompt} onPromptChange={onPromptChange} runStatus={runStatus} activeRunId={activeRunId} onRun={(value, displayedValue) => onRun(value, displayedValue)} onGenerateImages={onGenerateImages} onCancel={stopChat} activePrompt={activePrompt} activePromptAt={activePromptAt} assistantText={assistantText} onAssistantTextChange={onAssistantTextChange} onSaveDraft={onSaveDraft} onExportDraft={onExportDraft} assistantAt={assistantAt} messages={visibleMessages} uiMessages={desktopChat.messages} activeAssistantParts={activeAssistantParts} toolEvents={toolEvents} artifacts={artifacts} onArtifactOpen={onArtifactOpen} onArtifactDownload={onArtifactDownload} model={model} models={models} reasoningEffort={reasoningEffort} skillId={skillId} attachments={attachments} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} knowledgeEnabled={knowledgeEnabled} onKnowledgeToggle={onKnowledgeToggle} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} onToolApproval={onToolApproval} onReachTop={onReachTop} conversationId={conversationId} conversationScrollTop={conversationScrollTop} onConversationScroll={onConversationScroll} />;
   const baseMessages = conversationLoading ? [] : visibleMessages.length ? visibleMessages : [
     ...(activePrompt ? [{ id: "active-user", conversationId: "active", role: "user" as const, content: activePrompt, createdAt: activePromptAt ?? new Date(0).toISOString() }] : []),
@@ -1304,12 +1321,12 @@ function DesktopConversationWorkspace({
       {!showLanding ? <header className="chat-page-header"><div><h1 className="chat-page-title">{route.label}</h1><p className="chat-page-subtitle">{chatSubtitle}</p></div></header> : null}
       <div className="chat-message-scroll">
         <div className="chat-message-column">
-          <WorkbenchMessageSurface messages={renderedUIMessages} locale={locale} pendingMessageId={activeRunId || desktopChat.status === "submitted" || desktopChat.status === "streaming" ? activeAssistantMessageId : undefined} onReachTop={onReachTop} scrollStateKey={conversationId ?? undefined} restoreScrollTop={conversationScrollTop} onViewportScroll={(viewport) => onConversationScroll?.(viewport.scrollTop)} onCopy={(message) => navigator.clipboard?.writeText(desktopUIMessageText(message))} onRetry={(message) => { const index = renderedUIMessages.findIndex((item) => item.id === message.id); const previous = [...renderedUIMessages.slice(0, index)].reverse().find((item) => item.role === "user"); const retryPrompt = previous ? desktopUIMessageText(previous) : activePrompt; if (retryPrompt.trim()) onRun(retryPrompt); }} onToolApproval={onToolApproval} onArtifactOpen={(artifact) => onArtifactOpen(artifact.relativePath, artifact.mimeType)} onArtifactDownload={onArtifactDownload} resolveMediaSource={resolveDesktopMediaSource} resolveArtifactSource={resolveDesktopArtifactSource} />
+          <WorkbenchMessageSurface messages={renderedUIMessages} locale={locale} pendingMessageId={activeRunId || desktopChat.status === "submitted" || desktopChat.status === "streaming" ? activeAssistantMessageId : undefined} onReachTop={onReachTop} scrollStateKey={conversationId ?? undefined} restoreScrollTop={conversationScrollTop} onViewportScroll={(viewport) => onConversationScroll?.(viewport.scrollTop)} onCopy={(message) => navigator.clipboard?.writeText(desktopUIMessageText(message))} onRetry={(message) => { const index = renderedUIMessages.findIndex((item) => item.id === message.id); const previous = [...renderedUIMessages.slice(0, index)].reverse().find((item) => item.role === "user"); const retryPrompt = previous ? desktopUIMessageText(previous) : activePrompt; if (retryPrompt.trim()) onRun(retryPrompt); }} onToolApproval={onToolApproval} onArtifactOpen={(artifact) => onArtifactOpen(artifact.relativePath, artifact.mimeType)} onArtifactDownload={onArtifactDownload} resolveMediaSource={resolveDesktopMediaSource} resolveArtifactSource={resolveDesktopArtifactSource} resolvePreviewSource={resolveDesktopPreviewSource} onPreviewDownload={(preview) => { if (preview.artifactId) return onArtifactDownload?.(preview.artifactId); if (preview.relativePath) return onArtifactOpen(preview.relativePath, preview.mimeType ?? "application/octet-stream"); }} onPreviewExport={(preview) => exportDesktopPreview(preview, onArtifactDownload)} onPreviewOpenExternal={openDesktopPreviewInBrowser} />
           {conversationLoading ? <div className="chat-conversation-loading muted" role="status">{locale === "zh" ? "正在加载会话…" : "Loading conversation…"}</div> : null}
           {showLanding ? <div className="chat-landing" data-cloud-surface="ai-entry"><div className="chat-landing-kicker"><span className="public-signal" aria-hidden="true" /><span className="dashboard-kicker">AI WORKSPACE</span></div><h1 className="dashboard-title">{route.label}</h1><p>{locale === "zh" ? "选择一个推荐任务，或在下方直接描述你的需求" : "Choose a recommended task, or describe your request below"}</p><Suggestions className="chat-ai-suggestions chat-prompt-card-grid" data-cloud-surface="prompt-suggestions" aria-label={locale === "zh" ? "推荐提示词" : "Recommended prompts"}>{quickPrompts.map((item, index) => <Suggestion key={item} className="chat-prompt-card" suggestion={item} onClick={revealComposer}><span className="chat-prompt-card-index">{String(index + 1).padStart(2, "0")}</span><span className="chat-prompt-card-copy">{item}</span><span className="chat-prompt-card-arrow" aria-hidden="true">↗</span></Suggestion>)}</Suggestions></div> : null}
         </div>
       </div>
-      <div ref={composerDockRef} className="chat-composer-dock"><div className="chat-composer" data-cloud-surface="composer"><WorkbenchPromptInput value={prompt} onValueChange={onPromptChange} onSubmit={submitMessage} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} models={modelOptions} model={model} onModelChange={onModelChange} placeholder={chatPlaceholder} status={activeRunId || desktopChat.status === "submitted" || desktopChat.status === "streaming" ? "streaming" : "ready"} onStop={stopChat} autoFocus={showLanding && !activeRunId} focusRequest={composerFocusRequest} locale={locale}>{route.path.includes("?") ? <div className="composer-selected-agent">{locale === "zh" ? "当前 Agent" : "Selected Agent"}：<strong>{route.label}</strong></div> : null}{knowledgeEnabled ? <div className="composer-knowledge-control"><button type="button" className="composer-knowledge-button" onClick={onKnowledgeToggle}>{locale === "zh" ? "⌑ Obsidian 知识库" : "⌑ Obsidian context"}</button><button type="button" className="composer-knowledge-close" aria-label={locale === "zh" ? "关闭 Obsidian 知识库上下文" : "Disable Obsidian knowledge"} onClick={onKnowledgeToggle}>×</button></div> : <button type="button" className="composer-knowledge-button" onClick={onKnowledgeToggle}>{locale === "zh" ? "⌑ 添加 Obsidian 知识库" : "⌑ Add Obsidian context"}</button>}<div className="composer-ai-controls"><span className="muted composer-hint">{localizedRunStatus || (locale === "zh" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</span><ModelControls locale={locale} model={model} models={models} reasoningEffort={reasoningEffort} skillId={skillId} showSkill={false} hideModel onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} /></div></WorkbenchPromptInput></div></div>
+      <div ref={composerDockRef} className="chat-composer-dock"><div className="chat-composer" data-cloud-surface="composer"><WorkbenchPromptInput value={prompt} onValueChange={onPromptChange} onSubmit={submitMessage} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} models={modelOptions} model={model} onModelChange={onModelChange} placeholder={chatPlaceholder} status={activeRunId || desktopChat.status === "submitted" || desktopChat.status === "streaming" ? "streaming" : "ready"} onStop={stopChat} autoFocus={showLanding && !activeRunId} focusRequest={composerFocusRequest} locale={locale}>{route.path.includes("?") ? <div className="composer-selected-agent">{locale === "zh" ? "当前 Agent" : "Selected Agent"}：<strong>{route.label}</strong></div> : null}{knowledgeEnabled ? <div className="composer-knowledge-control"><button type="button" className="composer-knowledge-button" onClick={onKnowledgeToggle}>{locale === "zh" ? "⌑ Obsidian 知识库" : "⌑ Obsidian context"}</button><button type="button" className="composer-knowledge-close" aria-label={locale === "zh" ? "关闭 Obsidian 知识库上下文" : "Disable Obsidian knowledge"} onClick={onKnowledgeToggle}>×</button></div> : <button type="button" className="composer-knowledge-button" onClick={onKnowledgeToggle}>{locale === "zh" ? "⌑ 添加 Obsidian 知识库" : "⌑ Add Obsidian context"}</button>}<div className="composer-ai-controls"><span className="muted composer-hint">{localizedRunStatus || (locale === "zh" ? "Ctrl+Enter 发送 · Enter 换行" : "Ctrl+Enter to send · Enter for a new line")}</span><ModelControls locale={locale} model={model} models={models} reasoningEffort={reasoningEffort} skillId={skillId} showSkill={false} hideModel onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} /></div></WorkbenchPromptInput></div></div>
     </section>
   </div>;
 }
@@ -1443,10 +1460,10 @@ function DesktopWriterCloudWorkspace(props: DesktopWriterCloudWorkspaceProps) {
   const writerQuickPrompts = locale === "zh" ? WORKBENCH_WRITER_QUICK_PROMPTS : ["Write a high-converting campaign article", "Turn this brief into a social media thread", "Create a concise product launch email"];
   const localizedStatus = localizeDesktopStatus(runStatus, locale);
   const localizedRunStatus = isDesktopErrorStatus(localizedStatus) ? "" : localizedStatus;
-  const [platform, setPlatform] = useState("wechat");
-  const [contentType, setContentType] = useState("longform");
-  const [mode, setMode] = useState("article");
-  const [language, setLanguage] = useState("auto");
+  const [platform] = useState("wechat");
+  const [contentType] = useState("longform");
+  const [mode] = useState("article");
+  const [language] = useState("auto");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewMessage, setPreviewMessage] = useState<DesktopUIMessage | null>(null);
   const [previewEditing, setPreviewEditing] = useState(false);
@@ -1509,7 +1526,7 @@ function DesktopWriterCloudWorkspace(props: DesktopWriterCloudWorkspaceProps) {
               <MessageAction label={copyKind === "rich" ? writerCopy.copied : writerCopy.rich} title={copyKind === "rich" ? writerCopy.copied : writerCopy.rich} onClick={() => void copyText("rich", message)}><CopyIcon size={14} aria-hidden="true" /></MessageAction>
               <MessageAction label={copyKind === "markdown" ? writerCopy.copied : writerCopy.markdown} title={copyKind === "markdown" ? writerCopy.copied : writerCopy.markdown} onClick={() => void copyText("markdown", message)}><FileText size={14} aria-hidden="true" /></MessageAction>
             </>;
-          }} onToolApproval={onToolApproval} onArtifactOpen={(artifact) => onArtifactOpen(artifact.relativePath, artifact.mimeType)} onArtifactDownload={onArtifactDownload} resolveMediaSource={resolveDesktopMediaSource} resolveArtifactSource={resolveDesktopArtifactSource} /></div>
+          }} onToolApproval={onToolApproval} onArtifactOpen={(artifact) => onArtifactOpen(artifact.relativePath, artifact.mimeType)} onArtifactDownload={onArtifactDownload} resolveMediaSource={resolveDesktopMediaSource} resolveArtifactSource={resolveDesktopArtifactSource} resolvePreviewSource={resolveDesktopPreviewSource} onPreviewDownload={(preview) => { if (preview.artifactId) return onArtifactDownload?.(preview.artifactId); if (preview.relativePath) return onArtifactOpen(preview.relativePath, preview.mimeType ?? "application/octet-stream"); }} onPreviewExport={(preview) => exportDesktopPreview(preview, onArtifactDownload)} onPreviewOpenExternal={openDesktopPreviewInBrowser} /></div>
           {!hasMessages && localizedRunStatus ? <div className="writer-status-message">{localizedRunStatus}</div> : null}
         </div></div>
         <div className="chat-composer-dock"><div className="chat-composer writer-cloud-composer"><WorkbenchPromptInput value={prompt} onValueChange={onPromptChange} onSubmit={submit} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} models={(models ?? []).map((item) => ({ id: item, label: formatWorkbenchModelLabel(item, { zh: "本地模型", en: "Local model" }, locale), provider: locale === "zh" ? "已配置模型" : "Configured models" }))} model={model} onModelChange={onModelChange} placeholder={writerCopy.placeholder} status={activeRunId ? "streaming" : "ready"} onStop={onCancel} locale={locale}><div className="writer-composer-options"><span>{writerOptionLabel("platform", WORKBENCH_WRITER_PLATFORMS.find((item) => item.id === platform) ?? { id: platform, label: platform }, locale)} / {writerOptionLabel("mode", WORKBENCH_WRITER_MODES.find((item) => item.id === mode) ?? { id: mode, label: mode }, locale)} / {writerOptionLabel("language", WORKBENCH_WRITER_LANGUAGES.find((item) => item.id === language) ?? { id: language, label: language }, locale)} / {writerCopy.previewHint}</span>{knowledgeEnabled ? <span className="composer-knowledge-control"><button type="button" className="composer-knowledge-button" onClick={onKnowledgeToggle}>{locale === "zh" ? "⌑ Obsidian 知识库" : "⌑ Obsidian context"}</button><button type="button" className="composer-knowledge-close" aria-label={locale === "zh" ? "关闭 Obsidian 知识库上下文" : "Disable Obsidian knowledge"} onClick={onKnowledgeToggle}>×</button></span> : <button type="button" className="composer-knowledge-button" onClick={onKnowledgeToggle}>{locale === "zh" ? "⌑ 添加 Obsidian 知识库" : "⌑ Add Obsidian context"}</button>}<ModelControls locale={locale} model={model} models={models} providerSource={formatWorkbenchModelLabel(model, { zh: "本地模型", en: "Local model" }, locale)} reasoningEffort={reasoningEffort} skillId={skillId} showSkill={false} hideModel onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} /></div></WorkbenchPromptInput></div></div>
@@ -1585,9 +1602,11 @@ function DesktopWorkflowUploadEditor({ node, locale, onSelectFiles, onChange }: 
 type DesktopWorkflowWorkspaceProps = {
   workflowId: string;
   workbenchClient: WorkbenchClient;
+  createAgentChatTransport: (overrides: Partial<DesktopChatTransportOptions>) => ChatTransport<DesktopUIMessage>;
   configuredProviders: readonly DesktopProviderConfig[];
+  goldenTemplates: NonNullable<WorkflowAiContext["goldenTemplates"]>;
   textProvider: DesktopProviderConfig;
-  onEnsureWorkflow: (definition: WorkflowDefinitionEnvelope) => Promise<string | null>;
+  onEnsureWorkflow: (definition: WorkflowDefinitionEnvelope) => Promise<string | { id: string; definition: WorkflowDefinitionEnvelope } | null>;
   route: DesktopRoute;
   onBack: () => void;
   prompt: string;
@@ -1842,16 +1861,6 @@ function runningHubWorkflowCapabilityForNode(node: WorkflowDefinitionNodeV2 | un
   return undefined;
 }
 
-function supportsCharacterSwapVideoProvider(provider: DesktopProviderConfig) {
-  if (provider.source?.trim().toLowerCase() !== "runninghub") return false;
-  return provider.workflows?.some((workflow) => workflow.capability === "video" && workflow.nodeBindings.some((binding) => binding.inputId === "subtitle" && (binding.valueType === "file" || binding.valueType === "file_list"))) ?? false;
-}
-
-function supportsCharacterSwapImageProvider(provider: DesktopProviderConfig) {
-  if (provider.source?.trim().toLowerCase() !== "runninghub") return true;
-  return provider.workflows?.some((workflow) => workflow.capability === "image" && workflow.nodeBindings.some((binding) => binding.inputId === "referenceImage" && binding.valueType === "file") && workflow.nodeBindings.some((binding) => binding.inputId === "characterImage" && binding.valueType === "file")) ?? false;
-}
-
 function isRunningHubProvider(provider: DesktopProviderConfig | undefined) {
   return provider?.source?.trim().toLowerCase() === "runninghub";
 }
@@ -1969,8 +1978,8 @@ function DesktopWorkflowBuilderSurface(props: WorkflowBuilderSurfaceProps) {
     props.onAddNode(type);
   };
   return <div className="workflow-workspace workflow-workspace-fullscreen" onPointerMove={props.movePanel} onPointerUp={props.endPanelDrag} onPointerCancel={props.endPanelDrag}>
-     <header className="workflow-page-header workflow-builder-toolbar"><div className="workflow-builder-title"><button className="workflow-back-button" type="button" aria-label={locale === "zh" ? "返回工作流" : "Back to workflows"} title={locale === "zh" ? "返回工作流" : "Back to workflows"} onClick={props.onBack}><ArrowLeft size={16} aria-hidden="true" /></button><h1>{props.workflowMetadata.title.trim() || route.label}</h1></div><div className="workflow-header-actions"><button className={"ghost workflow-ai-toggle " + (props.aiSidebarOpen ? "active" : "")} type="button" aria-pressed={props.aiSidebarOpen} onClick={() => props.onAiSidebarOpenChange(!props.aiSidebarOpen)}><Sparkles size={14} aria-hidden="true" />{locale === "zh" ? "AI 助手" : "AI assistant"}</button><button className={"ghost workflow-operation-button workflow-operation-" + (operationState?.kind === "save" ? operationState.phase : "idle")} type="button" disabled={operationState?.phase === "running"} data-workflow-operation="save" data-operation-state={operationState?.kind === "save" ? operationState.phase : "idle"} aria-busy={operationState?.kind === "save" && operationState.phase === "running"} onClick={() => void runBuilderOperation("save", () => props.onSave(localDefinition))}>{operationState?.kind === "save" ? operationText("save", operationState.phase) : copy.save}</button><button className={"ghost workflow-operation-button workflow-operation-" + (operationState?.kind === "export" ? operationState.phase : "idle")} type="button" disabled={operationState?.phase === "running"} data-workflow-operation="export" data-operation-state={operationState?.kind === "export" ? operationState.phase : "idle"} aria-busy={operationState?.kind === "export" && operationState.phase === "running"} onClick={() => void runBuilderOperation("export", () => props.onExport(localDefinition))}>{operationState?.kind === "export" ? operationText("export", operationState.phase) : copy.export}</button><label className={"ghost workflow-import-button workflow-operation-" + (operationState?.kind === "import" ? operationState.phase : "idle")} data-workflow-operation="import" data-operation-state={operationState?.kind === "import" ? operationState.phase : "idle"} aria-disabled={operationState?.phase === "running"}>{operationState?.kind === "import" ? operationText("import", operationState.phase) : copy.import}<input type="file" accept="application/json,.json" disabled={operationState?.phase === "running"} onChange={(event) => { const file = event.target.files?.[0]; if (file) void runBuilderOperation("import", () => props.onImport(file)); event.currentTarget.value = ""; }} /></label><span className="sr-only" role="status" aria-live="polite">{operationState ? operationText(operationState.kind, operationState.phase) : ""}</span><div className="workflow-run-actions"><button className="primary" type="button" disabled={Boolean(props.activeRunId) || issues.length > 0} onClick={() => props.onRun(localDefinition)}>{props.activeRunId ? (locale === "zh" ? "运行中" : "Running") : copy.run}</button>{props.activeRunId ? <button className="ghost" type="button" onClick={props.onCancel}>{locale === "zh" ? "停止" : "Stop"}</button> : null}{canContinue ? <button className="ghost" type="button" onClick={() => props.onRerun(localDefinition)}>{copy.rerun}</button> : null}{canContinue ? <button className="ghost" type="button" onClick={() => props.onContinue}>{copy.continue}</button> : null}</div></div></header>
-     <div className="workflow-canvas-ai-layout"><div className="workflow-canvas-shell"><DesktopWorkflowCanvas nodes={canvasNodes} edges={localDefinition.edges} selectedNodeKey={selectedNode?.nodeKey ?? null} nodeExecutionSnapshots={props.nodeExecutionSnapshots} pendingConnectionSourceKey={props.pendingConnectionSourceKey} onSelectNode={props.onSelectNode} onMoveNode={props.onMoveNode} onMoveNodes={props.onMoveNodes} providerConfiguredForNode={props.providerConfiguredForNode} providerSourceForNode={props.providerSourceForNode} onStartConnection={props.onStartConnection} onConnect={props.onConnect} onCancelConnection={props.onCancelConnection} onDeleteEdge={props.onDeleteEdge} onDeleteNode={props.onDeleteNode} onDuplicateNode={props.onDuplicateNode} onDuplicateNodes={props.onDuplicateNodes} onAddNodeAtPoint={props.onAddNode} onUpdateNode={props.onUpdateNode} onUpdateNodeParameter={props.onUpdateNodeConfig} onSelectWorkflowFiles={props.onSelectWorkflowFiles} canUndo={props.canUndo} canRedo={props.canRedo} onUndo={props.onUndo} onRedo={props.onRedo} modelOptions={modelOptions} modelLabel={runningHubModelCatalog ? (locale === "zh" ? "工作流" : "Workflow") : undefined} hideWorkflowReference={runningHubModelCatalog} providerOptions={providerOptions} voiceOptions={workflowVoiceOptions.map((voice) => ({ value: voice.voiceId, label: voice.voiceName, description: voice.description?.[0] }))} agentOptions={props.agentOptions} voiceOptionsLoading={workflowVoiceOptionsLoading} voiceOptionsError={workflowVoiceOptionsError} initialViewport={canvasInitialViewport} locale={locale} /><div className="workflow-canvas-overlay-toolbar"><span>{copy.canvas}</span><span className="muted">{localDefinition.nodes.length} {copy.nodes} · {localDefinition.edges.length} {copy.edges} {issues.length ? "· " + issues.length + (locale === "en" ? " connection issues" : " 个连接问题") : "· " + copy.runnable}</span></div></div>{props.aiSidebar}</div>
+     <header className="workflow-page-header workflow-builder-toolbar"><div className="workflow-builder-title"><button className="workflow-back-button" type="button" aria-label={locale === "zh" ? "返回工作流" : "Back to workflows"} title={locale === "zh" ? "返回工作流" : "Back to workflows"} onClick={props.onBack}><ArrowLeft size={16} aria-hidden="true" /></button><h1>{props.workflowMetadata.title.trim() || route.label}</h1></div><div className="workflow-header-actions"><button className={"ghost workflow-ai-toggle " + (props.aiSidebarOpen ? "active" : "")} type="button" aria-pressed={props.aiSidebarOpen} onClick={() => props.onAiSidebarOpenChange(!props.aiSidebarOpen)}><Sparkles size={14} aria-hidden="true" />{locale === "zh" ? "AI 助手" : "AI assistant"}</button><button className={"ghost workflow-operation-button workflow-operation-" + (operationState?.kind === "save" ? operationState.phase : "idle")} type="button" disabled={operationState?.phase === "running"} data-workflow-operation="save" data-operation-state={operationState?.kind === "save" ? operationState.phase : "idle"} aria-busy={operationState?.kind === "save" && operationState.phase === "running"} onClick={() => void runBuilderOperation("save", () => props.onSave(localDefinition))}>{operationState?.kind === "save" ? operationText("save", operationState.phase) : copy.save}</button><button className={"ghost workflow-operation-button workflow-operation-" + (operationState?.kind === "export" ? operationState.phase : "idle")} type="button" disabled={operationState?.phase === "running"} data-workflow-operation="export" data-operation-state={operationState?.kind === "export" ? operationState.phase : "idle"} aria-busy={operationState?.kind === "export" && operationState.phase === "running"} onClick={() => void runBuilderOperation("export", () => props.onExport(localDefinition))}>{operationState?.kind === "export" ? operationText("export", operationState.phase) : copy.export}</button><label className={"ghost workflow-import-button workflow-operation-" + (operationState?.kind === "import" ? operationState.phase : "idle")} data-workflow-operation="import" data-operation-state={operationState?.kind === "import" ? operationState.phase : "idle"} aria-disabled={operationState?.phase === "running"}>{operationState?.kind === "import" ? operationText("import", operationState.phase) : copy.import}<input type="file" accept="application/json,.json" disabled={operationState?.phase === "running"} onChange={(event) => { const file = event.target.files?.[0]; if (file) void runBuilderOperation("import", () => props.onImport(file)); event.currentTarget.value = ""; }} /></label><span className="sr-only" role="status" aria-live="polite">{operationState ? operationText(operationState.kind, operationState.phase) : ""}</span><div className="workflow-run-actions"><button className="primary" type="button" disabled={Boolean(props.activeRunId) || issues.length > 0} onClick={() => props.onRun(localDefinition)}>{props.activeRunId ? (locale === "zh" ? "运行中" : "Running") : copy.run}</button>{props.activeRunId ? <button className="ghost" type="button" onClick={props.onCancel}>{locale === "zh" ? "停止" : "Stop"}</button> : null}{canContinue ? <button className="ghost" type="button" onClick={() => props.onRerun(localDefinition)}>{copy.rerun}</button> : null}{canContinue ? <button className="ghost" type="button" onClick={() => props.onContinue?.()}>{copy.continue}</button> : null}</div></div></header>
+     <div className="workflow-canvas-ai-layout"><div className="workflow-canvas-shell"><Suspense fallback={<div className="workflow-canvas-loading" role="status">{locale === "zh" ? "正在加载工作流画布…" : "Loading workflow canvas…"}</div>}><DesktopWorkflowCanvas nodes={canvasNodes} edges={localDefinition.edges} selectedNodeKey={selectedNode?.nodeKey ?? null} nodeExecutionSnapshots={props.nodeExecutionSnapshots} pendingConnectionSourceKey={props.pendingConnectionSourceKey} onSelectNode={props.onSelectNode} onMoveNode={props.onMoveNode} onMoveNodes={props.onMoveNodes} providerConfiguredForNode={props.providerConfiguredForNode} providerSourceForNode={props.providerSourceForNode} onStartConnection={props.onStartConnection} onConnect={props.onConnect} onCancelConnection={props.onCancelConnection} onDeleteEdge={props.onDeleteEdge} onDeleteNode={props.onDeleteNode} onDuplicateNode={props.onDuplicateNode} onDuplicateNodes={props.onDuplicateNodes} onAddNodeAtPoint={props.onAddNode} onUpdateNode={props.onUpdateNode} onUpdateNodeParameter={props.onUpdateNodeConfig} onSelectWorkflowFiles={props.onSelectWorkflowFiles} canUndo={props.canUndo} canRedo={props.canRedo} onUndo={props.onUndo} onRedo={props.onRedo} modelOptions={modelOptions} modelLabel={runningHubModelCatalog ? (locale === "zh" ? "工作流" : "Workflow") : undefined} hideWorkflowReference={runningHubModelCatalog} providerOptions={providerOptions} voiceOptions={workflowVoiceOptions.map((voice) => ({ value: voice.voiceId, label: voice.voiceName, description: voice.description?.[0] }))} agentOptions={props.agentOptions} voiceOptionsLoading={workflowVoiceOptionsLoading} voiceOptionsError={workflowVoiceOptionsError} initialViewport={canvasInitialViewport} locale={locale} /></Suspense><div className="workflow-canvas-overlay-toolbar"><span>{copy.canvas}</span><span className="muted">{localDefinition.nodes.length} {copy.nodes} · {localDefinition.edges.length} {copy.edges} {issues.length ? "· " + issues.length + (locale === "en" ? " connection issues" : " 个连接问题") : "· " + copy.runnable}</span></div></div>{props.aiSidebar}</div>
     {props.leftPanelOpen ? <aside className="workflow-floating-panel workflow-floating-panel-left" style={{ left: props.panelPosition.left.x, top: props.panelPosition.left.y }}><div className="workflow-floating-panel-header" onPointerDown={(event) => props.startPanelDrag("left", event)}><div><strong>{copy.nodesMenu}</strong><span>{props.savedWorkflows.length} {locale === "en" ? "saved" : "个"} · {localDefinition.nodes.length} {copy.nodes}</span></div><button type="button" className="workflow-panel-toggle" onPointerDown={(event) => event.stopPropagation()} onClick={() => props.setLeftPanelOpen(false)} aria-label={copy.close}>−</button></div><div className="workflow-action-list">{props.workflowActions.map((item) => <button key={item.id} type="button" className={"workflow-action-item " + (selectedNode?.type === item.id ? "active" : "")} onClick={() => addPaletteNode(item.id)} onPointerDown={(event) => startPaletteDrag(event, item.id)}>{item.label}<small>{item.output.toUpperCase()} · {locale === "en" ? "Add" : "添加"}</small></button>)}</div></aside> : <button type="button" className="workflow-floating-panel-tab workflow-floating-panel-tab-left" style={{ left: props.panelPosition.left.x, top: props.panelPosition.left.y }} onPointerDown={(event) => props.startPanelDrag("left", event)} onClick={() => { if (props.consumePanelClick()) return; props.setLeftPanelOpen(true); }}>{copy.open} {copy.nodesMenu}</button>}
     {props.rightPanelOpen ? (
       <aside className="workflow-floating-panel workflow-floating-panel-right" style={{ right: props.panelPosition.right.x, top: props.panelPosition.right.y }}>
@@ -1982,22 +1991,21 @@ function DesktopWorkflowBuilderSurface(props: WorkflowBuilderSurfaceProps) {
   </div>;
 }
 
-function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProviders, textProvider, onEnsureWorkflow, route, onBack, prompt: _prompt, onPromptChange: _onPromptChange, runStatus: _runStatus, activeRunId: _activeRunId, onRun: _onRun, onRerun: providedOnRerun, onContinue: providedOnContinue, onCancel, lastRunStatus, savedWorkflows, workflowAction, onWorkflowAction, definition, onDefinitionChange, workflowMetadata: initialWorkflowMetadata, onWorkflowMetaChange, onSave, onExport, onImport, model, models, modelForNode, modelsForNode, providersForNode, agentOptions, loadVoicesForProvider, reasoningEffort, skillId, onModelChange, onReasoningChange, onSkillChange = onReasoningChange, providerConfiguredForNode, providerSourceForNode, onSelectWorkflowFiles, nodeExecutionSnapshots, locale }: DesktopWorkflowWorkspaceProps & { locale: "zh" | "en" }) {
+function DesktopWorkflowWorkspace({ workflowId, workbenchClient, createAgentChatTransport, configuredProviders, goldenTemplates, textProvider, onEnsureWorkflow, route, onBack, prompt: _prompt, onPromptChange: _onPromptChange, runStatus: _runStatus, activeRunId: _activeRunId, onRun: _onRun, onRerun: providedOnRerun, onContinue: providedOnContinue, onCancel, lastRunStatus, savedWorkflows, workflowAction, onWorkflowAction, definition, onDefinitionChange, workflowMetadata: initialWorkflowMetadata, onWorkflowMetaChange, onSave, onExport, onImport, model, models, modelForNode, modelsForNode, providersForNode, agentOptions, loadVoicesForProvider, reasoningEffort, skillId, onModelChange, onReasoningChange, onSkillChange = onReasoningChange, providerConfiguredForNode, providerSourceForNode, onSelectWorkflowFiles, nodeExecutionSnapshots, locale }: DesktopWorkflowWorkspaceProps & { locale: "zh" | "en" }) {
   const [selectedNodeKey, setSelectedNodeKey] = useState("capability");
-  const [localDefinition, setLocalDefinition] = useState<WorkflowDefinitionEnvelope>(() => definition ? normalizeWorkflowDefinitionLayout(definition) : buildWorkflowDefinition("", workflowAction, { id: "local", model: "" }, {}, locale));
+  const [localDefinition, setLocalDefinition] = useState<WorkflowDefinitionEnvelope>(() => definition ?? buildWorkflowDefinition("", workflowAction, { id: "local", model: "" }, {}, locale));
   const [workflowEditorPrompt, setWorkflowEditorPrompt] = useState(() => workflowPromptFromDefinition(localDefinition));
-  const prompt = workflowEditorPrompt;
   const activeRunId = _activeRunId;
   const runStatus = _runStatus;
   const localDefinitionRef = useRef(localDefinition);
-  const onRun = (_nextDefinition?: WorkflowDefinitionEnvelope) => {
+  const historyWorkflowIdRef = useRef(workflowId);
+  const onRun = () => {
     if (activeRunId) return;
     // The file picker completes asynchronously. Read the ref that commit()
     // updates synchronously so Run cannot launch with the pre-picker render.
     _onRun(localDefinitionRef.current);
   };
-  const historyRef = useRef<{ past: WorkflowDefinitionEnvelope[]; future: WorkflowDefinitionEnvelope[] }>({ past: [], future: [] });
-  const historyCoalesceRef = useRef<{ key: string; until: number } | null>(null);
+  const historyRef = useRef(createWorkflowHistory(localDefinition));
   const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
   const desktopCanvasFitsPanels = typeof window === "undefined" || window.innerWidth >= 1440;
   const [leftPanelOpen, setLeftPanelOpen] = useState(desktopCanvasFitsPanels);
@@ -2021,15 +2029,18 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
   }, []);
   useEffect(() => { localDefinitionRef.current = localDefinition; }, [localDefinition]);
   useEffect(() => {
-    if (!definition || definition.definitionHash === localDefinitionRef.current.definitionHash) return;
-    const normalized = normalizeWorkflowDefinitionLayout(definition);
+    const workflowIdentityChanged = historyWorkflowIdRef.current !== workflowId;
+    historyWorkflowIdRef.current = workflowId;
+    if (!definition || (!workflowIdentityChanged && definition.definitionHash === localDefinitionRef.current.definitionHash)) return;
+    const normalized = definition;
+    const shouldResetHistory = shouldResetWorkflowHistory(localDefinitionRef.current, normalized, workflowIdentityChanged);
     localDefinitionRef.current = normalized;
     setLocalDefinition(normalized);
     setWorkflowEditorPrompt(workflowPromptFromDefinition(normalized));
-    historyRef.current = { past: [], future: [] };
-    historyCoalesceRef.current = null;
+    if (!shouldResetHistory) return;
+    historyRef.current = createWorkflowHistory(normalized);
     setHistoryState({ canUndo: false, canRedo: false });
-  }, [definition]);
+  }, [definition, workflowId]);
   const selectedNode = localDefinition.nodes.find((node) => node.nodeKey === selectedNodeKey) ?? localDefinition.nodes[0];
   const selectedAction = workflowActions.find((item) => item.id === selectedNode?.type) ?? workflowActions.find((item) => item.id === workflowAction) ?? workflowActions[0];
   const issues = validateWorkflowDefinition(localDefinition);
@@ -2039,17 +2050,12 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
     const unhashed = { ...next, revision, definitionHash: "" };
     const current = { ...unhashed, definitionHash: hashWorkflowDefinition(unhashed) };
     if (current.definitionHash === previous.definitionHash) return;
-    const now = Date.now();
-    const isCoalesced = Boolean(historyKey && historyCoalesceRef.current?.key === historyKey && historyCoalesceRef.current.until > now);
-    if (!isCoalesced) {
-      historyRef.current.past = [...historyRef.current.past.slice(-49), previous];
-      historyRef.current.future = [];
-    }
-    historyCoalesceRef.current = historyKey ? { key: historyKey, until: now + 500 } : null;
-    setHistoryState({ canUndo: historyRef.current.past.length > 0, canRedo: historyRef.current.future.length > 0 });
-    localDefinitionRef.current = current;
-    setLocalDefinition(current);
-    onDefinitionChange(current);
+    const nextState = historyRef.current.commit(current, historyKey ? { coalesceKey: historyKey } : undefined);
+    if (nextState.current.definitionHash === previous.definitionHash) return;
+    localDefinitionRef.current = nextState.current;
+    setLocalDefinition(nextState.current);
+    setHistoryState({ canUndo: nextState.canUndo, canRedo: nextState.canRedo });
+    onDefinitionChange(nextState.current);
   };
   const [aiSidebarOpen, setAiSidebarOpen] = useState(false);
   const [aiSidebarWidth, setAiSidebarWidth] = useState(380);
@@ -2061,12 +2067,42 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
   const [aiPresentedMessages, setAiPresentedMessages] = useState<ReadonlyMap<string, DesktopUIMessage>>(() => new Map());
   const aiHandledMessageIdsRef = useRef(new Set<string>());
   const aiProcessingMessageIdsRef = useRef(new Set<string>());
+  const aiCancelledSourceUserIdsRef = useRef(new Set<string>());
+  const aiRepairAttemptsRef = useRef(new Map<string, 0 | 1>());
+  const aiNextInferenceProviderRef = useRef<DesktopProviderConfig | null>(null);
+  const [aiProviderMode, setAiProviderMode] = useState<"auto" | "manual">("auto");
+  const aiProviderModeRef = useRef<"auto" | "manual">("auto");
+  aiProviderModeRef.current = aiProviderMode;
+  const [aiAutoActualProviderOptionId, setAiAutoActualProviderOptionId] = useState<string | undefined>();
   const aiQueuedPromptRef = useRef<string | null>(null);
   const aiControllerRef = useRef<{ workflowId: string; controller: WorkflowAiController } | null>(null);
   const aiProviderCatalog = useMemo(() => workflowAiProviderOptions(configuredProviders), [configuredProviders]);
-  const aiProviderModels = useMemo<ModelOption[]>(() => aiProviderCatalog.flatMap((provider) => provider.models.length
+  const aiProviderModels = useMemo<ModelOption[]>(() => [{ id: "auto", label: aiAutoActualProviderOptionId ? `Auto · ${aiAutoActualProviderOptionId}` : "Auto", provider: "Workflow AI", description: "AI chooses a configured text model for each turn" }, ...aiProviderCatalog.flatMap((provider) => provider.models.length
     ? provider.models.map((providerModel) => ({ id: `${provider.id}:${providerModel}`, label: providerModel, provider: provider.label, description: provider.capabilities.join(" · ") }))
-    : [{ id: provider.id, label: provider.label, provider: provider.label, description: provider.capabilities.join(" · ") }]), [aiProviderCatalog]);
+    : [{ id: provider.id, label: provider.label, provider: provider.label, description: provider.capabilities.join(" · ") }])], [aiAutoActualProviderOptionId, aiProviderCatalog]);
+  const defaultAiProviderOptionId = aiProviderModels.find((option) => option.id === `${textProvider.id ?? textProvider.source}:${textProvider.model}`)?.id
+    ?? aiProviderModels.find((option) => option.id.startsWith(`${textProvider.id ?? textProvider.source}:`))?.id
+    ?? "auto";
+  const [aiSelectedProviderOptionId, setAiSelectedProviderOptionId] = useState("auto");
+  const selectedAiProviderOptionId = aiProviderMode === "auto" ? "auto" : (aiProviderModels.some((option) => option.id === aiSelectedProviderOptionId) ? aiSelectedProviderOptionId : defaultAiProviderOptionId);
+  const resolveAiProviderOption = (optionId: string | undefined) => {
+    if (optionId === "auto") return aiNextInferenceProviderRef.current ?? textProvider;
+    const option = aiProviderModels.find((candidate) => candidate.id === optionId);
+    if (!option) return textProvider;
+    const descriptor = aiProviderCatalog.find((provider) => option.id === provider.id || option.id.startsWith(`${provider.id}:`));
+    if (!descriptor) return textProvider;
+    const model = option.id === descriptor.id ? (descriptor.models[0] || textProvider.model?.trim() || "") : option.id.slice(descriptor.id.length + 1);
+    return resolveWorkflowAiTextProvider(configuredProviders, descriptor.id, model, textProvider);
+  };
+  const activeAiProvider = resolveAiProviderOption(selectedAiProviderOptionId) ?? textProvider;
+  const resolveAiProviderForMessage = (message: DesktopUIMessage) => {
+    const messageProviderId = message.metadata?.providerId?.trim();
+    const messageModelId = message.metadata?.modelId?.trim();
+    const optionId = messageProviderId && messageModelId ? `${messageProviderId}:${messageModelId}` : messageProviderId;
+    return resolveAiProviderOption(aiProviderModels.some((option) => option.id === optionId) ? optionId : selectedAiProviderOptionId);
+  };
+  const aiProviderResolverRef = useRef(resolveAiProviderForMessage);
+  aiProviderResolverRef.current = resolveAiProviderForMessage;
   const aiContextRef = useRef<WorkflowAiContext>({
     workflowId: aiWorkflowId,
     revision: localDefinition.revision,
@@ -2074,6 +2110,7 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
     selectedNodeKeys: selectedNode ? [selectedNode.nodeKey] : [],
     validationIssues: issues,
     configuredProviders: aiProviderCatalog,
+    goldenTemplates,
   });
   aiContextRef.current = {
     workflowId: aiWorkflowId,
@@ -2082,11 +2119,16 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
     selectedNodeKeys: selectedNode ? [selectedNode.nodeKey] : [],
     validationIssues: issues,
     configuredProviders: aiProviderCatalog,
+    goldenTemplates,
   };
-  const workflowAiTransport = useMemo(() => createDesktopWorkflowAiChatTransport(tauriBridge, workbenchClient, {
-    resolveProvider: () => textProvider,
+  const workflowAiTransport = useMemo(() => createAgentChatTransport({
+    resolveProvider: (message) => aiProviderResolverRef.current(message),
     resolvePrompt: (_message, userText) => createWorkflowAiPrompt(aiContextRef.current, userText),
-  }), [textProvider, workbenchClient]);
+    resolveSkillId: () => "workflow-authoring",
+    resolveAgentId: () => "workflow-ai",
+    resolveConversationAgentId: () => "workflow-ai",
+    resolveAllowArtifacts: () => false,
+  }), [createAgentChatTransport]);
   const aiConversationId = `workflow-ai:${aiWorkflowId}`;
   const workflowAiChat = useDesktopChat({ chatId: aiConversationId, transport: workflowAiTransport, initialMessages: aiInitialMessages, resume: false });
 
@@ -2100,9 +2142,17 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
           definition: localDefinitionRef.current,
           selectedNodeKeys: selectedNode ? [selectedNode.nodeKey] : [],
           providers: configuredProviders,
+          goldenTemplates,
           client: workbenchClient,
           onDefinitionChange: (nextDefinition) => commit(nextDefinition),
           onFocusNodes: (nodeKeys) => { if (nodeKeys[0]) setSelectedNodeKey(nodeKeys[0]); },
+          onNextInferenceProvider: (provider) => {
+            if (aiProviderModeRef.current !== "auto") return;
+            aiNextInferenceProviderRef.current = provider;
+            const providerId = provider.id?.trim() || provider.source?.trim();
+            const modelId = provider.model?.trim() || configuredModelOptions(provider)[0];
+            if (providerId && modelId) setAiAutoActualProviderOptionId(`${providerId}:${modelId}`);
+          },
           onRun: async (nextDefinition) => _onRun(nextDefinition),
         }),
       };
@@ -2121,6 +2171,10 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
     setAiHistoryReady(false);
     aiHandledMessageIdsRef.current = new Set();
     aiProcessingMessageIdsRef.current = new Set();
+    aiCancelledSourceUserIdsRef.current = new Set();
+    aiRepairAttemptsRef.current.clear();
+    aiNextInferenceProviderRef.current = null;
+    setAiAutoActualProviderOptionId(undefined);
     void Promise.all([
       workbenchClient.conversations.messages(aiConversationId).catch(() => [] as readonly DesktopUIMessage[]),
       aiWorkflowId.startsWith("draft:") ? Promise.resolve([] as readonly WorkflowAiOperationGroup[]) : workbenchClient.workflows.operationGroups(aiWorkflowId).catch(() => [] as readonly WorkflowAiOperationGroup[]),
@@ -2152,21 +2206,65 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
     if (!assistant) return;
     const assistantIndex = workflowAiChat.messages.findIndex((message) => message.id === assistant.id);
     const userRequest = [...workflowAiChat.messages.slice(0, assistantIndex)].reverse().find((message) => message.role === "user");
+    const sourceUserId = userRequest?.id;
+    if (sourceUserId && aiCancelledSourceUserIdsRef.current.has(sourceUserId)) {
+      aiHandledMessageIdsRef.current.add(assistant.id);
+      setAiPresentedMessages((current) => new Map(current).set(assistant.id, createDesktopUIMessage({ id: assistant.id, role: "assistant", conversationId: aiConversationId, content: locale === "zh" ? "已取消本次请求" : "Request cancelled", createdAt: assistant.metadata?.createdAt })));
+      return;
+    }
     aiProcessingMessageIdsRef.current.add(assistant.id);
     const controller = ensureAiController();
-    void controller.handleAssistantResponse(desktopUIMessageText(assistant), userRequest ? desktopUIMessageText(userRequest) : "").then(() => {
+    void controller.handleAssistantResponse(desktopUIMessageText(assistant), userRequest ? desktopUIMessageText(userRequest) : "").then((result) => {
       const presented = [...controller.messages].reverse().find((message) => message.role === "assistant");
       if (presented) setAiPresentedMessages((current) => new Map(current).set(assistant.id, { ...presented, id: assistant.id, metadata: { ...presented.metadata, ...assistant.metadata, conversationId: assistant.metadata?.conversationId ?? aiConversationId, createdAt: assistant.metadata?.createdAt ?? presented.metadata!.createdAt, updatedAt: assistant.metadata?.updatedAt ?? presented.metadata!.updatedAt } }));
       setAiOperationGroups([...controller.operationGroups]);
       aiHandledMessageIdsRef.current.add(assistant.id);
+      if (userRequest && shouldRetryWorkflowAiRepair(result, sourceUserId, aiRepairAttemptsRef.current)) {
+        const declaredRepairProvider = result.nextInferenceProvider
+          ? resolveWorkflowAiTextProvider(configuredProviders, result.nextInferenceProvider.providerId, result.nextInferenceProvider.modelId)
+          : undefined;
+        const repairProvider = declaredRepairProvider ?? resolveAiProviderForMessage(userRequest);
+        const repairGuidance = result.error === "workflow_ai_invalid_response"
+          ? "The previous response was not a complete valid JSON object. Return exactly one complete JSON object matching the workflow response schema, with no Markdown, preamble, or trailing text. Keep the proposal concise and complete."
+          : result.error === "workflow_ai_invalid_validation_result"
+          ? "The previous plan's validationResult did not match the schema. Set status to exactly valid, invalid, or needs_configuration; issues must be an array of nonempty strings; repairAttempt must be 0 or 1. Use needs_configuration only for a valid graph whose execution Provider still needs setup, and explain that setup in issues and message."
+          : result.error === "workflow_ai_plan_operations_mismatch"
+          ? "The previous response failed because plan.operations did not exactly match operationGroup.commands. Reuse the exact same canonical command objects in both arrays."
+          : `The previous proposal failed validation: ${result.error}. Re-plan from the current workflow and fix only the reported graph/capability issues.`;
+        const repairMessage = createDesktopChatUserMessage({
+          conversationId: aiConversationId,
+          text: `Bounded repair attempt 1/1. Original request: ${desktopUIMessageText(userRequest)}\n\n${repairGuidance} Return the same versioned plan protocol.`,
+          providerId: repairProvider.id?.trim() || repairProvider.source?.trim() || "local",
+          modelId: repairProvider.model?.trim() || configuredModelOptions(repairProvider)[0] || "",
+          route: "/dashboard/workflows/ai/repair",
+        });
+        recordWorkflowAiRepairAttempt(aiRepairAttemptsRef.current, userRequest.id, repairMessage.id);
+        void workflowAiChat.sendMessage(repairMessage);
+      }
     }).finally(() => aiProcessingMessageIdsRef.current.delete(assistant.id));
   }, [aiHistoryReady, workflowAiChat.messages, workflowAiChat.status]);
 
   const sendWorkflowAiPrompt = async (text: string) => {
     const request = text.trim();
     if (!request) return;
-    const persistedWorkflowId = await onEnsureWorkflow(localDefinitionRef.current);
+    const requestedDefinition = localDefinitionRef.current;
+    const ensured = await onEnsureWorkflow(requestedDefinition);
+    const currentDefinition = localDefinitionRef.current;
+    if (currentDefinition.definitionHash !== requestedDefinition.definitionHash || currentDefinition.revision !== requestedDefinition.revision) {
+      setAiInput(request);
+      return;
+    }
+    const persistedWorkflowId = typeof ensured === "string" ? ensured : ensured?.id;
     if (!persistedWorkflowId) return;
+    if (ensured && typeof ensured === "object" && ensured.definition.revision !== localDefinitionRef.current.revision) {
+      const current = localDefinitionRef.current;
+      const reconciled = { ...current, revision: ensured.definition.revision, definitionHash: current.definitionHash };
+      const synced = historyRef.current.syncCurrent(reconciled);
+      localDefinitionRef.current = synced.current;
+      setLocalDefinition(synced.current);
+      setHistoryState({ canUndo: synced.canUndo, canRedo: synced.canRedo });
+      onDefinitionChange(synced.current);
+    }
     if (persistedWorkflowId !== aiWorkflowId) {
       aiQueuedPromptRef.current = request;
       setAiWorkflowId(persistedWorkflowId);
@@ -2177,8 +2275,8 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
     await workflowAiChat.sendMessage(createDesktopChatUserMessage({
       conversationId: aiConversationId,
       text: request,
-      providerId: textProvider.id?.trim() || textProvider.source?.trim() || "local",
-      modelId: textProvider.model?.trim() || configuredModelOptions(textProvider)[0] || "",
+      providerId: activeAiProvider.id?.trim() || activeAiProvider.source?.trim() || "local",
+      modelId: activeAiProvider.model?.trim() || configuredModelOptions(activeAiProvider)[0] || "",
       route: "/dashboard/workflows/ai",
     }));
   };
@@ -2209,11 +2307,28 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
     });
   };
   const workflowAiStatus = workflowAiChat.status === "error" ? "error" : workflowAiChat.status === "streaming" || workflowAiChat.status === "submitted" ? "streaming" : "ready";
+  const stopWorkflowAi = () => {
+    const latestUser = [...workflowAiChat.messages].reverse().find((message) => message.role === "user");
+    if (latestUser) aiCancelledSourceUserIdsRef.current.add(latestUser.id);
+    void workflowAiChat.stop();
+    void (workflowAiTransport as ChatTransport<DesktopUIMessage> & { stopCurrent?: () => Promise<void> }).stopCurrent?.();
+  };
   const aiSidebar = <WorkflowAiSidebar
     open={aiSidebarOpen}
     width={aiSidebarWidth}
     messages={displayedWorkflowAiMessages}
+    resolvePreviewSource={resolveDesktopPreviewSource}
+    onPreviewOpenExternal={openDesktopPreviewInBrowser}
+    onPreviewDownload={(preview) => {
+      if (!preview.relativePath) throw new Error("preview_download_artifact_missing");
+      return workbenchClient.files.open(preview.relativePath, preview.mimeType ?? "application/octet-stream");
+    }}
+    onPreviewExport={(preview) => exportDesktopPreview(preview, async (artifactId) => {
+      if (!preview.relativePath || preview.artifactId !== artifactId) throw new Error("preview_export_artifact_missing");
+      await workbenchClient.files.open(preview.relativePath, preview.mimeType ?? "application/octet-stream");
+    })}
     providerOptions={aiProviderModels}
+    selectedProviderOptionId={selectedAiProviderOptionId}
     context={aiContextRef.current}
     locale={locale}
     status={workflowAiStatus}
@@ -2221,36 +2336,41 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
     onOpenChange={setAiSidebarOpen}
     onWidthChange={setAiSidebarWidth}
     onInputChange={setAiInput}
+    onProviderOptionChange={(optionId) => {
+      setAiSelectedProviderOptionId(optionId);
+      setAiProviderMode(optionId === "auto" ? "auto" : "manual");
+    }}
     onSubmit={sendWorkflowAiPrompt}
-    onStop={() => { void workflowAiChat.stop(); void (workflowAiTransport as ChatTransport<DesktopUIMessage> & { stopCurrent?: () => Promise<void> }).stopCurrent?.(); }}
-    onRetry={async (message) => { await workflowAiChat.regenerate({ messageId: message.id }); }}
+    onStop={stopWorkflowAi}
+    onRetry={async (message) => {
+      const messageIndex = workflowAiChat.messages.findIndex((candidate) => candidate.id === message.id);
+      const sourceUser = messageIndex >= 0
+        ? [...workflowAiChat.messages.slice(0, messageIndex)].reverse().find((candidate) => candidate.role === "user")
+        : undefined;
+      if (sourceUser) aiCancelledSourceUserIdsRef.current.delete(sourceUser.id);
+      await workflowAiChat.regenerate({ messageId: message.id });
+    }}
     onApprove={async (toolCallId) => { const controller = ensureAiController(); await controller.approve(toolCallId); setAiOperationGroups([...controller.operationGroups]); refreshWorkflowAiToolMessage(controller, toolCallId); }}
     onReject={async (toolCallId) => { const controller = ensureAiController(); await controller.reject(toolCallId); setAiOperationGroups([...controller.operationGroups]); refreshWorkflowAiToolMessage(controller, toolCallId); }}
   />;
-  const applyHistorySnapshot = (snapshot: WorkflowDefinitionEnvelope) => {
-    const unhashed = { ...snapshot, revision: localDefinitionRef.current.revision + 1, definitionHash: "" };
-    const restored = { ...unhashed, definitionHash: hashWorkflowDefinition(unhashed) };
+  const applyHistoryState = (nextState: WorkflowHistoryState) => {
+    const restored = nextState.current;
     localDefinitionRef.current = restored;
     setLocalDefinition(restored);
     setSelectedNodeKey((current) => restored.nodes.some((node) => node.nodeKey === current) ? current : restored.nodes[0]?.nodeKey ?? "input");
     setWorkflowEditorPrompt(workflowPromptFromDefinition(restored));
+    setHistoryState({ canUndo: nextState.canUndo, canRedo: nextState.canRedo });
     onDefinitionChange(restored);
   };
   const undoWorkflow = () => {
-    const previous = historyRef.current.past.pop();
-    if (!previous) return;
-    historyRef.current.future.push(localDefinitionRef.current);
-    historyCoalesceRef.current = null;
-    applyHistorySnapshot(previous);
-    setHistoryState({ canUndo: historyRef.current.past.length > 0, canRedo: historyRef.current.future.length > 0 });
+    const nextState = historyRef.current.undo();
+    if (nextState.current.definitionHash === localDefinitionRef.current.definitionHash) return;
+    applyHistoryState(nextState);
   };
   const redoWorkflow = () => {
-    const next = historyRef.current.future.pop();
-    if (!next) return;
-    historyRef.current.past.push(localDefinitionRef.current);
-    historyCoalesceRef.current = null;
-    applyHistorySnapshot(next);
-    setHistoryState({ canUndo: historyRef.current.past.length > 0, canRedo: historyRef.current.future.length > 0 });
+    const nextState = historyRef.current.redo();
+    if (nextState.current.definitionHash === localDefinitionRef.current.definitionHash) return;
+    applyHistoryState(nextState);
   };
   const startPanelDrag = (panel: "left" | "right", event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
@@ -2286,14 +2406,6 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
     setSelectedNodeKey(nodeKey);
     const node = localDefinition.nodes.find((item) => item.nodeKey === nodeKey);
     if (node && node.nodeKey !== "input" && node.type !== "output") onWorkflowAction(node.type as WorkflowAction);
-  };
-  const updatePrompt = (value: string) => {
-    setWorkflowEditorPrompt(value);
-    commit({ ...localDefinition, nodes: localDefinition.nodes.map((node) => {
-      const editableTextFields = workflowNodeRegistry.get(node.type)?.configSchema.filter((field) => ["prompt", "script", "text", "query", "previewText"].includes(field.id)) ?? [];
-      if (!editableTextFields.length) return node;
-      return { ...node, config: { ...node.config, ...Object.fromEntries(editableTextFields.map((field) => [field.id, value])) } };
-    }) }, "prompt");
   };
   const defaultProviderIdForNode = (nodeType: string) => {
     const defaultModel = modelForNode?.(nodeType) ?? model;
@@ -2465,6 +2577,7 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
           : preferredConfiguredModel(provider);
         nextConfig.model = nextModel;
         nextConfig.provider = provider.id;
+        delete nextConfig.needsConfig;
         if (workflowNodeRegistry.get(node.type)?.configSchema.some((field) => field.id === "selectedModelId")) nextConfig.selectedModelId = nextModel;
         delete nextConfig.workflowRef;
       }
@@ -2477,6 +2590,7 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
       const provider = providerId ? providersForNode?.(node.type).find((candidate) => candidate.id === providerId) : undefined;
       const workflowCapability = runningHubWorkflowCapabilityForNode(node);
       if (isRunningHubProvider(provider) && workflowCapability) delete nextConfig.workflowRef;
+      if (provider && nextValue) delete nextConfig.needsConfig;
     }
     if (node.nodeKey === "input" && key === "text" && typeof value === "string") setWorkflowEditorPrompt(value);
     commit({ ...current, nodes: current.nodes.map((candidate) => candidate.nodeKey === node.nodeKey ? { ...candidate, config: nextConfig } : candidate) }, `config:${nodeKey}:${key}`);
@@ -2488,7 +2602,7 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, configuredProvi
     return { ...node, title: localizedNodeTitle(node) };
   });
   const onRerun = providedOnRerun
-    ? (_nextDefinition: WorkflowDefinitionEnvelope) => providedOnRerun(localDefinitionRef.current)
+    ? () => providedOnRerun(localDefinitionRef.current)
     : onRun;
   const onContinue = providedOnContinue ?? (() => undefined);
   const rerunWorkflow = onRerun;
@@ -2510,7 +2624,6 @@ function DesktopMediaWorkspaceBody({
   providerConfigured: configuredProp,
   providerSource,
   onOpenSettings,
-  onOpenTasks,
   onArtifactReveal,
   onArtifactPreview,
   onAddAttachments,
@@ -2518,11 +2631,7 @@ function DesktopMediaWorkspaceBody({
    attachments,
   model,
   models,
-  reasoningEffort,
-  skillId,
   onModelChange,
-  onReasoningChange,
-  onSkillChange,
   locale,
   mediaFeatureId,
   onMediaFeatureChange,
@@ -3179,11 +3288,6 @@ function DesktopMediaWorkspace(props: DesktopMediaWorkspaceProps) {
   </div>;
 }
 
-function isPreviewableArtifact(artifact: ArtifactRow) {
-  return /^(image|audio|video)\//iu.test(artifact.mime_type);
-}
-
-
 type DesktopAssetLibraryCopy = { preview: string; open: string; folder: string; unavailable: string; remove: string; removeConfirm: string; removeCancel: string; removing: string; loading: string; failed: string; videoLabel: string; audioLabel: string };
 
 type AssetCardMediaCopy = { loading: string; unavailable: string; failed: string; imageAlt: string; videoLabel: string; audioLabel: string };
@@ -3329,7 +3433,7 @@ function DesktopArtifactPreviewModal({ artifact, source, onClose, onOpen, onOpen
   return <div className="artifact-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><section className="artifact-preview-dialog" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>{title}</strong><small>{artifact.mime_type} · {Math.max(1, Math.ceil(artifact.byte_length / 1024))} KB</small></div><button type="button" className="link-button" onClick={onClose}>{locale === "zh" ? "关闭" : "Close"}</button></header><div className="artifact-preview-stage"><div className="artifact-preview-content">{artifact.mime_type.startsWith("image/") ? <img src={source} alt={title} /> : artifact.mime_type.startsWith("video/") ? <video controls autoPlay preload="metadata" src={source} /> : <audio controls autoPlay preload="metadata" src={source} />}</div><footer><button type="button" className="ghost" onClick={() => void onOpenFolder()}>{locale === "zh" ? "打开所在文件夹" : "Open containing folder"}</button><button type="button" className="primary" onClick={() => void onOpen()}>{locale === "zh" ? "使用默认应用打开" : "Open with default app"}</button></footer></div></section></div>;
 }
 
-function DesktopAssetLibrarySurface({ artifactRows, onArtifactRemove, onArtifactReveal: _onArtifactReveal, onArtifactOpen, onArtifactOpenFolder, locale }: { artifactRows: ArtifactRow[]; onArtifactRemove: (artifactId: string) => Promise<void>; onArtifactReveal: (relativePath: string, mimeType: string) => void; onArtifactOpen: (relativePath: string, mimeType: string) => Promise<void>; onArtifactOpenFolder: (relativePath: string, mimeType: string) => Promise<void>; locale: "zh" | "en" }) {
+function DesktopAssetLibrarySurface({ artifactRows, onArtifactRemove, onArtifactOpen, onArtifactOpenFolder, locale }: { artifactRows: ArtifactRow[]; onArtifactRemove: (artifactId: string) => Promise<void>; onArtifactReveal: (relativePath: string, mimeType: string) => void; onArtifactOpen: (relativePath: string, mimeType: string) => Promise<void>; onArtifactOpenFolder: (relativePath: string, mimeType: string) => Promise<void>; locale: "zh" | "en" }) {
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<AssetLibraryTab>("all");
   const [view, setView] = useState<"grid" | "list">("grid");
@@ -3406,7 +3510,6 @@ function DesktopLibraryWorkspace({ route, artifactRows, savedWorkflows, conversa
   const isCapabilities = route.path === "/dashboard/capabilities";
   const isTasks = route.path === "/dashboard/tasks";
   const isSettings = route.path === "/dashboard/settings";
-  const routeForConversationId = (id: string) => conversationRoute(conversations.find((conversation) => conversation.id === id) ?? { id });
   const onNavigate = (path: string) => navigatePath(conversationAwareRoute(path, conversations));
   if (isAssets) return <DesktopAssetLibrarySurface artifactRows={artifactRows} onArtifactRemove={onArtifactRemove} onArtifactReveal={onArtifactReveal} onArtifactOpen={(relativePath, mimeType) => tauriBridge.invoke("open_artifact_default", { relativePath, mimeType }).then(() => undefined)} onArtifactOpenFolder={(relativePath, mimeType) => tauriBridge.invoke("open_artifact_folder", { relativePath, mimeType }).then(() => undefined)} locale={locale} />;
   if (isTasks) return <DesktopTaskCenterSurface runs={runs} conversations={conversations} onNavigate={onNavigate} onRetryRun={onRetryRun} onInspectRun={onInspectRun} locale={locale} />;
@@ -3724,7 +3827,7 @@ export function App() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [workflowRunStatus, setWorkflowRunStatus] = useState("");
   const [dismissedTopTip, setDismissedTopTip] = useState<string | null>(null);
-  const [lastWorkflowRunId, setLastWorkflowRunId] = useState<string | null>(null);
+  const [, setLastWorkflowRunId] = useState<string | null>(null);
   const [workflowNodeSnapshots, setWorkflowNodeSnapshots] = useState<WorkflowCanvasExecutionSnapshot[]>([]);
   const workflowNodeRunIdRef = useRef<string | null>(null);
   const currentWorkflowIdRef = useRef<string | null>(null);
@@ -3760,9 +3863,6 @@ export function App() {
   const [localSkills, setLocalSkills] = useState<LocalSkillCatalog["skills"]>(fallbackLocalSkills);
   const assistantCreatedAtRef = useRef(new Map<string, string>());
   const workflowOutputsRef = useRef(new Map<string, string>());
-  // Kept as a compatibility marker for older source-level smoke tests; actual
-  // output text is keyed by run id in workflowOutputsRef for parallel runs.
-  const workflowOutputRef = useRef("");
   const assistantPartsRef = useRef(new Map<string, DesktopUIMessagePart[]>());
   const runModelsRef = useRef(new Map<string, string>());
   const [toolEvents, setToolEvents] = useState<string[]>([]);
@@ -4078,22 +4178,31 @@ export function App() {
     });
     return () => { cancelled = true; };
   }, [runMetadataById, runs, workbenchClient]);
-  const desktopChatTransport = useMemo(() => {
+  const createDesktopChatTransportWithOverrides = useMemo(() => (overrides: Partial<DesktopChatTransportOptions> = {}) => {
     const resolveChatAction = (message: DesktopUIMessage): WorkflowAction => {
       const route = typeof message.metadata?.route === "string" ? message.metadata.route : "";
       return (routeWorkflowAction(route) ?? "llm_generate") as WorkflowAction;
     };
     const resolveChatProvider = (message: DesktopUIMessage) => providerForCapability(configRef.current, capabilityForWorkflowAction(resolveChatAction(message)));
     const resolveChatArtifactPolicy = (message: DesktopUIMessage) => {
-      const route = typeof message.metadata?.route === "string" ? message.metadata.route : "";
-      return promptRequestsArtifact(desktopUIMessageText(message)) || /(?:executive-ppt|executive-presentation-ppt)/u.test(route);
+      const messageRoute = typeof message.metadata?.route === "string" ? message.metadata.route : "";
+      const conversationId = typeof message.metadata?.conversationId === "string" ? message.metadata.conversationId : "";
+      const conversationAgentId = conversationId ? conversationsRef.current.find((item) => item.id === conversationId)?.agent_id?.trim() : undefined;
+      const agentId = conversationAgentId ?? requestedAgentId ?? undefined;
+      const route = messageRoute || activePathRef.current;
+      return chatAllowsArtifactRegistration(desktopUIMessageText(message), {
+        actionId: routeWorkflowAction(route) ?? undefined,
+        skillId: resolveDesktopSkillId(route, agentId ?? null),
+        agentId,
+        route,
+      });
     };
     return createDesktopChatTransport(tauriBridge, workbenchClient, {
     resolveSessionId: async (chatId) => conversationsRef.current.find((item) => item.id === chatId)?.opencode_session_id ?? chatId,
     resolveProvider: resolveChatProvider,
     ensureSession: async ({ chatId, sessionId, provider, message }) => {
       const existingConversation = conversationsRef.current.find((item) => item.id === chatId);
-      const conversationAgentId = existingConversation?.agent_id?.trim() ?? requestedAgentId ?? conversationScope ?? null;
+      const conversationAgentId = overrides.resolveConversationAgentId?.(message) ?? existingConversation?.agent_id?.trim() ?? requestedAgentId ?? conversationScope ?? null;
       if (!conversationsRef.current.some((item) => item.id === chatId)) {
         const title = buildConversationTitleFromPrompt(desktopUIMessageText(message), locale);
         const created = await tauriBridge.invoke<{ id: string; title: string; updated_at: string; opencode_session_id?: string | null; agent_id?: string | null }>("create_conversation", { input: { id: chatId, title, project_id: null, agent_id: conversationAgentId } });
@@ -4112,8 +4221,8 @@ export function App() {
           workspacePath: configRef.current.workspacePath,
           model: message.metadata?.modelId ?? provider.model,
           provider,
-          ...(conversationAgentId?.startsWith("agency-") ? { agentId: conversationAgentId } : {}),
-          allowArtifacts: resolveChatArtifactPolicy(message),
+          ...(conversationAgentId?.startsWith("agency-") || conversationAgentId === "workflow-ai" ? { agentId: conversationAgentId } : {}),
+          allowArtifacts: overrides.resolveAllowArtifacts?.(message) ?? resolveChatArtifactPolicy(message),
         },
       });
       if (response.ok !== true) {
@@ -4161,7 +4270,7 @@ export function App() {
       const messageConversationId = message.metadata?.conversationId;
       const messageAgentId = typeof messageConversationId === "string" ? conversationsRef.current.find((item) => item.id === messageConversationId)?.agent_id?.trim() : undefined;
       const selectedAgentId = messageAgentId ?? requestedAgentId;
-      return selectedAgentId?.startsWith("agency-") ? selectedAgentId : undefined;
+      return selectedAgentId?.startsWith("agency-") || selectedAgentId === "workflow-ai" ? selectedAgentId : undefined;
     },
     onRunStarted: (runId, chatId, message) => {
       const createdAt = message.metadata?.createdAt ?? new Date().toISOString();
@@ -4171,10 +4280,11 @@ export function App() {
         : [...current, optimisticUserMessage]);
       runConversationIdsRef.current.set(runId, chatId);
       activeRunsByConversationRef.current.set(chatId, runId);
-      runContextsRef.current.set(runId, { kind: "conversation", launchPath: activePathRef.current, conversationId: chatId });
+      const workflowKey = chatId.startsWith("workflow-ai:") ? chatId.slice("workflow-ai:".length) : undefined;
+      runContextsRef.current.set(runId, workflowKey ? { kind: "workflow", launchPath: activePathRef.current, workflowKey } : { kind: "conversation", launchPath: activePathRef.current, conversationId: chatId });
       runModelsRef.current.set(runId, message.metadata?.modelId ?? activeModel);
       assistantPartsRef.current.set(runId, [{ type: "data-status", id: `${runId}:status`, data: { status: "running", message: locale === "zh" ? "正在等待模型响应…" : "Waiting for the model response…" } }]);
-      const visible = conversationIdFromPath(activePathRef.current) === chatId || activeConversationRef.current === chatId;
+      const visible = !workflowKey && (conversationIdFromPath(activePathRef.current) === chatId || activeConversationRef.current === chatId);
       if (visible) {
         activeRunRef.current = runId;
         setActiveConversationId(chatId);
@@ -4188,8 +4298,10 @@ export function App() {
         setRunStatus(locale === "zh" ? "已发送，正在流式生成…" : "Sent; streaming response…");
       }
     },
+    ...overrides,
     });
   }, [activeModel, conversationScope, locale, markQuestionSessionAvailable, requestedAgentId, updateConversationMessages, workbenchClient]);
+  const desktopChatTransport = useMemo(() => createDesktopChatTransportWithOverrides(), [createDesktopChatTransportWithOverrides]);
 
   const questionConversation = questionConversationForRoute(activePath, conversations);
   useEffect(() => {
@@ -4334,15 +4446,39 @@ export function App() {
     return { ...provider, model: transcriptionWorkflow.remoteWorkflowId };
   }, [config]);
   const audioTranscriptionWorkflowCount = audioTranscriptionProvider.workflows?.filter((workflow) => workflow.capability === "audio_transcription").length ?? 0;
-  const workflowDirectoryTemplates = useMemo<WorkbenchWorkflowDirectoryTemplate[]>(() => [
-    { id: "content-pipeline", title: locale === "zh" ? "内容营销流水线" : "Content marketing pipeline", description: locale === "zh" ? "从任务输入开始，生成可编辑营销文案并写入本地产物。" : "Turn a task into editable marketing copy and a local artifact.", status: activeModel.trim() ? "ready" : "needs-config" },
-    { id: "presentation", title: locale === "zh" ? "演示文稿生成" : "Presentation generation", description: locale === "zh" ? "使用本地 ppt-master Skill 构建演示文稿工作流。" : "Build a presentation workflow with the local ppt-master Skill.", status: activeModel.trim() ? "ready" : "needs-config" },
-    { id: "image-campaign", title: locale === "zh" ? "营销图片批量生成" : "Campaign image generation", description: locale === "zh" ? "以 Canvas 编排文案与图片生成节点；未配置图片 Provider 时保持可见。" : "Compose copy and image generation on Canvas; remains visible until an image provider is configured.", status: isMediaProviderConfigured(providerForCapability(config, "image")) ? "ready" : "needs-config" },
-    { id: "video-ffmpeg-transform", title: locale === "zh" ? "FFmpeg 视频变换" : "FFmpeg video transform", description: locale === "zh" ? "上传本地视频，使用 FFmpeg 调整为 16:9、1280×720、30 FPS。" : "Upload a local video and transform it to 16:9, 1280×720 at 30 FPS with FFmpeg.", status: "ready" },
-    { id: "audio-ffmpeg-trim", title: locale === "zh" ? "FFmpeg 音频裁剪" : "FFmpeg audio trim", description: locale === "zh" ? "上传本地音频，使用 FFmpeg 裁剪前两秒并输出纯音频。" : "Upload a local audio file and trim the first two seconds to a pure audio output with FFmpeg.", status: "ready" },
-    { id: "product-promotion-video", title: locale === "zh" ? "产品宣传视频流水线" : "Product promotion video pipeline", description: locale === "zh" ? "生成统一人物参考图，由一个文本分割节点拆出多个场景，再用一个视频节点逐段生成内置口播、动作、字幕与声音的 UGC 视频，拼接后生成封面并写入成片。" : "Generate one creator reference image, split a reusable script into scene segments, run one video node per segment with built-in voice, performance, captions, and sound, then stitch the scenes and embed a generated cover.", status: isMediaProviderConfigured(providerForCapability(config, "video")) && isMediaProviderConfigured(providerForCapability(config, "image")) ? "ready" : "needs-config" },
-    { id: "character-swap-video", title: locale === "zh" ? "人物替换字幕视频" : "Character replacement video", description: locale === "zh" ? "参考图与人物图替换，音频 ASR 生成字幕，再通过本地 FFmpeg 合成。" : "Replace a character in a reference image, transcribe the audio, then compose the result with local FFmpeg.", status: isMediaProviderConfigured(providerForCapability(config, "image")) && supportsCharacterSwapImageProvider(providerForCapability(config, "image")) && isMediaProviderConfigured(audioTranscriptionProvider) && audioTranscriptionWorkflowCount === 1 ? "ready" : "needs-config" },
-  ], [activeModel, audioTranscriptionProvider, audioTranscriptionWorkflowCount, config, locale]);
+  const goldenWorkflowTemplates = useMemo(() => {
+    const configuredMediaProvider = (capability: "image" | "video" | "audio") => {
+      const candidate = providerForCapability(config, capability);
+      return supportsProviderCapability(candidate, capability) ? candidate : UNBOUND_MEDIA_PROVIDER;
+    };
+    const imageProvider = configuredMediaProvider("image");
+    const videoProvider = configuredMediaProvider("video");
+    const textProvider = providerForCapability(config, "text");
+    const audioProvider = configuredMediaProvider("audio");
+    const resolvedAudioTranscriptionProvider = supportsProviderCapability(audioTranscriptionProvider, "audio") ? audioTranscriptionProvider : UNBOUND_MEDIA_PROVIDER;
+    const context = {
+      locale,
+      providers: {
+        text: textProvider,
+        image: imageProvider,
+        video: videoProvider,
+        audio: resolvedAudioTranscriptionProvider,
+        audioTranscriptionWorkflowCount,
+      },
+    } as const;
+    const builders = {
+      "content-pipeline": () => ({ definition: buildWorkflowDefinition(locale === "zh" ? "生成一份营销内容方案" : "Create a marketing content plan", "writer", textProvider, {}, locale) }),
+      presentation: () => ({ definition: buildWorkflowDefinition(locale === "zh" ? "生成一份营销演示文稿" : "Create a marketing presentation", "ppt_generate", textProvider, {}, locale) }),
+      "image-campaign": () => ({ definition: buildCampaignImageWorkflowDefinition(locale === "zh" ? "生成一组营销活动图片" : "Generate a set of campaign images", imageProvider, locale) }),
+      "video-ffmpeg-transform": () => ({ definition: buildLocalMediaWorkflowDefinition("video", locale) }),
+      "audio-ffmpeg-trim": () => ({ definition: buildLocalMediaWorkflowDefinition("audio", locale) }),
+      "product-promotion-video": () => ({ definition: buildProductPromotionWorkflowDefinition(videoProvider, audioProvider, imageProvider, locale) }),
+      "character-swap-video": () => ({ definition: buildCharacterSwapVideoWorkflowDefinition({ image: imageProvider, audio: resolvedAudioTranscriptionProvider, video: videoProvider }, locale) }),
+    };
+    return createWorkflowGoldenTemplateRegistry({ context, builders });
+  }, [audioTranscriptionProvider, audioTranscriptionWorkflowCount, config, locale]);
+  const workflowDirectoryTemplates = useMemo<WorkbenchWorkflowDirectoryTemplate[]>(() => goldenWorkflowTemplates.map((template) => ({ id: template.id, title: template.title, description: template.description, status: template.status })), [goldenWorkflowTemplates]);
+  const aiGoldenTemplates = useMemo<NonNullable<WorkflowAiContext["goldenTemplates"]>>(() => goldenWorkflowTemplates.map((template) => ({ templateKey: template.id, templateVersion: template.version, capabilities: template.capabilities as NonNullable<WorkflowAiContext["goldenTemplates"]>[number]["capabilities"], nodeTypes: template.nodeTypes, requiredProviderCapabilities: template.requiredProviderCapabilities, definition: template.instantiate() })), [goldenWorkflowTemplates]);
   const workflowDirectoryRuns = useMemo<WorkbenchWorkflowDirectoryRun[]>(() => runs.flatMap((run) => {
     const metadata = runMetadataById.get(run.id);
     if (metadata?.kind !== "workflow") return [];
@@ -4355,8 +4491,6 @@ export function App() {
       ...(run.finished_at ? { finishedAt: run.finished_at } : {}),
     }];
   }), [locale, runMetadataById, runs, savedWorkflows]);
-  openWorkflowProviderSettings = () => { setSettingsOpen(true); workbenchClient.navigation.go("/dashboard/settings"); };
-
   function toggleLocale() {
     setLocalePreference(locale === "zh" ? "en" : "zh");
   }
@@ -4373,7 +4507,7 @@ export function App() {
         try {
           const saved = await persistLocalFile(file, tauriBridge);
           if (isTextAttachment(file)) {
-            const rawText = (await file.text()).replace(/\u0000/g, "").replace(/\r\n?/g, "\n").trim();
+          const rawText = (await file.text()).split(String.fromCharCode(0)).join("").replace(/\r\n?/g, "\n").trim();
             next.push({ ...attachment, status: "ready", relativePath: saved.relativePath, text: rawText.slice(0, LOCAL_ATTACHMENT_MAX_TEXT_CHARS), textCharCount: rawText.length, truncated: rawText.length > LOCAL_ATTACHMENT_MAX_TEXT_CHARS });
           } else if (/\.(docx|pdf)$/iu.test(file.name) || /^(application\/pdf|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document)$/iu.test(file.type)) {
             try {
@@ -4815,7 +4949,7 @@ export function App() {
     void tauriBridge.listen<{ raw: string }>("desktop://runtime-response", (payload) => {
       try {
         const separator = payload.raw.indexOf(":");
-        const frame = JSON.parse(payload.raw.slice(separator + 1)) as { requestId?: string; ok?: boolean; data?: { sessionId?: string; event?: { event?: string; provider?: string; model?: string; delta?: string; runId?: string; inputTokens?: number; outputTokens?: number; costUsd?: number; code?: string; message?: string; permissionId?: string; sessionId?: string; callId?: string; toolName?: string; input?: unknown; response?: string; artifact?: unknown } } };
+        const frame = JSON.parse(payload.raw.slice(separator + 1)) as { requestId?: string; ok?: boolean; data?: { sessionId?: string; event?: { event?: string; provider?: string; model?: string; delta?: string; runId?: string; inputTokens?: number; outputTokens?: number; costUsd?: number; code?: string; message?: string; permissionId?: string; sessionId?: string; callId?: string; toolName?: string; input?: unknown; response?: string; artifact?: unknown; preview?: unknown } } };
         if (frame.requestId) responseWaiters.current.get(frame.requestId)?.(frame as unknown as Record<string, unknown>);
         if (frame.requestId && frame.data?.sessionId) {
           const sessionMarker = ":session:";
@@ -4941,6 +5075,16 @@ export function App() {
               sequence,
               createdAt: toolCallCreatedAt,
             }));
+          }
+          if (eventType === "preview" && event.preview && typeof event.preview === "object") {
+            const parts = assistantPartsRef.current.get(event.runId) ?? [];
+            assistantPartsRef.current.set(event.runId, applyWorkbenchRunEventToParts(parts, {
+              type: "preview",
+              preview: event.preview as DesktopPreviewData,
+              sequence,
+              createdAt: new Date().toISOString(),
+            }));
+            if (isVisibleEvent) setToolEvents((current) => [...current]);
           }
           const eventTool = typeof (event as { tool?: string }).tool === "string" ? (event as { tool: string }).tool : "";
           const isLegacyArtifactEvent = eventType === "tool_event" && eventTool.startsWith("artifact:");
@@ -5259,6 +5403,14 @@ export function App() {
     } catch (error) { setRetryStatus(error instanceof Error ? error.message : (locale === "zh" ? "重试准备失败" : "Unable to prepare retry")); }
   }
 
+  async function continueWorkflowFromCanvas() {
+    const workflowKey = workflowCanvasKeyRef.current;
+    const tracking = workflowKey ? workflowLastRunsRef.current.get(workflowKey) : undefined;
+    if (!tracking) return;
+    const latest = { id: tracking.runId } as RunRow;
+    await prepareRunRetry(latest, { workflowOnly: true });
+  }
+
   async function rebuildVaultIndex() {
     if (!config.obsidianVaultPath || !config.obsidianIndexPath) { setRunStatus(locale === "zh" ? "请先填写 Obsidian Vault 和索引目录" : "Set the Obsidian Vault and index directory first"); return; }
     try {
@@ -5274,7 +5426,7 @@ export function App() {
   async function sendHostMessage(message: Record<string, unknown>) {
     const requestId = String(message.requestId ?? globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
     const frame = { ...message, requestId };
-    const response = new Promise<Record<string, unknown>>((resolve, reject) => {
+    const response = new Promise<Record<string, unknown>>((resolve) => {
       responseWaiters.current.set(requestId, (value) => { responseWaiters.current.delete(requestId); resolve(value); });
     });
     try {
@@ -5315,10 +5467,6 @@ export function App() {
     } catch (error) {
       setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "审批响应失败" : "Unable to respond to the approval request"));
     }
-  }
-
-  async function respondToToolApproval(_message: DesktopUIMessage, part: Extract<DesktopUIMessagePart, { type: "dynamic-tool" }>, decision: "approve" | "reject") {
-    await respondToPermission(part.approval?.id ?? "", decision);
   }
 
   useEffect(() => {
@@ -5364,7 +5512,7 @@ export function App() {
     } catch (error) { setKnowledgeResults([]); setKnowledgeStatus(error instanceof Error ? error.message : (locale === "zh" ? "本地知识检索失败" : "Local knowledge search failed")); }
   }
 
-  async function saveCurrentWorkflow(mode: "manual" | "auto" = "manual", definitionOverride?: WorkflowDefinitionEnvelope): Promise<boolean> {
+  async function saveCurrentWorkflow(mode: "manual" | "auto" = "manual", definitionOverride?: WorkflowDefinitionEnvelope, options: { readonly force?: boolean } = {}): Promise<boolean | WorkflowDefinitionEnvelope> {
     const definition = sanitizeWorkflowDefinitionForStorage(definitionOverride ? currentWorkflowDefinition(definitionOverride) : currentWorkflowDefinition());
     const definitionHash = hashWorkflowDefinition(definition);
     const action = workflowActions.find((item) => item.id === definition.nodes.find((node) => node.nodeKey !== "input" && node.type !== "output")?.type) ?? workflowActions[0];
@@ -5374,7 +5522,7 @@ export function App() {
     const generatedTitle = `${locale === "en" ? workflowActionEnglish[action.id] ?? action.label : action.label} · ${inputText.slice(0, 24) || (locale === "en" ? "Untitled" : "未命名")}`;
     const title = workflowMetadata.title.trim() || generatedTitle;
     const presentationHash = hashWorkflowPresentation(definition, title);
-    if (savedWorkflowHashRef.current === definitionHash && savedWorkflowPresentationHashRef.current === presentationHash) {
+    if (!options.force && savedWorkflowHashRef.current === definitionHash && savedWorkflowPresentationHashRef.current === presentationHash) {
       if (mode === "manual") setRunStatus(locale === "zh" ? "工作流已是最新版本" : "Workflow is already up to date");
       return true;
     }
@@ -5384,13 +5532,14 @@ export function App() {
     }
     workflowSaveInFlightRef.current = true;
     try {
-      const saved = toSavedWorkflow(await workbenchClient.workflows.save({ id: workflowId, title, definition }));
+      const savedResponse = await workbenchClient.workflows.save({ id: workflowId, title, definition });
+      const saved = toSavedWorkflow(savedResponse);
       currentWorkflowIdRef.current = saved.id;
       savedWorkflowHashRef.current = definitionHash;
       savedWorkflowPresentationHashRef.current = presentationHash;
       setSavedWorkflows((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setRunStatus(mode === "auto" ? (locale === "zh" ? "工作流已自动保存" : "Workflow auto-saved") : (locale === "zh" ? "工作流已保存到本机" : "Workflow saved locally"));
-      return true;
+      return savedResponse.definition as WorkflowDefinitionEnvelope;
     } catch (error) {
       setRunStatus(error instanceof Error ? error.message : (mode === "auto" ? (locale === "zh" ? "工作流自动保存失败" : "Workflow auto-save failed") : (locale === "zh" ? "工作流保存失败" : "Workflow save failed")));
       return false;
@@ -5404,8 +5553,9 @@ export function App() {
   }
 
   async function ensureCurrentWorkflowId(definition: WorkflowDefinitionEnvelope) {
-    const saved = await saveCurrentWorkflow("auto", definition);
-    return saved ? currentWorkflowIdRef.current : null;
+    const saved = await saveCurrentWorkflow("auto", definition, { force: true });
+    if (!saved || typeof saved === "boolean" || !currentWorkflowIdRef.current) return null;
+    return { id: currentWorkflowIdRef.current, definition: saved };
   }
 
   function currentWorkflowDefinition(definitionOverride?: WorkflowDefinitionEnvelope) {
@@ -5427,34 +5577,19 @@ export function App() {
     return () => window.clearTimeout(timeoutId);
   }, [selected.path, workflowBuilderOpen, workflowDefinition, workflowMetadata, workflowPrompt]);
 
-  async function continueWorkflowRun() {
-    const workflowKey = workflowCanvasKeyRef.current;
-    const trackedRunId = workflowKey ? workflowLastRunsRef.current.get(workflowKey)?.runId : undefined;
-    const queryRunId = new URLSearchParams(activePathRef.current.split("?", 2)[1] ?? "").get("runId") ?? undefined;
-    const candidateRunIds = [trackedRunId, lastWorkflowRunId, queryRunId].filter((runId, index, ids): runId is string => Boolean(runId) && ids.indexOf(runId) === index);
-    const latest = candidateRunIds.map((runId) => runs.find((run) => run.id === runId)).find((run) => run && ["failed", "cancelled", "interrupted"].includes(run.status))
-      ?? (candidateRunIds[0] ? { id: candidateRunIds[0], status: "failed", started_at: new Date(0).toISOString(), conversation_id: null } : undefined)
-      ?? (!workflowKey ? runs.find((run) => ["failed", "cancelled", "interrupted"].includes(run.status)) : undefined);
-    if (!latest) { setRunStatus(locale === "zh" ? "没有可继续的工作流运行" : "No resumable workflow run is available"); return; }
-    await prepareRunRetry(latest, { workflowOnly: true });
-  }
-
   function openWorkflowCanvas(definition: WorkflowDefinitionEnvelope, saved?: SavedWorkflow) {
-    const normalizedDefinition = normalizeWorkflowDefinitionLayout(definition);
+    const normalizedDefinition = definition;
     currentWorkflowIdRef.current = saved?.id ?? null;
     setVisibleWorkflowCanvas(saved?.id ?? `draft:${hashWorkflowDefinition(normalizedDefinition)}`);
-    let needsMigrationSave = false;
-    if (saved) {
-      try { needsMigrationSave = hasLegacyStillVideoComposition(JSON.parse(saved.definition_json) as unknown); } catch { needsMigrationSave = false; }
-    }
-    // A migrated legacy canvas must be persisted on the next auto-save so the
-    // user does not reopen the old external-video node on another machine.
-    savedWorkflowHashRef.current = saved && !needsMigrationSave ? hashWorkflowDefinition(sanitizeWorkflowDefinitionForStorage(normalizedDefinition)) : null;
-    savedWorkflowPresentationHashRef.current = saved ? hashWorkflowPresentation(normalizedDefinition, saved.name) : null;
-    const capability = normalizedDefinition.nodes.find((node) => node.nodeKey !== "input" && node.type !== "output");
     const metadata = definition.metadata ?? {};
     const savedTitle = saved?.name ?? (locale === "zh" ? "未命名工作流" : "Untitled workflow");
-    setWorkflowMetadata({ title: savedTitle, description: typeof metadata.description === "string" ? metadata.description : "", status: metadata.status === "live" || metadata.status === "archived" ? metadata.status : (saved ? "live" : "draft") });
+    const savedDescription = typeof metadata.description === "string" ? metadata.description : "";
+    const savedStatus = metadata.status === "live" || metadata.status === "archived" ? metadata.status : (saved ? "live" : "draft");
+    const persistedSaveShape = projectOpenedWorkflowDefinition(normalizedDefinition, { description: savedDescription, status: savedStatus });
+    savedWorkflowHashRef.current = saved ? hashWorkflowDefinition(persistedSaveShape) : null;
+    savedWorkflowPresentationHashRef.current = saved ? hashWorkflowPresentation(persistedSaveShape, saved.name) : null;
+    const capability = normalizedDefinition.nodes.find((node) => node.nodeKey !== "input" && node.type !== "output");
+    setWorkflowMetadata({ title: savedTitle, description: savedDescription, status: savedStatus });
     const nextPrompt = workflowPromptFromDefinition(normalizedDefinition);
     if (capability && workflowActionsBase.some((item) => item.id === capability.type)) setWorkflowAction(capability.type as WorkflowAction);
     setWorkflowPrompt(nextPrompt);
@@ -5485,9 +5620,7 @@ export function App() {
       try {
         const parsed = node.output_json ? JSON.parse(node.output_json) : null;
         outputPayload = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
-      } catch {
-        outputPayload = null;
-      }
+      } catch { /* malformed persisted output remains unavailable */ }
       const storedError = outputPayload && typeof outputPayload.error === "string" ? outputPayload.error.trim() : "";
       const errorMessage = node.status === "failed" ? storedError || failureMessages.get(node.node_key) : undefined;
       return { nodeKey: node.node_key, status: node.status, ...(outputPayload ? { outputPayload } : {}), ...(errorMessage ? { errorMessage } : {}) };
@@ -5592,7 +5725,9 @@ export function App() {
       return;
     }
     if (action.type === "instantiate") {
-      const createWorkflowFromTemplate = async (definition: WorkflowDefinitionEnvelope, title: string) => {
+      const createWorkflowFromTemplate = async (definition: WorkflowDefinitionEnvelope, title: string, templateKey: string, templateVersion: number) => {
+        const unhashed = { ...definition, metadata: { ...(definition.metadata ?? {}), templateKey, templateVersion }, definitionHash: "" };
+        definition = { ...unhashed, definitionHash: hashWorkflowDefinition(unhashed) };
         const id = globalThis.crypto?.randomUUID?.() ?? `workflow-${Date.now()}`;
         try {
           const saved = toSavedWorkflow(await workbenchClient.workflows.save({ id, title, definition }));
@@ -5609,33 +5744,13 @@ export function App() {
           setWorkflowRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "创建工作流失败，已打开未保存草稿" : "Unable to create workflow; opened an unsaved draft"));
         }
       };
-      if (action.id === "video-ffmpeg-transform" || action.id === "audio-ffmpeg-trim") {
-        const mediaKind = action.id === "video-ffmpeg-transform" ? "video" : "audio";
-        await createWorkflowFromTemplate(buildLocalMediaWorkflowDefinition(mediaKind, locale), mediaKind === "video"
-          ? (locale === "zh" ? "FFmpeg 视频变换" : "FFmpeg video transform")
-          : (locale === "zh" ? "FFmpeg 音频裁剪" : "FFmpeg audio trim"));
+      const template = goldenWorkflowTemplates.find((candidate) => candidate.id === action.id);
+      if (!template) {
+        setRunStatus(locale === "zh" ? "找不到该黄金模板" : "Golden workflow template not found");
         return;
       }
-      if (action.id === "product-promotion-video") {
-        await createWorkflowFromTemplate(buildProductPromotionWorkflowDefinition(providerForCapability(config, "video"), providerForCapability(config, "audio"), providerForCapability(config, "image"), locale), locale === "zh" ? "产品宣传视频流水线" : "Product promotion video pipeline");
-        return;
-      }
-      if (action.id === "character-swap-video") {
-        const imageProvider = providerForCapability(config, "image");
-        const audioProvider = audioTranscriptionProvider;
-        const videoProvider = providerForCapability(config, "video");
-        await createWorkflowFromTemplate(buildCharacterSwapVideoWorkflowDefinition({ image: imageProvider, audio: audioProvider, video: videoProvider }, locale), locale === "zh" ? "人物替换字幕视频" : "Character replacement video");
-        return;
-      }
-      const templateAction: WorkflowAction = action.id === "presentation" ? "ppt_generate" : action.id === "image-campaign" ? "image_generate" : "writer";
-      const templatePrompt = action.id === "presentation"
-        ? (locale === "zh" ? "生成一份营销演示文稿" : "Create a marketing presentation")
-        : action.id === "image-campaign"
-          ? (locale === "zh" ? "生成一组营销活动图片" : "Generate a set of campaign images")
-          : (locale === "zh" ? "生成一份营销内容方案" : "Create a marketing content plan");
-      await createWorkflowFromTemplate(buildWorkflowDefinition(templatePrompt, templateAction, providerForCapability(config, capabilityForWorkflowAction(templateAction)), {}, locale), locale === "zh"
-        ? action.id === "presentation" ? "演示文稿生成" : action.id === "image-campaign" ? "营销图片批量生成" : "内容营销流水线"
-        : action.id === "presentation" ? "Presentation generation" : action.id === "image-campaign" ? "Campaign image generation" : "Content marketing pipeline");
+      const built = template.build();
+      await createWorkflowFromTemplate(built.definition, built.title, template.id, template.version);
       return;
     }
     if (action.type === "open-run" && action.id) {
@@ -5776,14 +5891,17 @@ export function App() {
       return;
     }
     if (workflowKey) workflowLaunchLocksRef.current.add(workflowKey);
-    let workflowKeyForStatus: string | undefined;
-    workflowKeyForStatus = workflowKey;
+    const workflowKeyForStatus = workflowKey;
     const setDomainStatus = (status: string) => {
       const stillOnLaunchRoute = activePathRef.current === launchPath;
       if (!stillOnLaunchRoute) return;
       if (isWorkflowRun ? workflowKeyForStatus === workflowCanvasKeyRef.current : true) (isWorkflowRun ? setWorkflowRunStatus : setRunStatus)(status);
     };
-    if (attachmentsPreparing) { workflowKey && workflowLaunchLocksRef.current.delete(workflowKey); setDomainStatus(locale === "zh" ? "正在读取附件，请稍候…" : "Preparing attachments…"); return; }
+    if (attachmentsPreparing) {
+      if (workflowKey) workflowLaunchLocksRef.current.delete(workflowKey);
+      setDomainStatus(locale === "zh" ? "正在读取附件，请稍候…" : "Preparing attachments…");
+      return;
+    }
     const workflowInputPrompt = isWorkflowDefinition(workflowOverride) ? workflowPromptFromDefinition(workflowOverride) : "";
     const rawPrompt = promptOverride ?? (isWorkflowRun ? (workflowInputPrompt || workflowPrompt) : prompt);
     const basePrompt = rawPrompt.trim();
@@ -5808,12 +5926,14 @@ export function App() {
     // (attachments and knowledge) belongs in the request, not in the user's
     // message bubble or persisted transcript.
     const displayedUserPrompt = displayedPromptOverride ?? (rawPrompt.length > 0 ? rawPrompt : titlePrompt);
-    if (!userPrompt) { workflowKey && workflowLaunchLocksRef.current.delete(workflowKey); return; }
+    if (!userPrompt) {
+      if (workflowKey) workflowLaunchLocksRef.current.delete(workflowKey);
+      return;
+    }
     const runtimePrompt = `${userPrompt}${knowledgeContext}`;
     const actionId = (mediaFeatureId === "image_generate"
       ? "image_generate"
       : resolveDesktopRunAction(launchSelectedPath, launchRouteAction, launchWorkflowAction, mediaFeatureId)) as WorkflowAction;
-    const conversationAllowsArtifacts = promptRequestsArtifact(userPrompt) || actionId === "ppt_generate";
     const resolvedMediaInputs = mediaInputs ?? (actionId === "image_generate" ? parseImageInputs(userPrompt) : undefined);
     const runId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     if (launchSelectedPath === "/dashboard/workflows") setLastWorkflowRunId(runId);
@@ -5825,6 +5945,12 @@ export function App() {
         : `conversation-${runId}`;
     const conversationAgentId = launchConversationScope ?? undefined;
     const localAgentId = conversationAgentId?.startsWith("agency-") ? conversationAgentId : undefined;
+    const conversationAllowsArtifacts = chatAllowsArtifactRegistration(userPrompt, {
+      actionId,
+      skillId: launchEffectiveSkillId,
+      agentId: conversationAgentId,
+      route: launchSelectedPath,
+    });
     const existingConversation = conversations.find((item) => item.id === conversationId);
     const optimisticTitle = resolveConversationTitleUpdate({
       currentTitle: existingConversation?.title ?? defaultConversationTitle(locale),
@@ -5856,6 +5982,16 @@ export function App() {
     if (!isWorkflowRun && runIsVisible()) { activeRunRef.current = runId; setAssistantText(""); setAssistantAt(userMessageCreatedAt); setToolEvents([]); setActivePrompt(displayedUserPrompt); setActivePromptAt(userMessageCreatedAt); }
     const userParts: DesktopUIMessagePart[] = [
       { type: "text", text: displayedUserPrompt, state: "done" },
+      ...attachments.map((attachment) => ({
+        type: "data-attachment" as const,
+        id: `attachment:${attachment.id}`,
+        data: {
+          attachmentId: attachment.id,
+          name: attachment.name,
+          mediaType: attachment.mediaType,
+          status: attachment.status ?? "ready" as const,
+        },
+      })),
       ...(actionId === "image_generate" && writerArticleMessageId ? [{ type: "data-writerAsset" as const, id: `${runId}:writer-article-request`, data: { articleMessageId: writerArticleMessageId, kind: "image" as const } }] : []),
     ];
     if (!isWorkflowRun && conversationId) updateVisibleConversationMessages(conversationId, (current) => [...current, { id: `message-${runId}`, conversationId, role: "user", content: displayedUserPrompt, createdAt: userMessageCreatedAt, parts: userParts }]);
@@ -6139,11 +6275,11 @@ export function App() {
           <div className="home-shell"><div className="home-page-shell"><header className="home-topbar"><div className="home-topbar-status"><span className="public-signal" aria-hidden="true" /><span>{homeCopy.workspaceReady}</span></div><button type="button" className="home-credits-link" onClick={() => workbenchClient.navigation.go("/dashboard/tasks")}><span className="home-credits-icon"><WorkbenchRouteIcon name="sparkles" size={14} /></span><span>{homeCopy.viewUsage}</span><WorkbenchRouteIcon name="arrowUpRight" size={15} /></button></header><main className="home-main"><section className="home-welcome"><div className="home-welcome-kicker">COWORKANY WORKSPACE</div><h1>{homeCopy.welcomePrefix}{homeCopy.welcomeDefaultName}<span className="home-welcome-mark" aria-hidden="true">✦</span></h1><p>{homeCopy.welcomeSubtitle}</p></section>
           <section className="home-chat-workspace"><div className="chat-composer"><WorkbenchPromptInput value={prompt} onValueChange={setPrompt} onSubmit={() => void runAgent()} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} models={activeModels.map((item) => ({ id: item, label: formatWorkbenchModelLabel(item, { zh: "本地模型", en: "Local model" }, locale), provider: locale === "zh" ? "已配置模型" : "Configured models" }))} model={activeModel} onModelChange={updateModel} placeholder={copy.homePlaceholder} status={activeRunId ? "streaming" : "ready"} onStop={() => void cancelActiveRun()} locale={locale}><span className="sr-only" aria-live="polite">{localizeDesktopStatus(runStatus, locale)}</span>{knowledgeContextEnabled ? <div className="composer-knowledge-control"><button type="button" className="composer-knowledge-button" onClick={() => setKnowledgeContextEnabled(false)}>{locale === "zh" ? "⌑ Obsidian 知识库" : "⌑ Obsidian context"}</button><button type="button" className="composer-knowledge-close" aria-label={locale === "zh" ? "关闭 Obsidian 知识库上下文" : "Disable Obsidian knowledge"} onClick={() => setKnowledgeContextEnabled(false)}>×</button></div> : <button type="button" className="composer-knowledge-button" onClick={() => setKnowledgeContextEnabled(true)}>{locale === "zh" ? "⌑ 添加 Obsidian 知识库" : "⌑ Add Obsidian context"}</button>}<ModelControls locale={locale} model={activeModel} models={activeModels} providerSource={formatWorkbenchModelLabel(activeModel, { zh: "本地模型", en: "Local model" }, locale)} reasoningEffort={reasoningEffort} skillId={skillId} showSkill={false} hideModel onModelChange={updateModel} onReasoningChange={updateReasoning} onSkillChange={setSkillId} /></WorkbenchPromptInput></div></section>
           <HomeEntryGroups onNavigate={workbenchClient.navigation.go} locale={locale} /></main></div></div>
-          <section className="recent-card"><div className="section-title"><span>{selected.path === "/dashboard/assets" ? (locale === "zh" ? "资产库" : "Asset library") : mode === "library" ? (locale === "zh" ? "本地工作流与会话" : "Local workflows and sessions") : (locale === "zh" ? "最近会话" : "Recent sessions")}</span><span className="muted">{selected.path === "/dashboard/assets" ? `${artifactRows.length} ${locale === "zh" ? "个产物" : "artifacts"}` : savedWorkflows.length ? `${savedWorkflows.length} ${locale === "zh" ? "个工作流" : "workflows"}` : ""}</span></div>{selected.path === "/dashboard/assets" ? (artifactRows.length ? <div className="conversation-list">{artifactRows.map((item) => <button key={item.id} className="conversation-row artifact-row" onClick={() => void workbenchClient.files.reveal(item.relative_path, item.mime_type)}><span>{item.relative_path}</span><small>{Math.ceil(item.byte_length / 1024)} KB · {item.mime_type}</small></button>)}</div> : <div className="empty-state"><strong>{locale === "zh" ? "还没有本地产物" : "No local artifacts yet"}</strong><p>{locale === "zh" ? "运行写作、PPT 或媒体任务后，文件会出现在这里。" : "Artifacts appear here after writing, PPT, or media runs."}</p></div>) : mode === "library" && savedWorkflows.length ? <div className="conversation-list">{savedWorkflows.map((item) => <div key={item.id} className="conversation-row"><span>{item.name}</span><small>{formatDateTime(item.updated_at, locale)}</small></div>)}</div> : homeMessages.length ? <div className="message-thread"><WorkbenchMessageSurface messages={homeMessages} locale={locale} pendingMessageId={activeRunId ? homeMessages.at(-1)?.id : undefined} onCopy={(message) => navigator.clipboard?.writeText(desktopUIMessageText(message))} onArtifactOpen={(artifact) => void workbenchClient.files.open(artifact.relativePath, artifact.mimeType)} onArtifactDownload={(artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (artifact) void workbenchClient.files.open(artifact.relative_path, artifact.mime_type); }} resolveMediaSource={resolveDesktopMediaSource} resolveArtifactSource={resolveDesktopArtifactSource} /></div> : conversations.length ? <div className="conversation-list">{conversations.map((item) => <button key={item.id} type="button" className="conversation-row" onClick={() => navigate(conversationRoute(item))}><span>{item.title}</span><small>{formatDateTime(item.updated_at, locale)}</small></button>)}</div> : <div className="empty-state"><div className="empty-icon">⌁</div><strong>{locale === "zh" ? "还没有本地会话" : "No local sessions yet"}</strong><p>{locale === "zh" ? "运行第一个任务后，文本、工具步骤和产物会显示在这里。" : "Text, tool steps, and artifacts will appear here after your first task."}</p></div>}</section>
+          <section className="recent-card"><div className="section-title"><span>{selected.path === "/dashboard/assets" ? (locale === "zh" ? "资产库" : "Asset library") : mode === "library" ? (locale === "zh" ? "本地工作流与会话" : "Local workflows and sessions") : (locale === "zh" ? "最近会话" : "Recent sessions")}</span><span className="muted">{selected.path === "/dashboard/assets" ? `${artifactRows.length} ${locale === "zh" ? "个产物" : "artifacts"}` : savedWorkflows.length ? `${savedWorkflows.length} ${locale === "zh" ? "个工作流" : "workflows"}` : ""}</span></div>{selected.path === "/dashboard/assets" ? (artifactRows.length ? <div className="conversation-list">{artifactRows.map((item) => <button key={item.id} className="conversation-row artifact-row" onClick={() => void workbenchClient.files.reveal(item.relative_path, item.mime_type)}><span>{item.relative_path}</span><small>{Math.ceil(item.byte_length / 1024)} KB · {item.mime_type}</small></button>)}</div> : <div className="empty-state"><strong>{locale === "zh" ? "还没有本地产物" : "No local artifacts yet"}</strong><p>{locale === "zh" ? "运行写作、PPT 或媒体任务后，文件会出现在这里。" : "Artifacts appear here after writing, PPT, or media runs."}</p></div>) : mode === "library" && savedWorkflows.length ? <div className="conversation-list">{savedWorkflows.map((item) => <div key={item.id} className="conversation-row"><span>{item.name}</span><small>{formatDateTime(item.updated_at, locale)}</small></div>)}</div> : homeMessages.length ? <div className="message-thread"><WorkbenchMessageSurface messages={homeMessages} locale={locale} pendingMessageId={activeRunId ? homeMessages.at(-1)?.id : undefined} onCopy={(message) => navigator.clipboard?.writeText(desktopUIMessageText(message))} onArtifactOpen={(artifact) => void workbenchClient.files.open(artifact.relativePath, artifact.mimeType)} onArtifactDownload={(artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (artifact) void workbenchClient.files.open(artifact.relative_path, artifact.mime_type); }} resolveMediaSource={resolveDesktopMediaSource} resolveArtifactSource={resolveDesktopArtifactSource} resolvePreviewSource={resolveDesktopPreviewSource} onPreviewDownload={(preview) => { const artifact = artifactRows.find((item) => item.id === preview.artifactId); if (artifact) return workbenchClient.files.open(artifact.relative_path, artifact.mime_type); if (preview.relativePath) return workbenchClient.files.open(preview.relativePath, preview.mimeType ?? "application/octet-stream"); }} onPreviewExport={(preview) => exportDesktopPreview(preview, (artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (!artifact) throw new Error("preview_export_artifact_missing"); return workbenchClient.files.open(artifact.relative_path, artifact.mime_type); })} onPreviewOpenExternal={openDesktopPreviewInBrowser} /></div> : conversations.length ? <div className="conversation-list">{conversations.map((item) => <button key={item.id} type="button" className="conversation-row" onClick={() => navigate(conversationRoute(item))}><span>{item.title}</span><small>{formatDateTime(item.updated_at, locale)}</small></button>)}</div> : <div className="empty-state"><div className="empty-icon">⌁</div><strong>{locale === "zh" ? "还没有本地会话" : "No local sessions yet"}</strong><p>{locale === "zh" ? "运行第一个任务后，文本、工具步骤和产物会显示在这里。" : "Text, tool steps, and artifacts will appear here after your first task."}</p></div>}</section>
            <section className="stats-card"><div className="section-title"><span>{locale === "zh" ? "本地状态" : "Local status"}</span><span className="muted">{locale === "zh" ? "只统计，不扣费" : "Stats only; no billing"}</span></div><div className="stats-grid"><div><strong>{taskCount}</strong><span>{locale === "zh" ? "本地任务" : "Local tasks"}</span></div><div><strong>{tokenCount}</strong><span>Token</span></div><div><strong>{artifactCount}</strong><span>{locale === "zh" ? "产物" : "Artifacts"}</span></div></div></section>
          </> : null}
 
-        {selected.path !== "/dashboard" && (selected.mode === "chat" || selected.mode === "writer") ? <DesktopConversationWorkspace route={activeChatRoute} prompt={prompt} onPromptChange={setPrompt} runStatus={runStatus} activeRunId={activeRunId} onRun={(value, displayedValue) => void runAgent(value, undefined, undefined, undefined, undefined, displayedValue)} onGenerateImages={(article) => { const articleText = desktopUIMessageText(article).trim(); if (!articleText) return; void runAgent(`${locale === "zh" ? "基于以下文章生成配图，并将图片产物写入当前项目目录。" : "Generate images for the following article and write the image artifacts into the current project directory."}\n\n${articleText}`, "image_generate", undefined, undefined, undefined, locale === "zh" ? "为所选文章生成配图" : "Generate images for the selected article", article.id); }} onCancel={() => void cancelActiveRun()} onNewConversation={startNewConversation} knowledgeEnabled={knowledgeContextEnabled} onKnowledgeToggle={() => setKnowledgeContextEnabled((current) => !current)} activePrompt={activePrompt} activePromptAt={activePromptAt} assistantText={assistantText} onAssistantTextChange={setAssistantText} onSaveDraft={saveWriterDraft} onExportDraft={exportWriterDraft} assistantAt={assistantAt} messages={conversationMessages} conversationId={conversationIdFromPath(activePath)} chatTransport={desktopChatTransport} chatReady={Boolean(conversationIdFromPath(activePath))} providerId={activeProvider.id} activeAssistantParts={activeRunId ? assistantPartsRef.current.get(activeRunId) : undefined} toolEvents={toolEvents} conversations={conversations} onNavigate={workbenchClient.navigation.go} artifacts={artifactRows} onArtifactOpen={(relativePath, mimeType) => void workbenchClient.files.open(relativePath, mimeType)} onArtifactDownload={(artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (artifact) void workbenchClient.files.open(artifact.relative_path, artifact.mime_type); }} model={activeModel} models={activeModels} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} attachments={attachments} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} onModelChange={updateModel} onReasoningChange={updateReasoning} onSkillChange={setSkillId} onReachTop={(viewport) => { const id = conversationIdFromPath(activePath); if (id) loadOlderConversationMessages(id, viewport); }} conversationScrollTop={conversationScrollRestore} onConversationScroll={persistActiveConversationScroll} locale={locale} /> : selected.path === "/dashboard/workflows" ? (workflowBuilderOpen ? <DesktopWorkflowWorkspace workflowId={currentWorkflowIdRef.current ?? workflowCanvasKey ?? "draft:workflow"} workbenchClient={workbenchClient} configuredProviders={configuredProviderEntries(config).map(([, provider]) => provider)} textProvider={providerForCapability(config, "text")} onEnsureWorkflow={ensureCurrentWorkflowId} route={selected} onBack={() => setWorkflowBuilderOpen(false)} prompt={prompt} onPromptChange={setPrompt} runStatus={workflowRunStatus} activeRunId={currentWorkflowRunId} onRun={(definition) => void runAgent(undefined, undefined, undefined, definition)} onCancel={() => void cancelActiveRun()} savedWorkflows={savedWorkflows} workflowAction={workflowAction} onWorkflowAction={setWorkflowAction} definition={workflowDefinition} onDefinitionChange={setWorkflowDefinition} workflowMetadata={workflowMetadata} onWorkflowMetaChange={(patch) => setWorkflowMetadata((current) => ({ ...current, ...patch }))} onSave={(definition) => saveCurrentWorkflow("manual", definition)} onExport={(definition) => exportCurrentWorkflow(definition)} onImport={(file) => importWorkflow(file)} model={activeModel} models={activeModels} modelForNode={(nodeType, providerId) => providerForWorkflowNode(nodeType, providerId).model} modelsForNode={(nodeType, providerId) => modelOptionsForProvider(config, providerForWorkflowNode(nodeType, providerId)) ?? []} providersForNode={(nodeType) => Object.values(config.providers ?? {}).filter((provider) => supportsProviderCapability(provider, capabilityForWorkflowAction(nodeType)) || (nodeType === "agent_execute" && provider.source?.trim().toLowerCase() === "runninghub" && provider.workflows?.some((workflow) => workflow.capability === "audio_transcription")))} agentOptions={workflowAgentOptions} loadVoicesForProvider={loadDesktopVoices} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} providerConfiguredForNode={(nodeType) => isMediaProviderConfigured(providerForCapability(config, capabilityForWorkflowAction(nodeType))) || (nodeType === "agent_execute" && Object.values(config.providers ?? {}).some((provider) => provider.source?.trim().toLowerCase() === "runninghub" && provider.workflows?.some((workflow) => workflow.capability === "audio_transcription")))} onSelectWorkflowFiles={selectWorkflowFiles} nodeExecutionSnapshots={workflowNodeSnapshots} locale={locale} /> : <WorkbenchWorkflowDirectory locale={locale} workflows={workflowDirectoryWorkflows} templates={workflowDirectoryTemplates} recentRuns={workflowDirectoryRuns} actionAvailability={{ duplicate: true, delete: true }} onAction={(action) => void handleWorkflowDirectoryAction(action)} />) : (selected.path === "/dashboard/image-assistant" || selected.path === "/dashboard/video" || selected.path === "/dashboard/capabilities") ? <DesktopMediaWorkspace route={selected} prompt={prompt} onPromptChange={setPrompt} runStatus={runStatus} activeRunId={activeRunId} onRun={(override, featureId, mediaInputs) => void runAgent(override, featureId, mediaInputs)} onCancel={() => void cancelActiveRun()} workflowAction={workflowAction} onWorkflowAction={setWorkflowAction} artifactRows={artifactRows} providerConfigured={isMediaProviderConfigured(activeProvider)} onOpenSettings={() => { setSettingsOpen(true); workbenchClient.navigation.go("/dashboard/settings"); }} onOpenTasks={() => workbenchClient.navigation.go("/dashboard/tasks")} onArtifactReveal={(relativePath, mimeType) => void workbenchClient.files.reveal(relativePath, mimeType)} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} attachments={attachments} model={activeModel} models={activeModels} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={setSkillId} locale={locale} /> : selected.path === "/dashboard/agent-platform" ? <WorkbenchAgentDirectory locale={locale} title={selected.label} description={selected.description} groups={directoryGroups} onAction={(card, action) => { if (action.id.startsWith("menu:")) { toggleMenuAgent(card.id); return; } if (action.id.startsWith("start:")) { void startNewConversationForAgent(card.id === "general" ? null : card.id); return; } workbenchClient.navigation.go(card.id === "general" ? "/dashboard/ai" : `/dashboard/ai?agent=${encodeURIComponent(card.id)}`); }} /> : selected.path === "/dashboard/settings" ? null : selected.mode === "library" ? <DesktopLibraryWorkspace route={selected} artifactRows={artifactRows} savedWorkflows={savedWorkflows} conversations={conversations} runs={runs} taskCount={taskCount} tokenCount={tokenCount} artifactCount={artifactCount} providerCost={providerCost} estimatedCost={estimatedCost} onNavigate={workbenchClient.navigation.go} onRetryRun={(run) => void prepareRunRetry(run)} onInspectRun={(runId) => workbenchClient.runs.inspect(runId).then(toRunDetail)} onArtifactRemove={async (artifactId) => { await workbenchClient.artifacts.remove(artifactId); setArtifactRows((current) => current.filter((item) => item.id !== artifactId)); setArtifactCount((current) => Math.max(0, current - 1)); }} onArtifactReveal={(relativePath, mimeType) => void workbenchClient.files.reveal(relativePath, mimeType)} onKnowledgeOpen={(relativePath, mimeType) => void workbenchClient.knowledge.open(relativePath)} knowledgeQuery={knowledgeQuery} knowledgeResults={knowledgeResults} knowledgeStatus={knowledgeStatus} onKnowledgeQueryChange={setKnowledgeQuery} onKnowledgeSearch={() => void searchKnowledge()} locale={locale} /> : null}
+        {selected.path !== "/dashboard" && (selected.mode === "chat" || selected.mode === "writer") ? <DesktopConversationWorkspace route={activeChatRoute} prompt={prompt} onPromptChange={setPrompt} runStatus={runStatus} activeRunId={activeRunId} onRun={(value, displayedValue) => void runAgent(value, undefined, undefined, undefined, undefined, displayedValue)} onGenerateImages={(article) => { const articleText = desktopUIMessageText(article).trim(); if (!articleText) return; void runAgent(`${locale === "zh" ? "基于以下文章生成配图，并将图片产物写入当前项目目录。" : "Generate images for the following article and write the image artifacts into the current project directory."}\n\n${articleText}`, "image_generate", undefined, undefined, undefined, locale === "zh" ? "为所选文章生成配图" : "Generate images for the selected article", article.id); }} onCancel={() => void cancelActiveRun()} onNewConversation={startNewConversation} knowledgeEnabled={knowledgeContextEnabled} onKnowledgeToggle={() => setKnowledgeContextEnabled((current) => !current)} activePrompt={activePrompt} activePromptAt={activePromptAt} assistantText={assistantText} onAssistantTextChange={setAssistantText} onSaveDraft={saveWriterDraft} onExportDraft={exportWriterDraft} assistantAt={assistantAt} messages={conversationMessages} conversationId={conversationIdFromPath(activePath)} chatTransport={desktopChatTransport} chatReady={Boolean(conversationIdFromPath(activePath))} providerId={activeProvider.id} activeAssistantParts={activeRunId ? assistantPartsRef.current.get(activeRunId) : undefined} toolEvents={toolEvents} conversations={conversations} onNavigate={workbenchClient.navigation.go} artifacts={artifactRows} onArtifactOpen={(relativePath, mimeType) => workbenchClient.files.open(relativePath, mimeType)} onArtifactDownload={(artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (!artifact) throw new Error("preview_export_artifact_missing"); return workbenchClient.files.open(artifact.relative_path, artifact.mime_type); }} model={activeModel} models={activeModels} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} attachments={attachments} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} onModelChange={updateModel} onReasoningChange={updateReasoning} onSkillChange={setSkillId} onReachTop={(viewport) => { const id = conversationIdFromPath(activePath); if (id) loadOlderConversationMessages(id, viewport); }} conversationScrollTop={conversationScrollRestore} onConversationScroll={persistActiveConversationScroll} locale={locale} /> : selected.path === "/dashboard/workflows" ? (workflowBuilderOpen ? <DesktopWorkflowWorkspace workflowId={workflowCanvasKey ?? "draft:workflow"} workbenchClient={workbenchClient} createAgentChatTransport={createDesktopChatTransportWithOverrides} configuredProviders={configuredProviderEntries(config).map(([, provider]) => provider)} goldenTemplates={aiGoldenTemplates} textProvider={providerForCapability(config, "text")} onEnsureWorkflow={ensureCurrentWorkflowId} route={selected} onBack={() => setWorkflowBuilderOpen(false)} prompt={prompt} onPromptChange={setPrompt} runStatus={workflowRunStatus} activeRunId={currentWorkflowRunId} onRun={(definition) => void runAgent(undefined, undefined, undefined, definition)} onRerun={(definition) => void runAgent(undefined, undefined, undefined, definition)} onContinue={() => void continueWorkflowFromCanvas()} onCancel={() => void cancelActiveRun()} savedWorkflows={savedWorkflows} workflowAction={workflowAction} onWorkflowAction={setWorkflowAction} definition={workflowDefinition} onDefinitionChange={setWorkflowDefinition} workflowMetadata={workflowMetadata} onWorkflowMetaChange={(patch) => setWorkflowMetadata((current) => ({ ...current, ...patch }))} onSave={async (definition) => Boolean(await saveCurrentWorkflow("manual", definition))} onExport={(definition) => exportCurrentWorkflow(definition)} onImport={(file) => importWorkflow(file)} model={activeModel} models={activeModels} modelForNode={(nodeType, providerId) => providerForWorkflowNode(nodeType, providerId).model} modelsForNode={(nodeType, providerId) => modelOptionsForProvider(config, providerForWorkflowNode(nodeType, providerId)) ?? []} providersForNode={(nodeType) => Object.values(config.providers ?? {}).filter((provider) => supportsProviderCapability(provider, capabilityForWorkflowAction(nodeType)) || (nodeType === "agent_execute" && provider.source?.trim().toLowerCase() === "runninghub" && provider.workflows?.some((workflow) => workflow.capability === "audio_transcription")))} agentOptions={workflowAgentOptions} loadVoicesForProvider={loadDesktopVoices} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} providerConfiguredForNode={(nodeType) => isMediaProviderConfigured(providerForCapability(config, capabilityForWorkflowAction(nodeType))) || (nodeType === "agent_execute" && Object.values(config.providers ?? {}).some((provider) => provider.source?.trim().toLowerCase() === "runninghub" && provider.workflows?.some((workflow) => workflow.capability === "audio_transcription")))} onSelectWorkflowFiles={selectWorkflowFiles} nodeExecutionSnapshots={workflowNodeSnapshots} locale={locale} /> : <WorkbenchWorkflowDirectory locale={locale} workflows={workflowDirectoryWorkflows} templates={workflowDirectoryTemplates} recentRuns={workflowDirectoryRuns} actionAvailability={{ duplicate: true, delete: true }} onAction={(action) => void handleWorkflowDirectoryAction(action)} />) : (selected.path === "/dashboard/image-assistant" || selected.path === "/dashboard/video" || selected.path === "/dashboard/capabilities") ? <DesktopMediaWorkspace route={selected} prompt={prompt} onPromptChange={setPrompt} runStatus={runStatus} activeRunId={activeRunId} onRun={(override, featureId, mediaInputs) => void runAgent(override, featureId, mediaInputs)} onCancel={() => void cancelActiveRun()} workflowAction={workflowAction} onWorkflowAction={setWorkflowAction} artifactRows={artifactRows} providerConfigured={isMediaProviderConfigured(activeProvider)} onOpenSettings={() => { setSettingsOpen(true); workbenchClient.navigation.go("/dashboard/settings"); }} onOpenTasks={() => workbenchClient.navigation.go("/dashboard/tasks")} onArtifactReveal={(relativePath, mimeType) => void workbenchClient.files.reveal(relativePath, mimeType)} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} attachments={attachments} model={activeModel} models={activeModels} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={setSkillId} locale={locale} /> : selected.path === "/dashboard/agent-platform" ? <WorkbenchAgentDirectory locale={locale} title={selected.label} description={selected.description} groups={directoryGroups} onAction={(card, action) => { if (action.id.startsWith("menu:")) { toggleMenuAgent(card.id); return; } if (action.id.startsWith("start:")) { void startNewConversationForAgent(card.id === "general" ? null : card.id); return; } workbenchClient.navigation.go(card.id === "general" ? "/dashboard/ai" : `/dashboard/ai?agent=${encodeURIComponent(card.id)}`); }} /> : selected.path === "/dashboard/settings" ? null : selected.mode === "library" ? <DesktopLibraryWorkspace route={selected} artifactRows={artifactRows} savedWorkflows={savedWorkflows} conversations={conversations} runs={runs} taskCount={taskCount} tokenCount={tokenCount} artifactCount={artifactCount} providerCost={providerCost} estimatedCost={estimatedCost} onNavigate={workbenchClient.navigation.go} onRetryRun={(run) => void prepareRunRetry(run)} onInspectRun={(runId) => workbenchClient.runs.inspect(runId).then(toRunDetail)} onArtifactRemove={async (artifactId) => { await workbenchClient.artifacts.remove(artifactId); setArtifactRows((current) => current.filter((item) => item.id !== artifactId)); setArtifactCount((current) => Math.max(0, current - 1)); }} onArtifactReveal={(relativePath, mimeType) => void workbenchClient.files.reveal(relativePath, mimeType)} onKnowledgeOpen={(relativePath) => void workbenchClient.knowledge.open(relativePath)} knowledgeQuery={knowledgeQuery} knowledgeResults={knowledgeResults} knowledgeStatus={knowledgeStatus} onKnowledgeQueryChange={setKnowledgeQuery} onKnowledgeSearch={() => void searchKnowledge()} locale={locale} /> : null}
       </section>
       </WorkbenchShell>
       {runtimeReady && questionSessionId ? <NativeQuestions key={questionSessionId} client={workbenchClient.questions} sessionId={questionSessionId} locale={locale} /> : null}

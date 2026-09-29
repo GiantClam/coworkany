@@ -57,9 +57,11 @@ import {
   ToolInput,
   ToolOutput,
 } from "./ai-elements";
-import { createDesktopUIMessage, type DesktopArtifactData, type DesktopMediaData, type DesktopRunStatus, type DesktopUIMessage, type DesktopUIMessagePart } from "@coworkany/workbench-client";
+import { createDesktopUIMessage, type DesktopArtifactData, type DesktopMediaData, type DesktopPreviewData, type DesktopRunStatus, type DesktopUIMessage, type DesktopUIMessagePart } from "@coworkany/workbench-client";
 import { artifactDisplayName } from "./artifact-label";
 import { formatWorkbenchMessageTimestamp, workbenchMessageTimestampLabel } from "./message-time";
+import { WorkbenchPreview, type WorkbenchPreviewContext, type WorkbenchPreviewSource } from "./workbench-preview";
+import { OfficeArtifactPreview } from "./office-artifact-preview";
 
 export type WorkbenchMessageSurfaceProps = {
   readonly messages: readonly DesktopUIMessage[];
@@ -73,14 +75,22 @@ export type WorkbenchMessageSurfaceProps = {
   readonly onCopy?: (message: DesktopUIMessage) => void | Promise<void>;
   readonly onRetry?: (message: DesktopUIMessage) => void | Promise<void>;
   readonly renderAssistantActions?: (message: DesktopUIMessage) => ReactNode;
-  readonly onArtifactOpen?: (artifact: DesktopArtifactData) => void;
-  readonly onArtifactDownload?: (artifactId: string) => void;
+  readonly onArtifactOpen?: (artifact: DesktopArtifactData) => void | Promise<void>;
+  readonly onArtifactDownload?: (artifactId: string) => void | Promise<void>;
   readonly onMediaOpen?: (media: DesktopMediaData) => void;
   /** Resolve a workspace-relative media path into a browser-readable URL. */
   readonly resolveMediaSource?: (media: DesktopMediaData) => Promise<WorkbenchMediaSource | null>;
   /** Resolve a workspace-relative artifact into a preview URL and, when safe, text content. */
   readonly resolveArtifactSource?: (artifact: DesktopArtifactData) => Promise<WorkbenchArtifactSource | null>;
+  /** Validate and resolve a preview descriptor into a browser-readable local source. */
+  readonly resolvePreviewSource?: (preview: DesktopPreviewData, context: WorkbenchPreviewContext) => Promise<WorkbenchPreviewSource | null>;
+  readonly onPreviewRefresh?: (preview: DesktopPreviewData) => void | Promise<void>;
+  readonly onPreviewDownload?: (preview: DesktopPreviewData) => void | Promise<void>;
+  readonly onPreviewExport?: (preview: DesktopPreviewData) => void | Promise<void>;
+  readonly onPreviewOpenExternal?: (preview: DesktopPreviewData) => void | Promise<void>;
   readonly onToolApproval?: (message: DesktopUIMessage, part: Extract<DesktopUIMessagePart, { type: "dynamic-tool" }>, decision: "approve" | "reject") => void | Promise<void>;
+  /** Workflow AI uses a concise disclosure contract; ordinary chats keep full tool details. */
+  readonly workflowAi?: boolean;
   readonly emptyState?: ReactNode;
 };
 
@@ -88,6 +98,7 @@ export type WorkbenchMediaSource = string | { readonly url: string; readonly rev
 export type WorkbenchArtifactSource = {
   readonly url?: string;
   readonly text?: string;
+  readonly data?: ArrayBuffer;
   readonly mimeType?: string;
   readonly revoke?: () => void;
 };
@@ -97,6 +108,7 @@ const HANDLED_DATA_PARTS = new Set([
   "data-writerAsset",
   "data-attachment",
   "data-media",
+  "data-preview",
   "data-report",
   "data-status",
   "data-task",
@@ -313,12 +325,15 @@ function artifactExtension(artifact: DesktopArtifactData) {
   return match?.[1]?.toLowerCase() ?? "";
 }
 
-function artifactPreviewKind(artifact: DesktopArtifactData): "image" | "video" | "audio" | "pdf" | "markdown" | "text" | "file" {
+function artifactPreviewKind(artifact: DesktopArtifactData): "image" | "video" | "audio" | "pdf" | "presentation" | "document" | "spreadsheet" | "markdown" | "text" | "file" {
   const mimeType = artifact.mimeType.toLowerCase().split(";", 1)[0] ?? "";
   const extension = artifactExtension(artifact);
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("video/")) return "video";
   if (mimeType.startsWith("audio/")) return "audio";
+  if (extension === "pptx" || mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation") return "presentation";
+  if (extension === "docx" || mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "document";
+  if (extension === "xlsx" || mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") return "spreadsheet";
   if (mimeType === "application/pdf" || extension === "pdf") return "pdf";
   if (mimeType === "text/markdown" || mimeType === "text/x-markdown" || ["md", "markdown", "mdown"].includes(extension)) return "markdown";
   if (mimeType.startsWith("text/") || ["json", "csv", "tsv", "xml", "yaml", "yml", "js", "jsx", "ts", "tsx", "css"].includes(extension)) return "text";
@@ -326,8 +341,8 @@ function artifactPreviewKind(artifact: DesktopArtifactData): "image" | "video" |
 }
 
 function artifactKindLabel(kind: ReturnType<typeof artifactPreviewKind>, locale: "zh" | "en") {
-  if (locale === "en") return kind === "markdown" ? "Markdown" : kind === "text" ? "Text" : kind === "pdf" ? "PDF" : kind === "image" ? "Image" : kind === "video" ? "Video" : kind === "audio" ? "Audio" : "File";
-  return kind === "markdown" ? "Markdown 文档" : kind === "text" ? "文本文件" : kind === "pdf" ? "PDF 文档" : kind === "image" ? "图片" : kind === "video" ? "视频" : kind === "audio" ? "音频" : "文件";
+  if (locale === "en") return kind === "markdown" ? "Markdown" : kind === "text" ? "Text" : kind === "pdf" ? "PDF" : kind === "presentation" ? "PowerPoint" : kind === "document" ? "Word document" : kind === "spreadsheet" ? "Excel workbook" : kind === "image" ? "Image" : kind === "video" ? "Video" : kind === "audio" ? "Audio" : "File";
+  return kind === "markdown" ? "Markdown 文档" : kind === "text" ? "文本文件" : kind === "pdf" ? "PDF 文档" : kind === "presentation" ? "演示文稿" : kind === "document" ? "Word 文档" : kind === "spreadsheet" ? "电子表格" : kind === "image" ? "图片" : kind === "video" ? "视频" : kind === "audio" ? "音频" : "文件";
 }
 
 function artifactMediaData(artifact: DesktopArtifactData, kind: "image" | "video" | "audio"): DesktopMediaData {
@@ -368,7 +383,7 @@ function ResolvedArtifactPreview({ artifact, locale, onOpen, onDownload, resolve
     let revoke: (() => void) | undefined;
     setPreviewError(false);
     setSource(null);
-    if (!resolveArtifactSource || !artifact.relativePath || kind === "image" || kind === "video" || kind === "audio") return () => undefined;
+    if (!resolveArtifactSource || !artifact.relativePath || kind === "image" || kind === "video" || kind === "audio" || kind === "file") return () => undefined;
     void resolveArtifactSource(artifact)
       .then((resolved) => {
         if (!active) return;
@@ -393,6 +408,9 @@ function ResolvedArtifactPreview({ artifact, locale, onOpen, onDownload, resolve
   if (source?.url && kind === "pdf") {
     return <iframe className="wb-ai-artifact-pdf-preview" data-artifact-preview-kind="pdf" title={artifactDisplayName(artifact.title, artifact.relativePath)} src={source.url} />;
   }
+  if (source?.data && (kind === "presentation" || kind === "document" || kind === "spreadsheet")) {
+    return <OfficeArtifactPreview format={kind} data={source.data} title={artifactDisplayName(artifact.title, artifact.relativePath)} locale={locale} />;
+  }
   return <ArtifactFilePreview artifact={artifact} kind={kind} locale={locale} loading={Boolean(resolveArtifactSource && artifact.relativePath) && !source && !previewError} error={previewError} />;
 }
 
@@ -400,7 +418,45 @@ function renderArtifactMedia(artifact: DesktopArtifactData, locale: "zh" | "en",
   return <ResolvedArtifactPreview artifact={artifact} locale={locale} onOpen={onOpen} onDownload={onDownload} resolveMediaSource={resolveMediaSource} resolveArtifactSource={resolveArtifactSource} />;
 }
 
-function ExecutionParts({ message, locale, streaming, waiting = false, onToolApproval }: { message: DesktopUIMessage; locale: "zh" | "en"; streaming: boolean; waiting?: boolean; onToolApproval?: WorkbenchMessageSurfaceProps["onToolApproval"] }) {
+function workflowAiToolLabel(toolName: string, locale: "zh" | "en") {
+  if (toolName === "undo" || toolName === "redo") return locale === "zh" ? "工作流变更" : "Workflow change";
+  return toolName.replace(/[_-]+/g, " ");
+}
+
+function workflowAiToolResult(output: unknown, locale: "zh" | "en") {
+  const fallback = locale === "zh" ? "操作已完成" : "Operation completed";
+  if (typeof output === "string") {
+    const trimmed = output.trim();
+    if (!trimmed || trimmed.startsWith("{") || trimmed.startsWith("[")) return fallback;
+    return trimmed.length > 180 ? `${trimmed.slice(0, 177)}…` : trimmed;
+  }
+  if (!output || typeof output !== "object") return fallback;
+  const record = output as Record<string, unknown>;
+  for (const key of ["summary", "message", "description", "status", "result"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim() && !/["']?(?:undo|redo)["']?/iu.test(value)) {
+      return value.length > 180 ? `${value.slice(0, 177)}…` : value;
+    }
+  }
+  return fallback;
+}
+
+function WorkflowAiToolDisclosure({ message, part, locale, onToolApproval }: { message: DesktopUIMessage; part: Extract<DesktopUIMessagePart, { type: "dynamic-tool" }>; locale: "zh" | "en"; onToolApproval?: WorkbenchMessageSurfaceProps["onToolApproval"] }) {
+  const toolLabel = workflowAiToolLabel(part.toolName, locale);
+  const result = part.state === "output-available" ? workflowAiToolResult(part.output, locale) : part.state === "output-error" ? (part.errorText ?? (locale === "zh" ? "操作失败" : "Operation failed")) : undefined;
+  return <ToolContent>
+    <div className="wb-ai-workflow-tool-summary" data-workflow-ai-tool-summary="true">
+      <strong>{part.state === "approval-requested" ? (locale === "zh" ? `请求批准：${toolLabel}` : `Approval requested: ${toolLabel}`) : toolLabel}</strong>
+      {result ? <span data-workflow-ai-tool-result="true">{result}</span> : null}
+    </div>
+    {part.state === "approval-requested" ? <Confirmation state="approval-requested" approval={{ id: part.approval?.id ?? part.toolCallId }}>
+      <ConfirmationTitle>{locale === "zh" ? (part.approval?.id ? `需要审批：${part.approval.id}` : "此操作需要审批") : (part.approval?.id ? `Approval required: ${part.approval.id}` : "This operation needs approval")}</ConfirmationTitle>
+      <ConfirmationRequest><ConfirmationActions><ConfirmationAction onClick={() => void (onToolApproval ? onToolApproval(message, part, "reject") : emitToolApproval(message, part, "reject"))}>{locale === "zh" ? "拒绝" : "Reject"}</ConfirmationAction><ConfirmationAction onClick={() => void (onToolApproval ? onToolApproval(message, part, "approve") : emitToolApproval(message, part, "approve"))}>{locale === "zh" ? "批准" : "Approve"}</ConfirmationAction></ConfirmationActions></ConfirmationRequest>
+    </Confirmation> : null}
+  </ToolContent>;
+}
+
+function ExecutionParts({ message, locale, streaming, waiting = false, onToolApproval, workflowAi = false }: { message: DesktopUIMessage; locale: "zh" | "en"; streaming: boolean; waiting?: boolean; onToolApproval?: WorkbenchMessageSurfaceProps["onToolApproval"]; workflowAi?: boolean }) {
     const process = processParts(message);
     if (!process.length && !waiting) return null;
     if (!process.length && waiting) {
@@ -442,16 +498,16 @@ function ExecutionParts({ message, locale, streaming, waiting = false, onToolApp
       }
       if (part.type === "dynamic-tool") {
         const toolStatus = part.state === "approval-requested" ? "waiting" : part.state === "output-available" ? "completed" : part.state === "output-error" ? "failed" : part.state === "output-denied" ? "denied" : "running";
-        return <Tool key={`tool:${part.toolCallId}`} defaultOpen={part.state === "approval-requested"} status={toolStatus}>
-          <ToolHeader type="dynamic-tool" toolName={part.toolName} toolCallId={part.toolCallId} state={part.state} locale={locale} />
-          <ToolContent>
+        return <Tool key={`tool:${part.toolCallId}`} defaultOpen={workflowAi || part.state === "approval-requested"} status={toolStatus}>
+          <ToolHeader type="dynamic-tool" toolName={workflowAi && (part.toolName === "undo" || part.toolName === "redo") ? "workflow-change" : part.toolName} toolCallId={part.toolCallId} state={part.state} locale={locale} />
+          {workflowAi ? <WorkflowAiToolDisclosure message={message} part={part} locale={locale} onToolApproval={onToolApproval} /> : <ToolContent>
             <ToolInput input={part.input} locale={locale} />
             <ToolOutput output={part.state === "output-available" ? part.output : undefined} errorText={part.state === "output-error" ? part.errorText : undefined} locale={locale} />
             {part.state === "approval-requested" ? <Confirmation state="approval-requested" approval={{ id: part.approval?.id ?? part.toolCallId }}>
               <ConfirmationTitle>{locale === "zh" ? (part.approval?.id ? `需要审批：${part.approval.id}` : "此工具调用需要审批") : (part.approval?.id ? `Approval required: ${part.approval.id}` : "This tool call requires approval")}</ConfirmationTitle>
               <ConfirmationRequest><ConfirmationActions><ConfirmationAction onClick={() => void (onToolApproval ? onToolApproval(message, part, "reject") : emitToolApproval(message, part, "reject"))}>{locale === "zh" ? "拒绝" : "Reject"}</ConfirmationAction><ConfirmationAction onClick={() => void (onToolApproval ? onToolApproval(message, part, "approve") : emitToolApproval(message, part, "approve"))}>{locale === "zh" ? "批准" : "Approve"}</ConfirmationAction></ConfirmationActions></ConfirmationRequest>
             </Confirmation> : null}
-          </ToolContent>
+          </ToolContent>}
         </Tool>;
       }
       return null;
@@ -478,10 +534,11 @@ function WorkflowOutput({ part, locale, onArtifactDownload, onMediaOpen, resolve
   </section>;
 }
 
-function MessageParts({ message, locale, streaming, onArtifactOpen, onArtifactDownload, onMediaOpen, resolveMediaSource, resolveArtifactSource, onToolApproval }: Pick<WorkbenchMessageSurfaceProps, "onArtifactOpen" | "onArtifactDownload" | "onMediaOpen" | "resolveMediaSource" | "resolveArtifactSource" | "onToolApproval"> & { message: DesktopUIMessage; locale: "zh" | "en"; streaming: boolean }) {
+function MessageParts({ message, locale, streaming, workflowAi = false, onArtifactOpen, onArtifactDownload, onMediaOpen, resolveMediaSource, resolveArtifactSource, resolvePreviewSource, onPreviewRefresh, onPreviewDownload, onPreviewExport, onPreviewOpenExternal, onToolApproval }: Pick<WorkbenchMessageSurfaceProps, "onArtifactOpen" | "onArtifactDownload" | "onMediaOpen" | "resolveMediaSource" | "resolveArtifactSource" | "resolvePreviewSource" | "onPreviewRefresh" | "onPreviewDownload" | "onPreviewExport" | "onPreviewOpenExternal" | "onToolApproval" | "workflowAi"> & { message: DesktopUIMessage; locale: "zh" | "en"; streaming: boolean }) {
   const sources = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "source-url" | "source-document" }> => part.type === "source-url" || part.type === "source-document");
   const artifacts = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-artifact" }> => part.type === "data-artifact");
   const media = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-media" }> => part.type === "data-media");
+  const previews = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-preview" }> => part.type === "data-preview");
   const files = message.parts.flatMap((part, index) => {
     if (part.type === "file") return [{ id: `file:${index}`, name: part.filename ?? "Attachment", mediaType: part.mediaType, uri: part.url, status: "ready" as const }];
     if (part.type === "data-attachment") return [{ id: part.id ?? `attachment:${index}`, name: part.data.name, mediaType: part.data.mediaType, uri: part.data.uri, status: part.data.status }];
@@ -499,7 +556,7 @@ function MessageParts({ message, locale, streaming, onArtifactOpen, onArtifactDo
       <SourcesTrigger count={sources.length}>{locale === "zh" ? `已使用 ${sources.length} 个来源` : `Used ${sources.length} sources`}</SourcesTrigger>
       <SourcesContent>{sources.map((part) => { const title = part.type === "source-url" ? part.title ?? part.url : part.title; const href = part.type === "source-url" ? part.url : undefined; return <Source key={part.sourceId} title={title} href={href}><InlineCitation title={title} href={href}>{title}</InlineCitation></Source>; })}</SourcesContent>
     </Sources> : null}
-    {message.role === "assistant" ? <ExecutionParts message={message} locale={locale} streaming={streaming} waiting={waitingForAssistant} onToolApproval={onToolApproval} /> : null}
+    {message.role === "assistant" ? <ExecutionParts message={message} locale={locale} streaming={streaming} waiting={waitingForAssistant} onToolApproval={onToolApproval} workflowAi={workflowAi} /> : null}
     {files.length ? <WorkbenchAttachments attachments={files} variant="grid" locale={locale} /> : null}
     {media.length ? <div className="wb-ai-media-results" data-slot="media-results">{media.map((part) => <div key={part.id}>{renderMedia(part.data, locale, onMediaOpen, onArtifactDownload, resolveMediaSource)}</div>)}</div> : null}
     <div className="wb-ai-message-output" data-slot="message-output">
@@ -509,6 +566,15 @@ function MessageParts({ message, locale, streaming, onArtifactOpen, onArtifactDo
       {!text.length && message.role === "assistant" && streaming && !waitingForAssistant ? <MessageResponse><Shimmer>{locale === "zh" ? "正在生成…" : "Generating…"}</Shimmer></MessageResponse> : null}
       {reports.length ? <div className="wb-ai-report-results" data-slot="report-results">{reports.map((part) => <section key={part.id} className="wb-ai-report"><strong>{part.data.title}</strong>{part.data.body ? <><MessageResponse content={part.data.body} /><CodeBlock code={part.data.body} language="markdown" /></> : null}</section>)}</div> : null}
       {workflows.map((part) => <WorkflowOutput key={part.id} part={part} locale={locale} onArtifactDownload={onArtifactDownload} onMediaOpen={onMediaOpen} resolveMediaSource={resolveMediaSource} />)}
+      {previews.length ? <div className="wb-ai-preview-results" data-slot="preview-results">{previews.map((part) => {
+        const previewArtifactCandidates = part.data.engine === "ppt-master" && !part.data.artifactId
+          ? artifacts.filter((artifact) => artifact.data.mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation" || artifact.data.relativePath.toLowerCase().endsWith(".pptx"))
+          : [];
+        const preview = previewArtifactCandidates.length === 1
+          ? { ...part.data, artifactId: previewArtifactCandidates[0]?.data.id, relativePath: previewArtifactCandidates[0]?.data.relativePath, mimeType: previewArtifactCandidates[0]?.data.mimeType }
+          : part.data;
+        return <WorkbenchPreview key={part.id} preview={preview} locale={locale} context={{ messageId: message.id, conversationId: message.metadata?.conversationId, runId: message.metadata?.runId }} resolveSource={resolvePreviewSource} onRefresh={onPreviewRefresh} onDownload={onPreviewDownload} onExport={onPreviewExport} onOpenExternal={onPreviewOpenExternal} />;
+      })}</div> : null}
       {artifacts.length ? <div className="wb-ai-artifact-results" data-slot="artifact-results">{artifacts.map((part) => { const displayName = artifactDisplayName(part.data.title, part.data.relativePath); return <div key={part.id} className="wb-ai-artifact-item"><Artifact className="wb-ai-artifact-card"><ArtifactHeader><div className="ai-elements-artifact-heading"><ArtifactTitle>{displayName}</ArtifactTitle><ArtifactDescription>{part.data.mimeType}</ArtifactDescription></div><ArtifactActions><ArtifactAction label={locale === "zh" ? "下载产物" : "Download artifact"} tooltip={locale === "zh" ? "下载" : "Download"} icon={Download} onClick={() => onArtifactDownload?.(part.data.id)} /></ArtifactActions></ArtifactHeader><ArtifactContent onClick={() => onArtifactOpen?.(part.data)}>{renderArtifactMedia(part.data, locale, onArtifactOpen, onArtifactDownload, resolveMediaSource, resolveArtifactSource)}</ArtifactContent></Artifact></div>; })}</div> : null}
       {usages.length ? <div className="wb-ai-usage-results" data-slot="usage-results">{usages.map((part) => { const usedTokens = (part.data.inputTokens ?? 0) + (part.data.outputTokens ?? 0); return <Context key={part.id} usedTokens={usedTokens} maxTokens={Math.max(usedTokens, 1)} usage={part.data} modelId={message.metadata?.modelId}><ContextTrigger aria-label="Model context usage" /><ContextContent><ContextContentHeader /><ContextContentBody><ContextInputUsage /><ContextOutputUsage /><ContextReasoningUsage /><ContextCacheUsage /></ContextContentBody></ContextContent></Context>; })}</div> : null}
       {warnings.length ? <div className="wb-ai-warning-results" data-slot="warning-results" role="status">{warnings.map((part) => <div key={part.id}><strong>{part.data.code}</strong><span>{part.data.message}</span></div>)}</div> : null}
@@ -517,7 +583,7 @@ function MessageParts({ message, locale, streaming, onArtifactOpen, onArtifactDo
   </>;
 }
 
-export function WorkbenchMessageSurface({ messages, locale = "zh", pendingMessageId, className = "", onCopy, onRetry, renderAssistantActions, onArtifactOpen, onArtifactDownload, onMediaOpen, resolveMediaSource, resolveArtifactSource, onToolApproval, emptyState, onReachTop, onViewportScroll, scrollStateKey, restoreScrollTop }: WorkbenchMessageSurfaceProps) {
+export function WorkbenchMessageSurface({ messages, locale = "zh", pendingMessageId, className = "", onCopy, onRetry, renderAssistantActions, onArtifactOpen, onArtifactDownload, onMediaOpen, resolveMediaSource, resolveArtifactSource, resolvePreviewSource, onPreviewRefresh, onPreviewDownload, onPreviewExport, onPreviewOpenExternal, onToolApproval, workflowAi = false, emptyState, onReachTop, onViewportScroll, scrollStateKey, restoreScrollTop }: WorkbenchMessageSurfaceProps) {
   const orderedBaseMessages = orderMessagesForTimeline(messages);
   const latestMessage = orderedBaseMessages.at(-1);
   const pendingMessagePresent = Boolean(pendingMessageId && messages.some((message) => message.id === pendingMessageId));
@@ -558,7 +624,7 @@ export function WorkbenchMessageSurface({ messages, locale = "zh", pendingMessag
       <Message from={message.role === "user" ? "user" : "assistant"} data-model-id={message.metadata?.modelId} data-message-status={currentStatus} data-streaming={streaming ? "true" : "false"}>
         <MessageContent className={streaming ? "wb-ai-message-content-streaming" : undefined}>
           <MessageTimestamp message={message} locale={locale} />
-          <MessageParts message={message} locale={locale} streaming={streaming} onArtifactOpen={onArtifactOpen} onArtifactDownload={onArtifactDownload} onMediaOpen={onMediaOpen} resolveMediaSource={resolveMediaSource} resolveArtifactSource={resolveArtifactSource} onToolApproval={onToolApproval} />
+          <MessageParts message={message} locale={locale} streaming={streaming} workflowAi={workflowAi} onArtifactOpen={onArtifactOpen} onArtifactDownload={onArtifactDownload} onMediaOpen={onMediaOpen} resolveMediaSource={resolveMediaSource} resolveArtifactSource={resolveArtifactSource} resolvePreviewSource={resolvePreviewSource} onPreviewRefresh={onPreviewRefresh} onPreviewDownload={onPreviewDownload} onPreviewExport={onPreviewExport} onPreviewOpenExternal={onPreviewOpenExternal} onToolApproval={onToolApproval} />
         </MessageContent>
         {hasActions ? <MessageToolbar>
           <MessageActions>

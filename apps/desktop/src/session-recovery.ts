@@ -7,7 +7,10 @@ const MAX_TURNS = 12;
 const MAX_CONTENT_CHARS = 12_000;
 
 function clean(content: string) {
-  return content.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  return Array.from(content, (character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f ? " " : character;
+  }).join("").replace(/\s+/g, " ").trim();
 }
 
 /** Restores text context only; it must never replay a tool-bearing turn. */

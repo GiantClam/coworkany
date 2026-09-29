@@ -67,6 +67,7 @@ export function applyWorkbenchRunEventToParts(
     case "tool": return mergeWorkbenchMessagePart(parts, { id: `tool:${event.tool}`, type: "tool", tool: event.tool, status: event.phase === "started" ? "running" : event.phase, message: event.message, ...base });
     case "source": return mergeWorkbenchMessagePart(parts, { id: `source:${event.source.id}`, type: "source", title: event.source.title, href: event.source.href, excerpt: event.source.excerpt, ...base });
     case "media": return mergeWorkbenchMessagePart(parts, { id: `media:${event.media.artifactId}`, type: "media", media: event.media, ...base });
+    case "preview": return mergeWorkbenchMessagePart(parts, { id: `preview:${event.preview.previewSessionId ?? event.preview.artifactId ?? event.preview.relativePath ?? event.preview.title}`, type: "preview", preview: event.preview, ...base });
   }
 }
 

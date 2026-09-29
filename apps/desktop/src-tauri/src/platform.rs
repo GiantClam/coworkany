@@ -113,6 +113,27 @@ pub fn open_path_command(path: &Path) -> Command {
     }
 }
 
+pub fn open_url_command(url: &str) -> Command {
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = Command::new("open");
+        command.arg(url);
+        return command;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        return command;
+    }
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("explorer.exe");
+        command.arg(url);
+        command
+    }
+}
+
 pub fn reveal_path_command(path: &Path) -> Command {
     #[cfg(target_os = "macos")]
     {

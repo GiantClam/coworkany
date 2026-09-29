@@ -4,6 +4,7 @@ import test from "node:test";
 import { resolve } from "node:path";
 import { createDesktopChatTransport, createDesktopWorkbenchClient } from "../src/workbench-client";
 import { createDesktopUIMessage, desktopUIMessageText } from "@coworkany/workbench-client";
+import { resolveWorkflowAiTextProvider } from "../src/workflow-ai-controller";
 
 test("desktop WorkbenchClient adapts conversations, workflows and file actions through Tauri", async () => {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
@@ -251,6 +252,34 @@ test("desktop ChatTransport keeps the user prompt intact without sending legacy 
   assert.equal(sentSystemPrompt, undefined);
 });
 
+test("workflow AI transport sends the selected configured text Provider and model", async () => {
+  const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+  const bridge = {
+    async invoke<T>(command: string, args?: Record<string, unknown>) { calls.push({ command, args }); return undefined as T; },
+    async listen() { return () => undefined; },
+  };
+  const fallback = { id: "text-basic", source: "openai-compatible", baseUrl: "https://basic.test/v1", apiKey: "secret-basic", model: "basic", models: ["basic"], capabilities: ["text"] as const };
+  const providers = [fallback, { id: "text-paid", source: "openai-compatible", baseUrl: "https://paid.test/v1", apiKey: "secret-paid", model: "premium", models: ["premium"], capabilities: ["text"] as const }];
+  const workbenchClient = { runs: { subscribe: () => () => undefined } } as never;
+  const transport = createDesktopChatTransport(bridge, workbenchClient, {
+    resolveSessionId: async (chatId) => chatId,
+    resolveProvider: (message) => resolveWorkflowAiTextProvider(providers, message.metadata?.providerId, message.metadata?.modelId, fallback),
+    resolveSkillId: () => "workflow-authoring",
+    resolveAgentId: () => "workflow-ai",
+    resolveConversationAgentId: () => "workflow-ai",
+    resolveAllowArtifacts: () => false,
+  });
+  const message = createDesktopUIMessage({ id: "workflow-ai-user-1", role: "user", conversationId: "workflow-ai:w1", content: "Plan this workflow", providerId: "text-paid", modelId: "premium" });
+  await transport.sendMessages({ trigger: "submit-message", chatId: "workflow-ai:w1", messageId: undefined, messages: [message], abortSignal: undefined });
+  const sent = calls.find((call) => call.command === "host_send")?.args?.message as { type?: string; payload?: { provider?: { id?: string; apiKey?: string }; model?: string; skillId?: string; agentId?: string } } | undefined;
+  assert.equal(sent?.type, "session.prompt");
+  assert.equal(sent?.payload?.provider?.id, "text-paid");
+  assert.equal(sent?.payload?.provider?.apiKey, "secret-paid");
+  assert.equal(sent?.payload?.model, "premium");
+  assert.equal(sent?.payload?.skillId, "workflow-authoring");
+  assert.equal(sent?.payload?.agentId, "workflow-ai");
+});
+
 test("desktop WorkbenchClient streams text, tool, usage, cancellation and terminal events", async () => {
   let listener: ((payload: { raw: string }) => void) | undefined;
   const bridge = {
@@ -274,17 +303,19 @@ test("desktop WorkbenchClient streams text, tool, usage, cancellation and termin
   emit({ event: "reasoning_delta", delta: "planning", sequence: 2, createdAt: "2026-08-12T00:00:02Z" });
   emit({ event: "tool_event", tool: "writer", phase: "completed", message: "finished", sequence: 3, createdAt: "2026-08-12T00:00:03Z" });
   emit({ event: "artifact", artifact: { id: "a1", relativePath: "artifacts/report.md", title: "报告", mimeType: "text/markdown", byteLength: 12, sha256: "hash-a" }, sequence: 4, createdAt: "2026-08-12T00:00:04Z" });
-  emit({ event: "usage", provider: "fixture", model: "fixture/model", inputTokens: 3, outputTokens: 5, costUsd: 0.02, sequence: 5, createdAt: "2026-08-12T00:00:05Z" });
-  emit({ event: "runtime_error", code: "workflow_cancelled", sequence: 6, createdAt: "2026-08-12T00:00:06Z" });
-  emit({ event: "done", sequence: 7, createdAt: "2026-08-12T00:00:07Z" });
+  emit({ event: "preview", preview: { kind: "ppt", title: "Deck preview", url: "http://127.0.0.1:5200/", previewSessionId: "dashi-ppt:1", engine: "dashi-ppt", status: "ready" }, sequence: 5, createdAt: "2026-08-12T00:00:05Z" });
+  emit({ event: "usage", provider: "fixture", model: "fixture/model", inputTokens: 3, outputTokens: 5, costUsd: 0.02, sequence: 6, createdAt: "2026-08-12T00:00:06Z" });
+  emit({ event: "runtime_error", code: "workflow_cancelled", sequence: 7, createdAt: "2026-08-12T00:00:07Z" });
+  emit({ event: "done", sequence: 8, createdAt: "2026-08-12T00:00:08Z" });
   assert.deepEqual(events, [
     { type: "text", delta: "hello", sequence: 1, createdAt: "2026-08-12T00:00:01Z" },
     { type: "reasoning", delta: "planning", sequence: 2, createdAt: "2026-08-12T00:00:02Z" },
     { type: "tool", tool: "writer", phase: "completed", message: "finished", sequence: 3, createdAt: "2026-08-12T00:00:03Z" },
     { type: "artifact", artifact: { id: "a1", relativePath: "artifacts/report.md", title: "报告", mimeType: "text/markdown", byteLength: 12, sha256: "hash-a" }, sequence: 4, createdAt: "2026-08-12T00:00:04Z" },
-    { type: "usage", usage: { runId: "run-stream", provider: "fixture", model: "fixture/model", inputTokens: 3, outputTokens: 5, providerCost: 0.02 }, sequence: 5, createdAt: "2026-08-12T00:00:05Z" },
-    { type: "status", status: "cancelled", sequence: 6, createdAt: "2026-08-12T00:00:06Z" },
-    { type: "status", status: "succeeded", sequence: 7, createdAt: "2026-08-12T00:00:07Z" },
+    { type: "preview", preview: { kind: "ppt", title: "Deck preview", url: "http://127.0.0.1:5200/", previewSessionId: "dashi-ppt:1", engine: "dashi-ppt", status: "ready" }, sequence: 5, createdAt: "2026-08-12T00:00:05Z" },
+    { type: "usage", usage: { runId: "run-stream", provider: "fixture", model: "fixture/model", inputTokens: 3, outputTokens: 5, providerCost: 0.02 }, sequence: 6, createdAt: "2026-08-12T00:00:06Z" },
+    { type: "status", status: "cancelled", sequence: 7, createdAt: "2026-08-12T00:00:07Z" },
+    { type: "status", status: "succeeded", sequence: 8, createdAt: "2026-08-12T00:00:08Z" },
   ]);
   dispose();
   assert.equal(listener, undefined);

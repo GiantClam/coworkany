@@ -6,6 +6,7 @@ import {
   createOpenCodeServeEventState,
   createOpenCodeServePromptPayload,
   createOpenCodeServeSessionPayload,
+  extractOpenCodePreviewDescriptor,
   normalizeOpenCodeServeEvent,
   openCodeServePermissionPath,
   openCodeServeSessionPath,
@@ -221,6 +222,94 @@ test("normalizes tools, usage, and session errors from serve", () => {
   assert.deepEqual(tool.events, [{ event: "tool_event", tool: "shell", toolCallId: "tool-1", phase: "completed", message: "done", runId: "run-serve" }]);
   assert.deepEqual(usage.events, [{ event: "usage", inputTokens: 3, outputTokens: 5, costUsd: 0.01, runId: "run-serve" }]);
   assert.deepEqual(failure.terminalError, { code: "opencode_error", message: "broken", retryable: true });
+});
+
+test("extracts completed PPT preview servers from loopback tool output", () => {
+  assert.deepEqual(extractOpenCodePreviewDescriptor({
+    id: "dashi-preview-1",
+    type: "tool",
+    tool: "shell",
+    state: {
+      status: "completed",
+      input: { command: "npm run preview:start -- output 5200" },
+      output: "HTTP export URL: http://127.0.0.1:5200/\nPID: 1234",
+    },
+  }), {
+    kind: "ppt",
+    title: "Dashi PPT preview",
+    url: "http://127.0.0.1:5200/",
+    previewSessionId: "dashi-ppt:dashi-preview-1",
+    engine: "dashi-ppt",
+    interactive: true,
+    status: "ready",
+  });
+
+  const normalized = normalizeOpenCodeServeEvent("run-ppt", {
+    payload: {
+      type: "message.part.updated",
+      properties: {
+        sessionID: "session-ppt",
+        part: {
+          id: "ppt-preview-1",
+          type: "tool",
+          tool: "shell",
+          state: {
+            status: "completed",
+            input: { command: "python3 skills/ppt-master/svg_editor/server.py projects/deck --live --daemon --no-browser" },
+            output: "Preview ready at http://localhost:6060/",
+          },
+        },
+      },
+    },
+  }, createOpenCodeServeEventState());
+  assert.deepEqual(normalized.events.map((event) => event.event), ["tool_event", "preview"]);
+  assert.deepEqual(normalized.events[1], {
+    event: "preview",
+    preview: {
+      kind: "ppt",
+      title: "PPT Master preview",
+      url: "http://localhost:6060/",
+      previewSessionId: "ppt-master:ppt-preview-1",
+      engine: "ppt-master",
+      interactive: true,
+      status: "ready",
+    },
+    runId: "run-ppt",
+  });
+});
+
+test("rejects incomplete, remote, and file PPT preview sources", () => {
+  const part = (status: string, output: string) => ({
+    id: "preview-unsafe",
+    type: "tool",
+    tool: "shell",
+    state: { status, input: { command: "npm run preview:start" }, output },
+  });
+  assert.equal(extractOpenCodePreviewDescriptor(part("running", "http://127.0.0.1:5200/")), undefined);
+  assert.equal(extractOpenCodePreviewDescriptor(part("completed", "https://example.com/deck")), undefined);
+  assert.equal(extractOpenCodePreviewDescriptor(part("completed", "file:///tmp/deck/index.html")), undefined);
+  assert.equal(extractOpenCodePreviewDescriptor(part("completed", "http://127.0.0.1/deck")), undefined);
+});
+
+test("extracts a generic local website preview for AI and Agent conversations", () => {
+  assert.deepEqual(extractOpenCodePreviewDescriptor({
+    id: "web-preview-1",
+    type: "tool",
+    tool: "bash",
+    state: {
+      status: "completed",
+      input: { command: "pnpm run dev -- --port 4173" },
+      output: "Local: http://localhost:4173/",
+    },
+  }), {
+    kind: "web",
+    title: "Website preview",
+    url: "http://localhost:4173/",
+    previewSessionId: "generic-web:web-preview-1",
+    engine: "generic-web",
+    interactive: true,
+    status: "ready",
+  });
 });
 
 test("builds serve paths and strict payloads", () => {

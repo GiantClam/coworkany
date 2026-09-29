@@ -19,7 +19,7 @@ async function loadLance() {
     const dynamicImport = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
     return await dynamicImport(packageName);
   } catch (error) {
-    throw new Error(`lancedb_runtime_unavailable:${error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180)}`);
+    throw new Error(`lancedb_runtime_unavailable:${error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180)}`, { cause: error });
   }
 }
 

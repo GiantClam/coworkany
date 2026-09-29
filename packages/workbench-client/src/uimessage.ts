@@ -1,5 +1,5 @@
 import type { ChatTransport, UIMessage, UIMessageChunk, UIMessagePart } from "ai";
-import type { WorkbenchArtifact, WorkbenchMessage, WorkbenchMessagePart, WorkbenchRunEvent, WorkbenchUsage } from "./index";
+import type { WorkbenchArtifact, WorkbenchMessage, WorkbenchMessagePart, WorkbenchPreviewData, WorkbenchRunEvent, WorkbenchUsage } from "./index";
 
 export type DesktopRunStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled";
 
@@ -43,6 +43,7 @@ export type DesktopMediaData = {
 };
 
 export type DesktopArtifactData = WorkbenchArtifact;
+export type DesktopPreviewData = WorkbenchPreviewData;
 
 /** Associates generated media with the Writer article it belongs to. */
 export type DesktopWriterAssetData = {
@@ -55,6 +56,7 @@ export type DesktopDataParts = {
   workflow: DesktopWorkflowData;
   media: DesktopMediaData;
   artifact: DesktopArtifactData;
+  preview: DesktopPreviewData;
   writerAsset: DesktopWriterAssetData;
   status: { readonly status: DesktopRunStatus; readonly message?: string };
   attachment: { readonly attachmentId: string; readonly name: string; readonly mediaType: string; readonly uri?: string; readonly status: "queued" | "uploading" | "ready" | "failed" };
@@ -63,15 +65,13 @@ export type DesktopDataParts = {
   report: { readonly title: string; readonly body?: string; readonly artifactId?: string };
 };
 
-export type DesktopTools = {};
+export type DesktopTools = Record<string, never>;
 export type DesktopUIMessage = UIMessage<DesktopMessageMetadata, DesktopDataParts, DesktopTools>;
 export type DesktopUIMessagePart = UIMessagePart<DesktopDataParts, DesktopTools>;
 export type DesktopUIMessageChunk = UIMessageChunk<DesktopMessageMetadata, DesktopDataParts>;
 
 const PART_ID_KEY = "partId";
 const SEQUENCE_KEY = "sequence";
-const TERMINAL_STATUS = new Set<DesktopRunStatus>(["completed", "failed", "cancelled"]);
-
 function now() {
   return new Date().toISOString();
 }
@@ -130,8 +130,14 @@ function eventPart(event: WorkbenchRunEvent): DesktopUIMessagePart | undefined {
         : { type: "source-document", sourceId: event.source.id, mediaType: "text/plain", title: event.source.title };
     case "media":
       return dataPart("media", `media:${event.media.artifactId}`, event.media);
+    case "preview":
+      return dataPart("preview", previewPartId(event.preview), event.preview);
   }
   void createdAt;
+}
+
+function previewPartId(preview: WorkbenchPreviewData) {
+  return `preview:${preview.previewSessionId ?? preview.artifactId ?? preview.relativePath ?? preview.title}`;
 }
 
 function partIdentity(part: DesktopUIMessagePart): string | undefined {
@@ -262,6 +268,7 @@ function workbenchPartToUIMessagePart(part: WorkbenchMessagePart): DesktopUIMess
   if (part.type === "status") return dataPart("status", part.id, { status: statusFromWorkbench(part.status), message: part.message });
   if (part.type === "usage") return dataPart("usage", part.id, part.usage);
   if (part.type === "artifact") return dataPart("artifact", part.id, part.artifact);
+  if (part.type === "preview") return dataPart("preview", part.id, part.preview);
   if (part.type === "source") return part.href ? { type: "source-url", sourceId: part.id, url: part.href, title: part.title } : { type: "source-document", sourceId: part.id, mediaType: "text/plain", title: part.title };
   if (part.type === "report") return dataPart("report", part.id, { title: part.title, body: part.body, artifactId: part.artifact?.id });
   return undefined;
@@ -327,7 +334,8 @@ function normalizeDesktopUIMessagePart(part: unknown): unknown {
   const value = part as { type?: unknown; text?: unknown; thinking?: unknown; state?: unknown };
   if (value.type !== "thinking" && !(value.type === "reasoning" && typeof value.text !== "string" && typeof value.thinking === "string")) return part;
   const text = typeof value.text === "string" ? value.text : typeof value.thinking === "string" ? value.thinking : "";
-  const { thinking: _thinking, ...rest } = value;
+  const rest = { ...value };
+  delete rest.thinking;
   return { ...rest, type: "reasoning", text, state: value.state === "streaming" ? "streaming" : "done" };
 }
 
@@ -355,6 +363,7 @@ export function desktopUIMessageToWorkbenchParts(message: DesktopUIMessage): Wor
     else if (part.type === "source-url") output.push({ id: part.sourceId, type: "source", title: part.title ?? part.url, href: part.url });
     else if (part.type === "source-document") output.push({ id: part.sourceId, type: "source", title: part.title });
     else if (part.type === "data-media") output.push({ id: part.id ?? `media:${index}`, type: "media", media: part.data });
+    else if (part.type === "data-preview") output.push({ id: part.id ?? `preview:${index}`, type: "preview", preview: part.data });
   });
   return output;
 }
@@ -437,12 +446,14 @@ export type DesktopRunTransportAdapter = {
 
 /** Adapts the existing Tauri/OpenCode run lifecycle to the AI SDK ChatTransport stream. */
 export function createDesktopRunTransport(adapter: DesktopRunTransportAdapter) {
-  let transport: DesktopChatTransport;
-  transport = new DesktopChatTransport(async ({ chatId, messages, abortSignal }) => {
+  const transport = new DesktopChatTransport(async ({ chatId, messages, abortSignal }) => {
     const message = messages.at(-1);
     if (!message || message.role !== "user") throw new Error("desktop_transport_requires_user_message");
     const { runId } = await adapter.start({ chatId, message, prompt: desktopUIMessageText(message), abortSignal });
     let controller: ReadableStreamDefaultController<DesktopUIMessageChunk> | undefined;
+    // `finish` can run synchronously from an already-aborted stream before the
+    // subscription is assigned; keep this mutable closure slot intentional.
+    // eslint-disable-next-line prefer-const
     let dispose: (() => void) | undefined;
     let settled = false;
     let textOpen = false;

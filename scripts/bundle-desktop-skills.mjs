@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { patchDashiPreviewDesktopBridge } from "./dashi-preview-desktop-bridge.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = join(repoRoot, "content", "skills");
@@ -92,7 +93,8 @@ async function exists(path) {
 }
 
 // Preserve the directory itself for Tauri's concurrent resource scanner, while
-// removing files deleted upstream. Copy every upstream byte without patches.
+// removing files deleted upstream. Upstream assets are copied verbatim; the
+// explicit CoworkAny bridge below is applied after the copy.
 async function syncDirectory(sourceRoot, targetRoot, preservedNames = new Set()) {
   await mkdir(targetRoot, { recursive: true });
   const entries = await readdir(sourceRoot, { withFileTypes: true });
@@ -178,10 +180,22 @@ await syncDirectory(pptSource, pptTarget);
 const dashiSource = await acquireGitSkill(dashiPpt);
 const dashiTarget = join(target, "dashi-ppt");
 await syncDirectory(dashiSource, dashiTarget);
+await patchDashiPreviewDesktopBridge(dashiTarget);
+const desktopPreviewPolicy = `
+
+## CoworkAny desktop preview contract
+
+When running inside CoworkAny desktop, preview UI belongs to the current conversation. Start or reuse the skill's own loopback preview server, wait for its health check, and use only its plain HTTP loopback URL (\`http://127.0.0.1:<port>/\`) in tool output and the final response. Never use \`https://localhost\`, \`.local\`, or a self-signed HTTPS URL in CoworkAny; the desktop does not trust that certificate. Never launch or instruct the user to launch a system/external browser. For every ppt-master preview, confirmation, or review server, pass \`--no-browser\`. Keep export and download available through the embedded preview.
+`;
+for (const skillTarget of [pptTarget, dashiTarget]) {
+  const skillFile = join(skillTarget, "SKILL.md");
+  const content = await readFile(skillFile, "utf8");
+  if (!content.includes("## CoworkAny desktop preview contract")) await writeFile(skillFile, `${content.trimEnd()}${desktopPreviewPolicy}`, "utf8");
+}
 const catalogOutput = join(repoRoot, "apps", "desktop", "dist-runtime", "skill-catalog.json");
 const catalog = JSON.parse(await readFile(catalogOutput, "utf8"));
-const pptDigest = createHash("sha256").update(await readFile(join(pptSource, "SKILL.md"))).digest("hex");
-const dashiDigest = createHash("sha256").update(await readFile(join(dashiSource, "SKILL.md"))).digest("hex");
+const pptDigest = createHash("sha256").update(await readFile(join(pptTarget, "SKILL.md"))).digest("hex");
+const dashiDigest = createHash("sha256").update(await readFile(join(dashiTarget, "SKILL.md"))).digest("hex");
 catalog.skills = [
   ...(Array.isArray(catalog.skills) ? catalog.skills : []).filter((skill) => !["ppt-master", "dashi-ppt"].includes(skill?.id)),
   { id: "ppt-master", digest: pptDigest, relativePath: "ppt-master/SKILL.md", source: pptMaster.repo, version: pptMaster.version, commit: pptMaster.commit },

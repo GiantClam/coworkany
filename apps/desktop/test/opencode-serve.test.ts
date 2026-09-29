@@ -19,6 +19,7 @@ test("desktop OpenCode uses the asynchronous serve-session contract", () => {
   assert.match(source, /typeof timeoutMs === "number"/);
   assert.match(source, /this\.promptTimeoutMs \?\? false/u);
   assert.match(source, /opencode_prompt_stalled/u);
+  assert.match(source, /start-preview-server\\\.mjs\|preview:start\|render_goal_deck/u);
   assert.match(source, /runtimeEnvironmentSignature/);
   assert.match(source, /sessionCreateQueue/);
   assert.match(source, /opencode_prompt_timeout/);
@@ -32,6 +33,7 @@ test("desktop OpenCode uses the asynchronous serve-session contract", () => {
   assert.match(source, /OPENCODE_DISABLE_EXTERNAL_SKILLS: "1"/u);
   assert.match(source, /OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1"/u);
   assert.match(source, /OPENCODE_DISABLE_DEFAULT_PLUGINS: "1"/u);
+  assert.match(source, /BROWSER: "none"/u);
   assert.match(hostSource, /OPENCODE_CONFIG_CONTENT: configContent/u);
   assert.match(hostSource, /node_modules.*opencode-ai.*bin.*opencode\.exe/u);
   assert.match(hostSource, /ProgramFiles/u);

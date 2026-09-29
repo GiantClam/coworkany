@@ -11,6 +11,7 @@ export type OpenCodeRuntimeEvent =
   | { readonly event: "reasoning_delta"; readonly delta: string; readonly runId: string }
   | { readonly event: "tool_event"; readonly tool: string; readonly toolCallId?: string; readonly phase: "started" | "progress" | "completed" | "failed"; readonly message?: string; readonly paths?: readonly string[]; readonly runId: string }
   | { readonly event: "artifact"; readonly artifact: { readonly id: string; readonly relativePath: string; readonly title: string; readonly mimeType: string; readonly byteLength: number; readonly sha256: string }; readonly runId: string }
+  | { readonly event: "preview"; readonly preview: { readonly kind: "web" | "ppt" | "image" | "video" | "audio" | "document"; readonly title: string; readonly url?: string; readonly relativePath?: string; readonly artifactId?: string; readonly mimeType?: string; readonly previewSessionId?: string; readonly engine?: "ppt-master" | "dashi-ppt" | "generic-web"; readonly interactive?: boolean; readonly status?: "loading" | "ready" | "unavailable"; readonly error?: string }; readonly runId: string }
   | { readonly event: "usage"; readonly provider?: string; readonly model?: string; readonly inputTokens?: number; readonly outputTokens?: number; readonly costUsd?: number; readonly runId: string }
   | { readonly event: "runtime_warning"; readonly code: string; readonly message: string; readonly runId: string }
   | { readonly event: "permission_request"; readonly permissionId: string; readonly sessionId: string; readonly toolName: string; readonly input?: unknown; readonly title?: string; readonly callId?: string; readonly runId: string }
@@ -70,6 +71,58 @@ function toolFilePaths(...values: unknown[]) {
   };
   values.forEach((value) => visit(value, 0));
   return [...paths].slice(0, 16);
+}
+
+function nestedStrings(value: unknown, depth = 0): string[] {
+  if (depth > 4 || value === null || value === undefined) return [];
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.slice(0, 24).flatMap((item) => nestedStrings(item, depth + 1));
+  const record = readRecord(value);
+  return record ? Object.values(record).slice(0, 32).flatMap((item) => nestedStrings(item, depth + 1)) : [];
+}
+
+function loopbackPreviewUrl(values: readonly string[]) {
+  const candidates = values.flatMap((value) => value.match(/https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?(?:\/[^\s"'<>]*)?/giu) ?? []);
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(candidate.replace(/[),.;]+$/u, ""));
+      const port = Number(url.port);
+      if (["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && url.port && Number.isInteger(port) && port > 0 && port <= 65535) return url.toString();
+    } catch { /* ignore malformed tool output */ }
+  }
+  return undefined;
+}
+
+/** Extract a healthy local web/PPT preview announced by a completed preview-server tool call. */
+export function extractOpenCodePreviewDescriptor(partValue: unknown) {
+  const part = readRecord(partValue);
+  const state = readRecord(part?.state);
+  const status = readString(state?.status, part?.status)?.toLowerCase();
+  if (!part || !["completed", "success"].includes(status ?? "")) return undefined;
+  const inputStrings = nestedStrings(state?.input ?? part.input);
+  const outputStrings = nestedStrings(state?.output ?? part.output);
+  const commandText = [...nestedStrings(part.tool), ...nestedStrings(part.name), ...inputStrings].join("\n");
+  const engine = /start-preview-server\.mjs|preview:start|render_goal_deck/iu.test(commandText)
+    ? "dashi-ppt" as const
+    : /(?:svg_editor|confirm_ui|spec_review)[\\/]server\.py|ppt-master/iu.test(commandText)
+      ? "ppt-master" as const
+      : /(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+(?:dev|preview|start)(?:\s|$)|(?:^|\s)(?:vite|next\s+dev|python(?:3)?\s+-m\s+http\.server|npx\s+serve)(?:\s|$)/iu.test(commandText)
+        ? "generic-web" as const
+        : undefined;
+  if (!engine) return undefined;
+  const url = loopbackPreviewUrl(outputStrings);
+  if (!url) return undefined;
+  const toolCallId = readString(part.id);
+  const port = new URL(url).port || (url.startsWith("https:") ? "443" : "80");
+  return {
+    kind: engine === "generic-web" ? "web" as const : "ppt" as const,
+    title: engine === "ppt-master" ? "PPT Master preview" : engine === "dashi-ppt" ? "Dashi PPT preview" : "Website preview",
+    url,
+    previewSessionId: `${engine}:${toolCallId ?? port}`,
+    engine,
+    interactive: true,
+    status: "ready" as const,
+  };
 }
 
 export interface OpenCodeServeModel {
@@ -485,6 +538,7 @@ export function normalizeOpenCodeServeEvent(
     const toolCallId = readString(part.id);
     const message = readString(partState?.title, partState?.message);
     const paths = toolFilePaths(partState?.input, partState?.output, part?.input, part?.output);
+    const preview = extractOpenCodePreviewDescriptor(part);
     return {
       ...identity,
       events: [{
@@ -495,7 +549,7 @@ export function normalizeOpenCodeServeEvent(
         ...(message ? { message: safeDiagnostic(message, "") } : {}),
         ...(paths.length ? { paths } : {}),
         runId,
-      }],
+      }, ...(preview ? [{ event: "preview" as const, preview, runId }] : [])],
     };
   }
   if (partType === "step-finish" || partType === "step_finish") {

@@ -187,6 +187,7 @@ pub fn integrity(path: &Path) -> Result<bool> {
     Ok(connection.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))? == "ok")
 }
 
+#[cfg(test)]
 pub fn migrations_ready(path: &Path) -> Result<bool> {
     initialize(path)?;
     migrations_ready_without_initialization(path)
@@ -506,6 +507,7 @@ pub fn remove_artifact(path: &Path, artifact_id: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub fn list_messages(path: &Path, conversation_id: &str) -> Result<Vec<MessageRow>> {
     list_messages_page(path, conversation_id, None, None, None)
 }
@@ -573,19 +575,22 @@ pub fn list_recoverable_attempts(path: &Path) -> Result<Vec<RunAttemptRow>> {
 
 pub fn save_workflow(path: &Path, id: &str, name: &str, project_id: Option<&str>, definition_json: &str) -> Result<WorkflowRow> {
     initialize(path)?;
-    let connection = open(path)?;
     let definition_json = redact_json_payload(definition_json)?;
+    let mut definition = serde_json::from_str::<Value>(&definition_json).map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    let mut connection = open(path)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let latest_revision: i64 = transaction.query_row("SELECT COALESCE(MAX(revision), 0) FROM workflow_revisions WHERE workflow_id=?1", [id], |row| row.get(0))?;
+    let requested_revision = definition.get("revision").and_then(Value::as_i64).filter(|revision| *revision > 0);
+    let revision = std::cmp::max(latest_revision + 1, requested_revision.unwrap_or(1));
+    if let Some(object) = definition.as_object_mut() { object.insert("revision".to_string(), Value::from(revision)); }
+    let definition_json = serde_json::to_string(&definition).map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     let hash = format!("{:x}", sha2::Sha256::digest(definition_json.as_bytes()));
-    connection.execute("INSERT INTO workflows(id, project_id, name, definition_json) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, name=excluded.name, definition_json=excluded.definition_json, updated_at=CURRENT_TIMESTAMP", params![id, project_id, name, definition_json])?;
-    let latest_revision: i64 = connection.query_row("SELECT COALESCE(MAX(revision), 0) FROM workflow_revisions WHERE workflow_id=?1", [id], |row| row.get(0))?;
-    let requested_revision = serde_json::from_str::<Value>(&definition_json).ok().and_then(|value| value.get("revision").and_then(Value::as_i64)).filter(|revision| *revision > 0);
-    let revision = match requested_revision {
-        Some(requested) if requested >= latest_revision => requested,
-        _ => latest_revision + 1,
-    };
+    transaction.execute("INSERT INTO workflows(id, project_id, name, definition_json) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, name=excluded.name, definition_json=excluded.definition_json, updated_at=CURRENT_TIMESTAMP", params![id, project_id, name, definition_json])?;
     let revision_id = format!("{id}:revision:{revision}");
-    connection.execute("INSERT INTO workflow_revisions(id, workflow_id, revision, definition_json, definition_hash) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(workflow_id, revision) DO UPDATE SET definition_json=excluded.definition_json, definition_hash=excluded.definition_hash", params![revision_id, id, revision, definition_json, hash])?;
-    connection.query_row("SELECT id, project_id, name, definition_json, updated_at FROM workflows WHERE id=?1", [id], |row| Ok(WorkflowRow { id: row.get(0)?, project_id: row.get(1)?, name: row.get(2)?, definition_json: row.get(3)?, updated_at: row.get(4)? }))
+    transaction.execute("INSERT INTO workflow_revisions(id, workflow_id, revision, definition_json, definition_hash) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(workflow_id, revision) DO UPDATE SET definition_json=excluded.definition_json, definition_hash=excluded.definition_hash", params![revision_id, id, revision, definition_json, hash])?;
+    let workflow = transaction.query_row("SELECT id, project_id, name, definition_json, updated_at FROM workflows WHERE id=?1", [id], |row| Ok(WorkflowRow { id: row.get(0)?, project_id: row.get(1)?, name: row.get(2)?, definition_json: row.get(3)?, updated_at: row.get(4)? }))?;
+    transaction.commit()?;
+    Ok(workflow)
 }
 
 pub fn list_workflows(path: &Path) -> Result<Vec<WorkflowRow>> {
@@ -926,6 +931,23 @@ mod tests {
         assert_eq!(summary.estimated_cost, Some(0.1));
         assert_eq!(open(&path).unwrap().query_row("SELECT provider, provider_cost FROM usage_records WHERE idempotency_key='run-1:usage'", [], |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<f64>>(1)?))).unwrap(), (Some("openai".to_string()), Some(0.08)));
         assert_eq!(summary.artifacts, 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explicit_save_allocates_monotonic_revision_and_rewrites_embedded_revision() {
+        let root = std::env::temp_dir().join(format!("coworkany-workflow-save-revision-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("app.db");
+        let initial = save_workflow(&path, "wf-save-revision", "Workflow", None, r#"{"schemaVersion":2,"revision":2,"definitionHash":"initial","nodes":[],"edges":[]}"#).unwrap();
+        assert!(initial.definition_json.contains(r#""revision":2"#));
+        let connection = open(&path).unwrap();
+        connection.execute("INSERT INTO workflow_revisions(id, workflow_id, revision, definition_json, definition_hash) VALUES ('wf-save-revision:revision:10', 'wf-save-revision', 10, '{\"schemaVersion\":2,\"revision\":10}', 'max10')", []).unwrap();
+        drop(connection);
+        let saved = save_workflow(&path, "wf-save-revision", "Workflow", None, r#"{"schemaVersion":2,"revision":2,"definitionHash":"stale","nodes":[],"edges":[]}"#).unwrap();
+        assert!(saved.definition_json.contains(r#""revision":11"#));
+        let revisions: Vec<i64> = open(&path).unwrap().prepare("SELECT revision FROM workflow_revisions WHERE workflow_id='wf-save-revision' ORDER BY revision").unwrap().query_map([], |row| row.get(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        assert_eq!(revisions, vec![2, 10, 11]);
         let _ = std::fs::remove_dir_all(root);
     }
 

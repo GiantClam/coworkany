@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { formatWorkbenchMessageTimestamp, MessageAction, WorkbenchMessageSurface } from "../src/index";
+import { formatWorkbenchMessageTimestamp, MessageAction, WorkbenchMessageSurface, WorkbenchPreview } from "../src/index";
 import { createDesktopUIMessage, type DesktopUIMessage } from "@coworkany/workbench-client";
 
 const workbenchStyles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
@@ -88,6 +88,42 @@ test("uses the host media resolver for local artifact previews instead of a raw 
   assert.doesNotMatch(markup, /src="artifacts\/run\/image\.png"/);
 });
 
+test("renders a typed preview inline without trusting its raw URL", () => {
+  const message: DesktopUIMessage = {
+    ...createDesktopUIMessage({ id: "assistant-preview", role: "assistant", conversationId: "conversation-1" }),
+    parts: [{ type: "data-preview", id: "preview:ppt-1", data: { kind: "ppt", title: "Quarterly deck", url: "http://127.0.0.1:5200/private", previewSessionId: "ppt-1", engine: "dashi-ppt", interactive: true, status: "ready" } }],
+  };
+  const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[message]} locale="en" resolvePreviewSource={async () => ({ url: "http://127.0.0.1:5200/" })} onPreviewExport={() => undefined} />);
+  assert.match(markup, /data-slot="preview-results"/);
+  assert.match(markup, /data-preview-id="ppt-1"/);
+  assert.match(markup, /Quarterly deck/);
+  assert.match(markup, /Open preview in side panel/);
+  assert.match(markup, /Connecting to local preview/);
+  assert.doesNotMatch(markup, /src="http:\/\/127\.0\.0\.1:5200\/private"/);
+  assert.doesNotMatch(markup, /Some content is unavailable/);
+});
+
+test("opens preview in the right-side panel with a one-click browser action", () => {
+  const markup = renderToStaticMarkup(<WorkbenchPreview
+    preview={{ kind: "web", title: "Local site", url: "http://127.0.0.1:5200/", previewSessionId: "site-1", engine: "generic-web", status: "loading" }}
+    locale="en"
+    context={{ messageId: "assistant-preview", conversationId: "conversation-1" }}
+    onOpenExternal={() => undefined}
+    defaultExpanded
+  />);
+  assert.match(markup, /role="dialog"/);
+  assert.match(markup, /data-preview-layout="side-panel"/);
+  assert.match(markup, /Back to conversation/);
+  assert.match(markup, /Close preview/);
+  assert.match(markup, /Open in browser/);
+  assert.doesNotMatch(markup, /target="_blank"/);
+});
+
+test("keeps the expanded preview panel on an opaque theme surface", () => {
+  assert.match(workbenchStyles, /\.wb-ai-preview\s*\{[^}]*--ai-elements-surface:\s*var\(--wb-card,\s*#fff\)/s);
+  assert.match(workbenchStyles, /\.wb-ai-preview-expanded\s*\{[^}]*background:\s*var\(--ai-elements-surface\)/s);
+});
+
 test("keeps non-media artifacts visible with a typed preview shell", () => {
   const message: DesktopUIMessage = {
     ...createDesktopUIMessage({ id: "assistant-document-artifact", role: "assistant", conversationId: "conversation-1" }),
@@ -100,10 +136,28 @@ test("keeps non-media artifacts visible with a typed preview shell", () => {
   const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[message]} locale="zh" />);
   assert.match(markup, /data-artifact-preview-kind="markdown"/);
   assert.match(markup, /data-artifact-preview-kind="pdf"/);
-  assert.match(markup, /data-artifact-preview-kind="file"/);
+  assert.match(markup, /data-artifact-preview-kind="document"/);
   assert.match(markup, /Markdown 文档/);
   assert.match(markup, /PDF 文档/);
-  assert.match(markup, /文件 · application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document/);
+  assert.match(markup, /Word 文档 · application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document/);
+});
+
+test("recognizes PowerPoint, Word and Excel artifacts as previewable Office formats", () => {
+  const message: DesktopUIMessage = {
+    ...createDesktopUIMessage({ id: "assistant-office-artifacts", role: "assistant", conversationId: "conversation-1" }),
+    parts: [
+      { type: "data-artifact", id: "artifact-pptx", data: { id: "artifact-pptx", relativePath: "artifacts/brief.pptx", title: "brief.pptx", mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", byteLength: 42, sha256: "hash" } },
+      { type: "data-artifact", id: "artifact-legacy-ppt", data: { id: "artifact-legacy-ppt", relativePath: "artifacts/legacy.ppt", title: "legacy.ppt", mimeType: "application/vnd.ms-powerpoint", byteLength: 42, sha256: "hash" } },
+      { type: "data-artifact", id: "artifact-docx", data: { id: "artifact-docx", relativePath: "artifacts/brief.docx", title: "brief.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", byteLength: 42, sha256: "hash" } },
+      { type: "data-artifact", id: "artifact-xlsx", data: { id: "artifact-xlsx", relativePath: "artifacts/brief.xlsx", title: "brief.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", byteLength: 42, sha256: "hash" } },
+    ],
+  };
+  const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[message]} locale="zh" />);
+  assert.match(markup, /data-artifact-preview-kind="presentation"/);
+  assert.match(markup, /data-artifact-preview-kind="document"/);
+  assert.match(markup, /data-artifact-preview-kind="spreadsheet"/);
+  assert.match(markup, /data-artifact-preview-kind="file"[^>]*>[\s\S]*?legacy\.ppt/);
+  assert.match(markup, /演示文稿 · application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation/);
 });
 
 test("shows an artifact filename without exposing its workspace-relative path", () => {
@@ -421,6 +475,21 @@ test("renders failed attachments with an explicit retry action", () => {
   assert.match(markup, /broken\.png/);
   assert.match(markup, /is-failed/);
   assert.match(markup, /Retry attachment/);
+});
+
+test("renders attachments on the user message through native AI Elements primitives", () => {
+  const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[{
+    ...createDesktopUIMessage({ id: "user-with-attachment", role: "user", conversationId: "conversation-1", content: "Summarize this file" }),
+    parts: [
+      { type: "text", text: "Summarize this file", state: "done" },
+      { type: "data-attachment", id: "attachment:file-1", data: { attachmentId: "file-1", name: "brief.pdf", mediaType: "application/pdf", status: "ready" } },
+    ],
+  }]} locale="en" />);
+  assert.match(markup, /data-slot="attachments"/);
+  assert.match(markup, /data-message-role="user"/);
+  assert.match(markup, /brief\.pdf/);
+  assert.match(markup, /application&#x2F;pdf|application\/pdf/);
+  assert.match(markup, /data-attachment-id="attachment:file-1"/);
 });
 
 test("renders workflow output and data attachments through native AI Elements primitives", () => {

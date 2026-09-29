@@ -55,6 +55,28 @@ function persistedEventToWorkbenchEvent(event: PersistedRunEvent): WorkbenchRunE
       ...base,
     };
   }
+  if (event.event_type === "preview" && payload.preview && typeof payload.preview === "object") {
+    const preview = payload.preview as Record<string, unknown>;
+    const kind = preview.kind;
+    if (typeof preview.title !== "string" || !["web", "ppt", "image", "video", "audio", "document"].includes(String(kind))) return undefined;
+    return {
+      type: "preview",
+      preview: {
+        kind: kind as "web" | "ppt" | "image" | "video" | "audio" | "document",
+        title: preview.title,
+        ...(typeof preview.url === "string" ? { url: preview.url } : {}),
+        ...(typeof preview.relativePath === "string" ? { relativePath: preview.relativePath } : {}),
+        ...(typeof preview.artifactId === "string" ? { artifactId: preview.artifactId } : {}),
+        ...(typeof preview.mimeType === "string" ? { mimeType: preview.mimeType } : {}),
+        ...(typeof preview.previewSessionId === "string" ? { previewSessionId: preview.previewSessionId } : {}),
+        ...(preview.engine === "ppt-master" || preview.engine === "dashi-ppt" || preview.engine === "generic-web" ? { engine: preview.engine } : {}),
+        ...(typeof preview.interactive === "boolean" ? { interactive: preview.interactive } : {}),
+        ...(preview.status === "loading" || preview.status === "ready" || preview.status === "unavailable" ? { status: preview.status } : {}),
+        ...(typeof preview.error === "string" ? { error: preview.error } : {}),
+      },
+      ...base,
+    };
+  }
   if (event.event_type === "runtime_warning") {
     return { type: "warning", code: String(payload.code ?? "runtime_warning"), message: String(payload.message ?? "Runtime warning"), ...base };
   }
@@ -106,7 +128,8 @@ export function replayPersistedRunToConversationMessage(
   }
   const hasText = desktopUIMessageText({ ...seed, parts }).trim().length > 0;
   const hasArtifact = parts.some((part) => part.type === "data-artifact");
-  if (!hasText && !hasArtifact) return null;
+  const hasPreview = parts.some((part) => part.type === "data-preview");
+  if (!hasText && !hasArtifact && !hasPreview) return null;
   const finalParts: DesktopUIMessagePart[] = [
     ...parts.map((part) => part.type === "reasoning" ? { ...part, state: "done" as const } : part),
     { type: "data-status", id: `${run.id}:status:replayed`, data: { status: run.status === "succeeded" ? "completed" as const : run.status === "cancelled" ? "cancelled" as const : "failed" as const } },

@@ -18,7 +18,8 @@ test("prompt input exposes accessible text, attachments, model and submit contro
   assert.match(markup, /data-slot="prompt-input-tools"/);
   assert.match(markup, /wb-ai-prompt-model-select/);
   assert.match(markup, /data-dropzone="prompt-input"/);
-  assert.match(markup, /aria-haspopup="menu"/);
+  assert.match(markup, /aria-label="Add attachment"/);
+  assert.doesNotMatch(markup, /aria-haspopup="menu"/);
 });
 
 test("prompt input keeps contextual hints in the header and actions in the footer tools", () => {

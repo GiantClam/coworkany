@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, forwardRef, useCallback, useContext, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type FormEvent, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type RefObject, type TextareaHTMLAttributes } from "react";
+import React, { createContext, forwardRef, useCallback, useContext, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type FormEvent, type HTMLAttributes, type ReactNode, type RefObject, type TextareaHTMLAttributes } from "react";
 import { useControllableState } from "@radix-ui/react-use-controllable-state";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Accordion from "@radix-ui/react-accordion";
@@ -14,6 +14,7 @@ import { Streamdown, type Components } from "streamdown";
 import { Check, ChevronDown, Copy, Download, ExternalLink, FileText, LoaderCircle, Paperclip, Plus, Search, Send, Square, X } from "lucide-react";
 import { MediaControlBar, MediaController, MediaDurationDisplay, MediaMuteButton, MediaPlayButton, MediaSeekBackwardButton, MediaSeekForwardButton, MediaTimeDisplay, MediaTimeRange, MediaVolumeRange } from "media-chrome/react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./collapsible";
+import { shouldSubmitPromptInput } from "./prompt-input-shortcut";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export type AIElementStatus = "queued" | "running" | "streaming" | "waiting" | "blocked" | "completed" | "succeeded" | "failed" | "cancelled" | "denied";
@@ -61,11 +62,6 @@ type AttachmentsContextValue = { variant: "grid" | "inline" | "list" };
 type AttachmentContextValue = { item: AttachmentItem; variant: "grid" | "inline" | "list"; onRemove?: () => void };
 const AttachmentsContext = createContext<AttachmentsContextValue | null>(null);
 const AttachmentContext = createContext<AttachmentContextValue | null>(null);
-function useAttachmentContext() {
-  const context = useContext(AttachmentContext);
-  if (!context) throw new Error("Attachment components must be used within Attachment");
-  return context;
-}
 
 export function Attachments({ items = [], variant = "inline", onRemove, children, className, ...props }: { items?: readonly AttachmentItem[]; variant?: "grid" | "inline" | "list"; onRemove?: (id: string) => void; children?: ReactNode; className?: string } & HTMLAttributes<HTMLDivElement>) {
   if (!items.length && !children) return null;
@@ -221,7 +217,7 @@ export function PromptInputAction({ children, tooltip, className, ...props }: { 
 export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(function PromptInputTextarea({ className, onChange, onKeyDown, style, value: inputValue, ...props }, ref) {
   const { value, onValueChange, status, disabled, maxHeight, locale } = usePromptInputContext();
   const composingRef = useRef(false);
-  return <textarea {...props} ref={ref} value={inputValue ?? value} onChange={(event) => { onChange?.(event); if (!event.defaultPrevented) onValueChange(event.target.value); }} className={cx("ai-elements-prompt-input-textarea", "wb-ai-prompt-textarea", className)} style={{ ...style, ...(maxHeight !== undefined ? { maxHeight: typeof maxHeight === "number" ? `${maxHeight}px` : maxHeight } : {}) }} disabled={disabled || status === "streaming"} aria-label={props["aria-label"] ?? (locale === "zh" ? "消息输入" : "Message input")} aria-busy={status === "streaming"} onCompositionStart={(event) => { composingRef.current = true; props.onCompositionStart?.(event); }} onCompositionEnd={(event) => { composingRef.current = false; props.onCompositionEnd?.(event); }} onKeyDown={(event) => { onKeyDown?.(event); if (event.defaultPrevented) return; const nativeComposing = Boolean((event.nativeEvent as unknown as { isComposing?: boolean }).isComposing); if (event.key === "Enter" && !event.shiftKey && !nativeComposing && !composingRef.current) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />;
+  return <textarea {...props} ref={ref} value={inputValue ?? value} onChange={(event) => { onChange?.(event); if (!event.defaultPrevented) onValueChange(event.target.value); }} className={cx("ai-elements-prompt-input-textarea", "wb-ai-prompt-textarea", className)} style={{ ...style, ...(maxHeight !== undefined ? { maxHeight: typeof maxHeight === "number" ? `${maxHeight}px` : maxHeight } : {}) }} disabled={disabled || status === "streaming"} aria-label={props["aria-label"] ?? (locale === "zh" ? "消息输入" : "Message input")} aria-busy={status === "streaming"} onCompositionStart={(event) => { composingRef.current = true; props.onCompositionStart?.(event); }} onCompositionEnd={(event) => { composingRef.current = false; props.onCompositionEnd?.(event); }} onKeyDown={(event) => { onKeyDown?.(event); if (event.defaultPrevented) return; const nativeComposing = Boolean((event.nativeEvent as unknown as { isComposing?: boolean }).isComposing); if (shouldSubmitPromptInput({ key: event.key, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, isComposing: nativeComposing }, composingRef.current)) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />;
 });
 
 export function PromptInputSubmit({ children, className, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -420,7 +416,7 @@ export function Queue({ items, children, className, ...props }: QueueProps) { re
 export type CheckpointProps = HTMLAttributes<HTMLDivElement> & { title?: string; description?: string; onRestore?: () => void; onBranch?: () => void; children?: ReactNode };
 export function Checkpoint({ title = "Checkpoint", description, onRestore, onBranch, children, className, ...props }: CheckpointProps) { const body = children ?? <><CheckpointIcon /><div className="ai-elements-checkpoint-copy"><strong>{title}</strong>{description ? <p>{description}</p> : null}</div><div className="ai-elements-checkpoint-actions"><CheckpointTrigger onClick={onRestore}>Restore</CheckpointTrigger><CheckpointTrigger onClick={onBranch}>Branch</CheckpointTrigger></div></>; return <div {...props} className={cx("ai-elements-checkpoint", className)} data-slot="checkpoint">{body}</div>; }
 export function CheckpointIcon({ children, className, ...props }: HTMLAttributes<HTMLSpanElement> & { children?: ReactNode }) { return <span {...props} className={cx("ai-elements-checkpoint-icon", className)} data-slot="checkpoint-icon">{children ?? "↺"}</span>; }
-export function CheckpointTrigger({ children, className, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { tooltip?: string; children?: ReactNode }) { const { tooltip: _tooltip, ...buttonProps } = props; return <button {...buttonProps} type="button" className={cx("ai-elements-checkpoint-trigger", className)} data-slot="checkpoint-trigger">{children}</button>; }
+export function CheckpointTrigger({ children, className, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { tooltip?: string; children?: ReactNode }) { const buttonProps = { ...props }; delete buttonProps.tooltip; return <button {...buttonProps} type="button" className={cx("ai-elements-checkpoint-trigger", className)} data-slot="checkpoint-trigger">{children}</button>; }
 type ContextUsage = { inputTokens?: number; outputTokens?: number; reasoningTokens?: number; cachedInputTokens?: number; cachedTokens?: number; cost?: number };
 type ContextValue = { maxTokens: number; usedTokens: number; usage?: ContextUsage; modelId?: string };
 const ContextContext = createContext<ContextValue | null>(null);
@@ -444,7 +440,7 @@ export function Source({ title, href, excerpt, children, className, ...props }: 
 export function InlineCitation({ title, href, children }: { title: string; href?: string; children?: ReactNode }) { return <a className="ai-elements-inline-citation" href={href} target={href ? "_blank" : undefined} rel={href ? "noreferrer" : undefined}>{children ?? title}</a>; }
 export function CodeBlock({ code, language = "text", children, className }: { code?: string; language?: string; children?: ReactNode; className?: string }) { return <pre className={cx("ai-elements-code-block", className)} data-language={language}><code>{children ?? code}</code></pre>; }
 export type ImageProps = { src?: string; base64?: string; mediaType?: string; uint8Array?: Uint8Array; alt?: string; className?: string } & Omit<React.ComponentProps<"img">, "src" | "alt" | "className">;
-export function Image({ src, base64, mediaType, uint8Array: _uint8Array, alt = "Generated image", className, ...props }: ImageProps) { const imageSource = src ?? (base64 && mediaType ? `data:${mediaType};base64,${base64}` : undefined); return <img {...props} src={imageSource} alt={alt} className={cx("ai-elements-image", className)} data-slot="image" />; }
+export function Image({ src, base64, mediaType, alt = "Generated image", className, ...props }: ImageProps) { delete props.uint8Array; const imageSource = src ?? (base64 && mediaType ? `data:${mediaType};base64,${base64}` : undefined); return <img {...props} src={imageSource} alt={alt} className={cx("ai-elements-image", className)} data-slot="image" />; }
 export function OpenInChat({ href, label = "Open in chat", children }: { href: string; label?: string; children?: ReactNode }) { return <a className="ai-elements-open-in-chat" href={href} target="_blank" rel="noreferrer">{children ?? <>{label}<ExternalLink size={14} aria-hidden="true" /></>}</a>; }
 
 export function Branch({ children, className, ...props }: HTMLAttributes<HTMLElement> & { children: ReactNode }) { return <section {...props} className={cx("ai-elements-branch", className)} data-slot="branch">{children}</section>; }

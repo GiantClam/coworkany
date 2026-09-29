@@ -1,6 +1,5 @@
-import type { WorkflowCanvasExecutionSnapshot } from "@coworkany/workbench-ui";
+import type { WorkflowCanvasExecutionSnapshot } from "@coworkany/workbench-ui/desktop";
 
-type WorkflowNodeEventTool = "workflow:node_started" | "workflow:node_succeeded" | "workflow:node_failed";
 type WorkflowTerminalStatus = "succeeded" | "failed" | "cancelled";
 
 function parsePayload(message: string): Record<string, unknown> {

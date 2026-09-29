@@ -695,6 +695,7 @@ textarea:focus { border-color: var(--wb-primary, #ffd000); }
 .workflow-ai-toggle.active { border-color: color-mix(in srgb, var(--wb-primary, #ffd000) 70%, var(--wb-border, #e5e5e0)); background: color-mix(in srgb, var(--wb-primary, #ffd000) 14%, var(--wb-background, #fdfdfb)); color: var(--wb-foreground, #111); }
 .workflow-canvas-ai-layout { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
 .workflow-canvas-shell { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: var(--wb-background, #fdfdfb); }
+.workflow-canvas-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--wb-muted-foreground, #777); font-size: 13px; }
 .workflow-canvas-shell > .workflow-canvas-viewport { position: absolute; inset: 0; min-height: 0; border: 0; border-radius: 0; }
 .workflow-canvas-shell > .ai-elements-workflow-canvas { position: absolute; inset: 0; min-height: 0; border: 0; border-radius: 0; }
 .workflow-canvas-overlay-toolbar { position: absolute; z-index: 5; top: 16px; left: 50%; display: flex; align-items: center; gap: 12px; min-width: 260px; padding: 8px 12px; border: 1px solid var(--wb-border, #e5e5e0); border-radius: 9px; background: color-mix(in srgb, var(--wb-card, #fff) 88%, transparent); box-shadow: 0 8px 24px rgba(17,17,17,.08); transform: translateX(-50%); font-size: 12px; font-weight: 700; pointer-events: none; }

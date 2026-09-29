@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createDesktopUIMessage, type DesktopUIMessage, type WorkbenchClient, type WorkbenchRunEvent } from "@coworkany/workbench-client";
-import { createDesktopWorkflowAiChatTransport } from "../src/workbench-client";
+import { createDesktopChatTransport } from "../src/workbench-client";
 
-test("workflow AI transport uses the direct provider command and never creates an OpenCode session", async () => {
+test("workflow AI transport reuses the shared OpenCode chat path with its authoring Skill", async () => {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
   let emit: ((event: WorkbenchRunEvent) => void) | undefined;
   const bridge = {
@@ -19,9 +19,19 @@ test("workflow AI transport uses the direct provider command and never creates a
       async cancel() { return undefined; },
     },
   } as unknown as WorkbenchClient;
-  const transport = createDesktopWorkflowAiChatTransport(bridge, client, {
+  let ensuredConversationAgentId: string | undefined;
+  const transport = createDesktopChatTransport(bridge, client, {
+    resolveSessionId: async (chatId) => chatId,
     resolveProvider: () => ({ id: "text", source: "openai-compatible", model: "model-a", baseUrl: "https://provider.test/v1", apiKey: "secret" }),
     resolvePrompt: (_message, text) => `restricted:${text}`,
+    resolveSkillId: () => "workflow-authoring",
+    resolveAgentId: () => "workflow-ai",
+    resolveConversationAgentId: () => "workflow-ai",
+    resolveAllowArtifacts: () => false,
+    ensureSession: async ({ chatId, conversationAgentId }) => {
+      ensuredConversationAgentId = conversationAgentId;
+      return { sessionId: `opencode:${chatId}` };
+    },
   });
   const message: DesktopUIMessage = createDesktopUIMessage({
     id: "message-1",
@@ -46,9 +56,13 @@ test("workflow AI transport uses the direct provider command and never creates a
   while (!(await reader.read()).done) { /* drain */ }
 
   const hostSend = calls.find((call) => call.command === "host_send");
-  assert.equal((hostSend?.args?.message as { type?: string })?.type, "workflow.ai");
-  assert.equal(((hostSend?.args?.message as { payload?: { prompt?: string } })?.payload?.prompt), "restricted:Arrange the nodes");
-  assert.equal(calls.some((call) => (call.args?.message as { type?: string } | undefined)?.type === "session.prompt"), false);
-  assert.equal(calls.some((call) => call.command === "create_conversation"), true);
-  assert.equal(calls.filter((call) => call.command === "append_message").length, 2);
+  assert.equal((hostSend?.args?.message as { type?: string })?.type, "session.prompt");
+  const payload = (hostSend?.args?.message as { payload?: { prompt?: string; skillId?: string; agentId?: string; allowArtifacts?: boolean } })?.payload;
+  assert.equal(payload?.prompt, "restricted:Arrange the nodes");
+  assert.equal(payload?.skillId, "workflow-authoring");
+  assert.equal(payload?.agentId, "workflow-ai");
+  assert.equal(payload?.allowArtifacts, false);
+  assert.equal(ensuredConversationAgentId, "workflow-ai");
+  assert.equal(calls.some((call) => (call.args?.message as { type?: string } | undefined)?.type === "workflow.ai"), false);
+  assert.equal(calls.filter((call) => call.command === "append_message").length, 1);
 });

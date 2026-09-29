@@ -53,20 +53,21 @@ await import(${JSON.stringify(pathToFileURL(join(desktopRoot, "test", "fixtures"
     const pending = new Map<string, (frame: Record<string, unknown>) => void>();
     const servePids = new Set<number>();
     createRpcReader(child.stdout, frame => pending.get(String(frame.requestId))?.({ ...frame }), error => { errors = error.message; });
-    const session = async () => {
+    const session = async (agentId?: string, provider: Record<string, unknown> = { id: "local", model: "local/model" }) => {
       const requestId = `session-${Date.now()}-${Math.random()}`;
       const frame = await new Promise<Record<string, unknown>>((resolveFrame, reject) => {
         const timer = setTimeout(() => { pending.delete(requestId); reject(new Error(`Host stage timeout: ${errors}`)); }, 20_000);
         pending.set(requestId, result => { clearTimeout(timer); pending.delete(requestId); resolveFrame(result); });
         child.stdin.write(encodeRpcMessage({ version: 1, requestId, type: "session.create", payload: {
-          conversationId: requestId, workspacePath: join(root, "workspace"), provider: { id: "local", model: "local/model" },
+          conversationId: requestId, workspacePath: join(root, "workspace"), provider, ...(agentId ? { agentId } : {}),
         } }));
       });
       assert.equal(frame.ok, true, JSON.stringify(frame));
       const environment = JSON.parse(await readFile(capture, "utf8")) as CapturedEnvironment;
       servePids.add(environment.pid);
       return environment;
-    };
+};
+
     const stop = async () => {
       if (child.exitCode === null && child.signalCode === null) {
         const closed = once(child, "exit");
@@ -86,6 +87,32 @@ await import(${JSON.stringify(pathToFileURL(join(desktopRoot, "test", "fixtures"
   };
   return { root, source, agents, put, start };
 }
+
+test("workflow AI uses the restricted workflow agent and maximum shared output budget", async t => {
+  const f = await fixture(t);
+  const host = f.start();
+  const environment = await host.session("workflow-ai");
+  const config = JSON.parse(await readFile(join(environment.config, "opencode.json"), "utf8")) as {
+    agent?: Record<string, { mode?: string; permission?: Record<string, string> }>;
+    provider?: Record<string, { models?: Record<string, { limit?: { context?: number; output?: number } }> }>;
+  };
+  assert.equal(config.agent?.["workflow-ai"]?.mode, "primary");
+  assert.equal(config.agent?.["workflow-ai"]?.permission?.["*"], "deny");
+  assert.equal(config.agent?.["workflow-ai"]?.permission?.skill, "allow");
+  assert.deepEqual(config.provider?.local?.models?.model?.limit, { context: 200_000, output: 393_216 });
+});
+
+test("Seed 2.1 Pro OpenCode metadata matches Ark's published token limits", async t => {
+  const f = await fixture(t);
+  const host = f.start();
+  const environment = await host.session(undefined, { id: "volcengine-seed", source: "volcengine", model: "doubao-seed-2-1-pro-260915" });
+  const config = JSON.parse(await readFile(join(environment.config, "opencode.json"), "utf8")) as {
+    provider?: Record<string, { models?: Record<string, { limit?: { context?: number; output?: number }; modalities?: { input?: string[]; output?: string[] } }> }>;
+  };
+  const model = config.provider?.volcengine?.models?.["doubao-seed-2-1-pro-260915"];
+  assert.deepEqual(model?.limit, { context: 1_024_000, output: 256_000 });
+  assert.deepEqual(model?.modalities, { input: ["text", "image"], output: ["text"] });
+});
 
 test("host restart with the same bundle preserves installed dependencies and runtime assets", async t => {
   const f = await fixture(t);

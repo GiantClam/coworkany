@@ -31,6 +31,20 @@ export type WorkbenchMessagePartBase = {
   readonly createdAt?: string;
 };
 
+export type WorkbenchPreviewData = {
+  readonly kind: "web" | "ppt" | "image" | "video" | "audio" | "document";
+  readonly title: string;
+  readonly url?: string;
+  readonly relativePath?: string;
+  readonly artifactId?: string;
+  readonly mimeType?: string;
+  readonly previewSessionId?: string;
+  readonly engine?: "ppt-master" | "dashi-ppt" | "generic-web";
+  readonly interactive?: boolean;
+  readonly status?: "loading" | "ready" | "unavailable";
+  readonly error?: string;
+};
+
 export type WorkbenchMessagePart =
   | (WorkbenchMessagePartBase & { readonly type: "text"; readonly text: string })
   | (WorkbenchMessagePartBase & { readonly type: "reasoning"; readonly text: string; readonly status: "running" | "completed" | "failed" })
@@ -45,6 +59,7 @@ export type WorkbenchMessagePart =
   | (WorkbenchMessagePartBase & { readonly type: "artifact"; readonly artifact: WorkbenchArtifact })
   | (WorkbenchMessagePartBase & { readonly type: "source"; readonly title: string; readonly href?: string; readonly excerpt?: string })
   | (WorkbenchMessagePartBase & { readonly type: "media"; readonly media: { readonly artifactId: string; readonly kind: "image" | "video" | "audio" | "document"; readonly mimeType: string; readonly title: string; readonly relativePath?: string; readonly previewable?: boolean } })
+  | (WorkbenchMessagePartBase & { readonly type: "preview"; readonly preview: WorkbenchPreviewData })
   | (WorkbenchMessagePartBase & { readonly type: "report"; readonly title: string; readonly body?: string; readonly artifact?: WorkbenchArtifact });
 
 export interface WorkbenchMessage {
@@ -154,6 +169,7 @@ export type WorkbenchRunEvent = WorkbenchRunEventMetadata & (
   | { readonly type: "status"; readonly status: WorkbenchRunStatus }
   | { readonly type: "source"; readonly source: { readonly id: string; readonly title: string; readonly href?: string; readonly excerpt?: string } }
   | { readonly type: "media"; readonly media: { readonly artifactId: string; readonly kind: "image" | "video" | "audio" | "document"; readonly mimeType: string; readonly title: string; readonly relativePath?: string; readonly previewable?: boolean } }
+  | { readonly type: "preview"; readonly preview: WorkbenchPreviewData }
 );
 
 export interface WorkbenchRunRequest {
