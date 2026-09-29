@@ -6,7 +6,7 @@ Function:
     Provider configuration and selected CoworkAny workflow.
 Example:
     python3 scripts/20260920Codex_package_customer_intel_macos.py \
-      --source .artifacts/desktop-release-intel/CoworkAny-macOS-x64-internal-portable \
+      --source .artifacts/desktop-release/CoworkAny-macOS-x64-portable \
       --config "$HOME/Library/Application Support/CoworkAny/config.json" \
       --workflow /Users/edy/Downloads/coworkany-workflow-1789723297937.json \
       --output .artifacts/customer-custom-intel-v0.1.18
@@ -117,6 +117,19 @@ def write_workflow_file(root: Path, workflow: dict) -> None:
     )
 
 
+def verify_release_signature(app: Path) -> None:
+    details = subprocess.run(
+        ["/usr/bin/codesign", "-dv", "--verbose=4", str(app)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    signature = f"{details.stdout}\n{details.stderr}"
+    if details.returncode != 0 or "Signature=adhoc" in signature or "TeamIdentifier=not set" in signature:
+        raise ValueError("customer_source_requires_developer_id_signature")
+    subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)], check=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
@@ -135,6 +148,7 @@ def main() -> None:
         raise ValueError(f"customer_source_portable_package_invalid:{source}")
     if not source_database.is_file():
         raise ValueError(f"customer_source_database_missing:{source_database}")
+    verify_release_signature(source / "CoworkAny.app")
     if output.exists() or archive.exists():
         raise ValueError(f"customer_output_already_exists:{output}")
 
@@ -148,8 +162,7 @@ def main() -> None:
     shutil.copytree(source, output, ignore=shutil.ignore_patterns(OUTPUT_DATA_DIRECTORY, "*.instance.lock"))
     if not output.name or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for character in output.name):
         raise ValueError(f"customer_package_name_invalid:{output.name}")
-    customer_marker = output / "CoworkAny.app" / "Contents" / "Resources" / "customer-package.flag"
-    customer_marker.write_text(f"{output.name}\n", encoding="utf-8")
+    (output / "customer-package.flag").write_text(f"{output.name}\n", encoding="utf-8")
     data = output / OUTPUT_DATA_DIRECTORY
     data.mkdir()
     configuration["workspacePath"] = str((data / "projects").resolve())
@@ -159,11 +172,6 @@ def main() -> None:
     seed_database(source_database, data / "app.db", workflow)
     for sidecar in (data / "app.db-wal", data / "app.db-shm"):
         sidecar.unlink(missing_ok=True)
-    seed = output / "CoworkAny.app" / "Contents" / "Resources" / "customer-package-seed"
-    seed.mkdir()
-    shutil.copy2(data / "config.json", seed / "config.json")
-    shutil.copy2(data / "app.db", seed / "app.db")
-    subprocess.run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", str(output / "CoworkAny.app")], check=True)
     write_workflow_file(output, workflow)
     write_readme(output)
 

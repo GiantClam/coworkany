@@ -150,6 +150,9 @@ h1 { font-family: var(--wb-display-font, "Barlow Condensed", "Microsoft YaHei", 
 .settings-section-heading { grid-column: 1 / -1; display: grid; gap: 3px; scroll-margin-top: 18px; margin-top: 12px; padding: 15px 0 7px; border-bottom: 1px solid var(--wb-border, #e5e5e0); }
 .settings-section-heading strong { color: var(--wb-foreground, #111); font-size: 13px; }
 .settings-section-heading span { color: var(--wb-muted-foreground, #777); font-size: 11px; line-height: 1.5; }
+.settings-provider-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.settings-provider-section-heading > div { display: grid; gap: 3px; }
+.settings-provider-section-heading > button { flex: 0 0 auto; padding: 8px 11px; font-size: 12px; }
 .settings-grid label { display: grid; gap: 6px; color: var(--wb-muted-foreground, #777); font-size: 12px; }
 .settings-grid input, .settings-grid select, .settings-grid textarea { color: var(--wb-foreground, #111); background: var(--wb-card, #fff); border: 1px solid var(--wb-border, #e5e5e0); border-radius: 5px; padding: 10px 11px; outline: none; }
 .settings-grid input:focus, .settings-grid select:focus, .settings-grid textarea:focus { border-color: var(--wb-primary, #ffd000); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-primary, #ffd000) 22%, transparent); }

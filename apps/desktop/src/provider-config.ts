@@ -28,6 +28,55 @@ export type ProviderCapability = "text" | "image" | "video" | "audio";
 export type DesktopProviderProfiles = Readonly<Record<string, DesktopProviderConfig>>;
 export type DesktopProviderDefaults = Partial<Record<ProviderCapability, string>>;
 
+export type ImportedProviderConfig = {
+  readonly provider?: DesktopProviderConfig;
+  readonly providers: DesktopProviderProfiles;
+  readonly defaults?: DesktopProviderDefaults;
+};
+
+const providerStringFields = ["id", "source", "baseUrl", "model", "apiKey", "reasoningEffort", "skillId", "endpoint", "queryEndpoint", "workflowId", "digitalHumanWorkflowId", "videoEnhanceWorkflowId"] as const;
+const providerCapabilities = new Set<ProviderCapability>(["text", "image", "video", "audio"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseImportedProvider(value: unknown, fallbackId: string): DesktopProviderConfig {
+  if (!isRecord(value)) throw new Error("provider_import_profile_invalid");
+  for (const field of providerStringFields) {
+    if (field in value && value[field] !== undefined && typeof value[field] !== "string") throw new Error(`provider_import_field_invalid:${field}`);
+  }
+  if ("models" in value && (!Array.isArray(value.models) || !value.models.every((model) => typeof model === "string"))) throw new Error("provider_import_models_invalid");
+  if ("capabilities" in value && (!Array.isArray(value.capabilities) || !value.capabilities.every((capability) => typeof capability === "string" && providerCapabilities.has(capability as ProviderCapability)))) throw new Error("provider_import_capabilities_invalid");
+  if ("workflows" in value && (!Array.isArray(value.workflows) || !value.workflows.every((workflow) => isRecord(workflow)
+    && typeof workflow.id === "string" && workflow.id.trim()
+    && typeof workflow.remoteWorkflowId === "string" && workflow.remoteWorkflowId.trim()
+    && (!('capability' in workflow) || typeof workflow.capability === "string")
+    && (!('version' in workflow) || typeof workflow.version === "number" || typeof workflow.version === "undefined")
+    && (!('inputSchema' in workflow) || Array.isArray(workflow.inputSchema))
+    && (!('nodeBindings' in workflow) || Array.isArray(workflow.nodeBindings))
+    && (!('outputSchema' in workflow) || Array.isArray(workflow.outputSchema))))) throw new Error("provider_import_workflows_invalid");
+  const id = typeof value.id === "string" && value.id.trim() ? value.id.trim() : fallbackId.trim();
+  if (!id) throw new Error("provider_import_id_required");
+  return { ...value, id } as DesktopProviderConfig;
+}
+
+export function parseProviderImport(value: unknown): ImportedProviderConfig {
+  if (!isRecord(value)) throw new Error("provider_import_root_invalid");
+  const importedProvider = value.provider === undefined ? undefined : parseImportedProvider(value.provider, "default");
+  const rawProfiles = value.providers === undefined ? (importedProvider ? {} : value) : value.providers;
+  if (!isRecord(rawProfiles)) throw new Error("provider_import_profiles_invalid");
+  const providers = Object.fromEntries(Object.entries(rawProfiles).map(([id, profile]) => [id, parseImportedProvider(profile, id)]));
+  const defaults = value.defaults === undefined ? undefined : (() => {
+    if (!isRecord(value.defaults)) throw new Error("provider_import_defaults_invalid");
+    const entries = Object.entries(value.defaults);
+    if (entries.some(([capability, profileId]) => !providerCapabilities.has(capability as ProviderCapability) || typeof profileId !== "string" || !profileId.trim() || !providers[profileId])) throw new Error("provider_import_defaults_invalid");
+    return Object.fromEntries(entries) as DesktopProviderDefaults;
+  })();
+  if (!importedProvider && !Object.keys(providers).length) throw new Error("provider_import_empty");
+  return { ...(importedProvider ? { provider: importedProvider } : {}), providers, ...(defaults ? { defaults } : {}) };
+}
+
 type ProviderConfigContainer = {
   readonly provider: DesktopProviderConfig;
   readonly providers?: DesktopProviderProfiles;
@@ -160,6 +209,11 @@ export function supportsProviderCapability(provider: DesktopProviderConfig, capa
   if (source === "bailian" || source === "dashscope") return capability === "image";
   if (["openai", "openai-compatible", "siliconflow", "deepseek", "openrouter"].includes(source)) return capability === "text";
   return true;
+}
+
+export function supportsRunningHubWorkflowCapability(provider: DesktopProviderConfig, capability: string) {
+  return provider.source?.trim().toLowerCase() === "runninghub"
+    && provider.workflows?.some((workflow) => workflow.capability === capability) === true;
 }
 
 /**
