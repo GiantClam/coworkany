@@ -4059,7 +4059,7 @@ export function AiEntryWorkspace({
 
             <div className="sticky bottom-0 z-20 shrink-0 bg-background/95 px-4 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/85 lg:px-0">
               <div className="ai-entry-composer-shell dashboard-panel mx-auto max-w-5xl rounded-[12px] p-4 shadow-sm">
-                <PromptInput value={input} onValueChange={setInput} onSubmit={handleSend} onAddAttachments={(files) => void handleAttachmentFiles(files)} attachments={attachments} onRemoveAttachment={removeAttachment} accept="image/*,.txt,.md,.docx,.pdf,.csv,.json,text/*,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" isLoading={isResponseLoading} locale={isZh ? "zh" : "en"} className="compact-ai-composer border-0 bg-transparent p-0 shadow-none">
+                <PromptInput value={input} onValueChange={setInput} onSubmit={handleSend} onAddAttachments={(files) => void handleAttachmentFiles(files)} attachments={attachments} onRemoveAttachment={removeAttachment} accept="image/*,.txt,.md,.docx,.pdf,.csv,.json,text/*,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" isLoading={isResponseLoading} locale={isZh ? "zh" : "en"} className="compact-ai-composer" style={{ padding: 0, border: 0, background: "transparent", boxShadow: "none" }}>
                   {isAgentSelectionExplicit && selectedAgent ? (
                     <div className="px-1 pb-2 text-xs text-muted-foreground">
                       {copy.selectedAgent}: <span className="font-medium text-foreground">{selectedAgent.name}</span>
@@ -4354,7 +4354,8 @@ export function AiEntryWorkspace({
               accept="image/*,.txt,.md,.docx,.pdf,.csv,.json,text/*,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               isLoading={isResponseLoading}
               locale={isZh ? "zh" : "en"}
-              className="compact-ai-composer border-0 bg-transparent p-0 shadow-none"
+              className="compact-ai-composer"
+              style={{ padding: 0, border: 0, background: "transparent", boxShadow: "none" }}
             >
               {isAgentSelectionExplicit && selectedAgent ? (
                 <div className="px-1 pb-2 text-xs text-muted-foreground">
