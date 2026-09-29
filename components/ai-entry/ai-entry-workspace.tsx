@@ -55,7 +55,7 @@ import { useI18n } from "@/components/locale-provider"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { TextMorph } from "@/components/ui/text-morph"
 import { TypingIndicator } from "@/components/ui/typing-indicator"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -1896,11 +1896,6 @@ export function AiEntryWorkspace({
         .filter((item): item is KnowledgeDatasetOption => Boolean(item)),
     [knowledgeDatasets, selectedKnowledgeDatasetIds],
   )
-  const knowledgeSummaryLabel = useMemo(() => {
-    if (!knowledgeEnabled) return copy.knowledgeDisabled
-    if (selectedKnowledgeDatasets.length === 0) return copy.knowledgeAllEnabled
-    return `${copy.knowledgeSelectedCount} ${selectedKnowledgeDatasets.length}`
-  }, [copy.knowledgeAllEnabled, copy.knowledgeDisabled, copy.knowledgeSelectedCount, knowledgeEnabled, selectedKnowledgeDatasets.length])
   useEffect(() => {
     let cancelled = false
 
@@ -3899,11 +3894,11 @@ export function AiEntryWorkspace({
   )
 
   const renderSelectedAttachments = () => {
-    if (attachments.length === 0 && !isPreparingAttachments) return null
+    if (attachments.length === 0 && !isPreparingAttachments && !knowledgeEnabled) return null
     return (
-      <div className="flex flex-wrap items-center gap-2 px-1 pb-2">
+      <div className="ai-entry-context-rail flex min-w-0 items-center gap-2 px-1 pb-2">
         {isPreparingAttachments ? (
-          <div className="dashboard-chip inline-flex items-center gap-2 rounded-[4px] px-2.5 py-1.5 text-xs text-muted-foreground">
+          <div className="dashboard-chip inline-flex shrink-0 items-center gap-2 rounded-[4px] px-2.5 py-1.5 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             <span>{isZh ? "正在解析附件" : "Parsing attachment"}</span>
           </div>
@@ -3911,7 +3906,7 @@ export function AiEntryWorkspace({
         {attachments.map((attachment) => {
           const isImage = attachment.mediaType.startsWith("image/")
           return (
-            <div key={attachment.id} className="dashboard-chip inline-flex max-w-[260px] items-center gap-2 rounded-[4px] px-2.5 py-1.5 text-xs text-muted-foreground">
+            <div key={attachment.id} className="dashboard-chip inline-flex max-w-[260px] shrink-0 items-center gap-2 rounded-[4px] px-2.5 py-1.5 text-xs text-muted-foreground">
               {isImage ? <ImageIcon className="h-3.5 w-3.5 shrink-0" /> : <Paperclip className="h-3.5 w-3.5 shrink-0" />}
               <span className="truncate" title={attachment.name}>{attachment.name}</span>
               <button
@@ -3926,29 +3921,25 @@ export function AiEntryWorkspace({
             </div>
           )
         })}
+        {knowledgeEnabled && selectedKnowledgeDatasets.length === 0 ? (
+          <div className="dashboard-chip inline-flex shrink-0 items-center gap-2 rounded-[4px] px-2.5 py-1.5 text-xs text-muted-foreground">
+            <Database className="h-3.5 w-3.5" />
+            <span>{copy.knowledgeAllEnabled}</span>
+            <button type="button" className="rounded-[4px] p-0.5" aria-label={copy.disableKnowledge} onClick={disableKnowledge}><X className="h-3 w-3" /></button>
+          </div>
+        ) : null}
+        {knowledgeEnabled ? selectedKnowledgeDatasets.map((dataset) => (
+          <div key={`knowledge-${dataset.id}`} className="dashboard-chip inline-flex max-w-[220px] shrink-0 items-center gap-2 rounded-[4px] px-2.5 py-1.5 text-xs text-muted-foreground">
+            <Database className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate" title={dataset.name}>{dataset.name}</span>
+            <button type="button" className="rounded-[4px] p-0.5" aria-label={isZh ? `移除${dataset.name}` : `Remove ${dataset.name}`} onClick={() => toggleKnowledgeDataset(dataset.id)}><X className="h-3 w-3" /></button>
+          </div>
+        )) : null}
       </div>
     )
   }
 
-  const renderKnowledgeControl = () => {
-    if (!knowledgeEnabled) return null
-
-    return (
-      <div className="flex items-center gap-1">
-        <Popover open={knowledgePickerOpen} onOpenChange={setKnowledgePickerOpen}>
-        <PopoverTrigger asChild>
-          <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="dashboard-button-secondary h-9 max-w-[220px] gap-2 px-3"
-                disabled={isResponseLoading || isConversationLoading || isPreparingAttachments}
-              >
-                <Database className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{copy.knowledgeLabel}</span>
-                <span className="truncate text-muted-foreground">{knowledgeSummaryLabel}</span>
-          </Button>
-        </PopoverTrigger>
+  const renderKnowledgePanel = () => (
           <PopoverContent className="w-80 p-0" align="start">
             <Command>
               <div className="border-b border-border px-3 py-3">
@@ -3997,10 +3988,7 @@ export function AiEntryWorkspace({
               </CommandList>
             </Command>
           </PopoverContent>
-        </Popover>
-      </div>
-    )
-  }
+  )
 
   const renderMessageAttachments = (items: ChatAttachment[] | undefined) => {
     if (!items?.length) return null
@@ -4017,18 +4005,24 @@ export function AiEntryWorkspace({
   }
 
   const renderAttachmentPicker = () => (
-    <PromptInputActionMenu open={addMenuOpen} onOpenChange={setAddMenuOpen}>
-      <PromptInputActionMenuTrigger disabled={isResponseLoading || isConversationLoading || isPreparingAttachments} aria-label={copy.addMenu} className="composer-add">
-        <Plus className="h-5 w-5" />
-      </PromptInputActionMenuTrigger>
-      <PromptInputActionMenuContent className="w-56 p-2">
-        <PromptInputActionAddAttachments disabled={attachments.length >= AI_ENTRY_MAX_ATTACHMENTS} label={copy.uploadFile} />
-        <PromptInputActionMenuItem onSelect={() => { setKnowledgeEnabled(true); setKnowledgePickerOpen(true) }}>
-          <Database className="h-4 w-4 shrink-0" />
-          <span>{copy.knowledgeAdd}</span>
-        </PromptInputActionMenuItem>
-      </PromptInputActionMenuContent>
-    </PromptInputActionMenu>
+    <Popover open={knowledgePickerOpen} onOpenChange={setKnowledgePickerOpen}>
+      <PopoverAnchor asChild>
+        <PromptInputActionMenu open={addMenuOpen} onOpenChange={setAddMenuOpen}>
+          <PromptInputActionMenuTrigger disabled={isResponseLoading || isConversationLoading || isPreparingAttachments} aria-label={copy.addMenu} className="composer-add">
+            <Plus className="h-5 w-5" />
+            {attachments.length + selectedKnowledgeDatasets.length > 0 ? <span className="composer-add-count">{attachments.length + selectedKnowledgeDatasets.length}</span> : null}
+          </PromptInputActionMenuTrigger>
+          <PromptInputActionMenuContent className="w-56 p-2">
+            <PromptInputActionAddAttachments disabled={attachments.length >= AI_ENTRY_MAX_ATTACHMENTS} label={copy.uploadFile} />
+            <PromptInputActionMenuItem onSelect={() => { setKnowledgeEnabled(true); setKnowledgePickerOpen(true) }}>
+              <Database className="h-4 w-4 shrink-0" />
+              <span>{copy.knowledgeAdd}</span>
+            </PromptInputActionMenuItem>
+          </PromptInputActionMenuContent>
+        </PromptInputActionMenu>
+      </PopoverAnchor>
+      {knowledgeEnabled ? renderKnowledgePanel() : null}
+    </Popover>
   )
 
   if (showLanding) {
@@ -4064,14 +4058,14 @@ export function AiEntryWorkspace({
             </div>
 
             <div className="sticky bottom-0 z-20 shrink-0 bg-background/95 px-4 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/85 lg:px-0">
-              <div className="dashboard-panel mx-auto max-w-5xl rounded-[12px] p-4 shadow-sm">
-                <PromptInput value={input} onValueChange={setInput} onSubmit={handleSend} onAddAttachments={(files) => void handleAttachmentFiles(files)} attachments={[]} accept="image/*,.txt,.md,.docx,.pdf,.csv,.json,text/*,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" isLoading={isResponseLoading} locale={isZh ? "zh" : "en"} className="compact-ai-composer border-0 bg-transparent p-0 shadow-none">
+              <div className="ai-entry-composer-shell dashboard-panel mx-auto max-w-5xl rounded-[12px] p-4 shadow-sm">
+                <PromptInput value={input} onValueChange={setInput} onSubmit={handleSend} onAddAttachments={(files) => void handleAttachmentFiles(files)} attachments={attachments} onRemoveAttachment={removeAttachment} accept="image/*,.txt,.md,.docx,.pdf,.csv,.json,text/*,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" isLoading={isResponseLoading} locale={isZh ? "zh" : "en"} className="compact-ai-composer border-0 bg-transparent p-0 shadow-none">
                   {isAgentSelectionExplicit && selectedAgent ? (
                     <div className="px-1 pb-2 text-xs text-muted-foreground">
                       {copy.selectedAgent}: <span className="font-medium text-foreground">{selectedAgent.name}</span>
                     </div>
                   ) : null}
-                  <PromptInputHeader>{renderSelectedAttachments()}{knowledgeEnabled ? renderKnowledgeControl() : null}</PromptInputHeader>
+                  <PromptInputHeader>{renderSelectedAttachments()}</PromptInputHeader>
                   <div className="compact-ai-composer-row">
                     {renderAttachmentPicker()}
                     <PromptInputBody><PromptInputTextarea minRows={1} maxRows={3} submitMode="enter" aria-label={isZh ? "消息输入" : "Message input"} placeholder={workspacePlaceholder} className="text-base" /></PromptInputBody>
@@ -4313,7 +4307,7 @@ export function AiEntryWorkspace({
         </div>
 
         <div className="sticky bottom-0 z-20 shrink-0 bg-background/95 px-4 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/85 lg:px-6">
-          <div className="chat-composer mx-auto">
+          <div className="ai-entry-composer-shell chat-composer mx-auto">
             {!isConversationLoading && messages.length === 0 ? (
               <div className="mb-2">
                 <div className="flex flex-wrap gap-2">
@@ -4355,7 +4349,8 @@ export function AiEntryWorkspace({
               onValueChange={setInput}
               onSubmit={handleSend}
               onAddAttachments={(files) => void handleAttachmentFiles(files)}
-              attachments={[]}
+              attachments={attachments}
+              onRemoveAttachment={removeAttachment}
               accept="image/*,.txt,.md,.docx,.pdf,.csv,.json,text/*,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               isLoading={isResponseLoading}
               locale={isZh ? "zh" : "en"}
@@ -4371,7 +4366,7 @@ export function AiEntryWorkspace({
                   ) : null}
                 </div>
               ) : null}
-              <PromptInputHeader>{renderSelectedAttachments()}{knowledgeEnabled ? renderKnowledgeControl() : null}</PromptInputHeader>
+              <PromptInputHeader>{renderSelectedAttachments()}</PromptInputHeader>
               <div className="compact-ai-composer-row">
                 {renderAttachmentPicker()}
                 <PromptInputBody><PromptInputTextarea minRows={1} maxRows={3} submitMode="enter" aria-label={isZh ? "消息输入" : "Message input"} placeholder={workspacePlaceholder} className="composer-input" /></PromptInputBody>
