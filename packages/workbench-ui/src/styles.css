@@ -812,7 +812,7 @@
 .wb-ai-prompt-submit:focus-visible, .wb-ai-prompt-stop:focus-visible, .wb-ai-prompt-icon-button:focus-visible, .wb-ai-model-trigger:focus-visible { outline: 2px solid var(--wb-ring, #ffd000); outline-offset: 2px; }
 .wb-ai-prompt-submit:disabled { cursor: not-allowed; opacity: 0.45; }
 .wb-ai-prompt-attachment-action { position: relative; }
-.wb-ai-prompt-file-menu { position: fixed; bottom: auto; left: auto; z-index: 20; display: grid; min-width: 10rem; border: 1px solid var(--wb-border, #e5e5e0); border-radius: 0.65rem; background: var(--wb-card, #fff); box-shadow: 0 10px 24px rgb(17 17 17 / 12%); padding: 0.35rem; }
+.wb-ai-prompt-file-menu { z-index: 20; display: grid; min-width: 10rem; border: 1px solid var(--wb-border, #e5e5e0); border-radius: 0.65rem; background: var(--wb-card, #fff); box-shadow: 0 10px 24px rgb(17 17 17 / 12%); padding: 0.35rem; }
 .wb-ai-attachments { display: flex; gap: 0.5rem; min-width: 0; }
 .wb-ai-attachments-inline { flex-wrap: wrap; }
 .wb-ai-attachments-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr)); }

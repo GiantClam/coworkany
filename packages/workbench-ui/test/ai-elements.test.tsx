@@ -56,6 +56,13 @@ test("model selector keeps its menu anchored and opaque", () => {
   assert.match(styleSource, /\.wb-ai-model-popover \{[\s\S]*?position: fixed;[\s\S]*?background: #fff;/);
 });
 
+test("prompt action menus leave viewport collision placement to Radix", () => {
+  const styleSource = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+  const rule = styleSource.match(/\.wb-ai-prompt-file-menu \{([^}]*)\}/)?.[1] ?? "";
+  assert.doesNotMatch(rule, /position:\s*fixed/);
+  assert.doesNotMatch(rule, /(?:bottom|left):\s*auto/);
+});
+
 test("process primitives preserve plan, task, tool and reasoning semantics", () => {
   const markup = renderToStaticMarkup(<div><WorkbenchMessage role="assistant" label="AI response" timestamp="12:00"><WorkbenchReasoning text="thinking" status="running" locale="en" /><WorkbenchPlan title="Plan" steps={[{ id: "step-1", title: "Research", status: "completed" }]} status="completed" locale="en" /><WorkbenchTask title="Task" status="waiting" locale="en" /><WorkbenchTool toolName="search" toolCallId="tool-1" input={{ query: "ai" }} status="failed" locale="en" /></WorkbenchMessage></div>);
   assert.match(markup, /Reasoning/);
