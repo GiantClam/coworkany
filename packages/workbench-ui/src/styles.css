@@ -844,6 +844,11 @@
 .wb-ai-model-option > span:first-child { display: grid; min-width: 0; gap: 0.1rem; }
 .wb-ai-model-option small { color: var(--wb-muted-foreground, #777); font-size: 0.65rem; }
 .wb-ai-model-empty { color: var(--wb-muted-foreground, #777); padding: 1rem 0.5rem; text-align: center; }
+.wb-ai-model-reasoning-trigger { width: auto; min-width: 0; max-width: 15rem; }
+.wb-ai-model-reasoning-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-ai-model-reasoning-summary-compact { display: none; }
+.wb-ai-model-reasoning-content { width: min(22rem, calc(100vw - 1rem)); }
+.wb-ai-model-reasoning-back { display: flex; align-items: center; gap: .4rem; border: 0; background: transparent; color: var(--wb-foreground, #111); cursor: pointer; padding: .35rem .4rem; font: inherit; font-weight: 700; }
 .wb-ai-message { display: grid; gap: 0.45rem; border: 1px solid var(--wb-border, #e5e5e0); border-radius: 0.75rem; background: var(--wb-card, #fff); padding: 0.85rem 1rem; }
 .wb-ai-message-user { background: color-mix(in srgb, var(--wb-primary, #ffd000) 16%, var(--wb-card, #fff)); }
 .wb-ai-message-header { display: flex; align-items: center; gap: 0.65rem; color: var(--wb-muted-foreground, #777); font-size: 0.7rem; }
@@ -890,6 +895,9 @@
   .wb-ai-prompt-custom-tools { flex-basis: 100%; }
   .wb-ai-prompt-custom-tools .composer-ai-controls { width: 100%; }
   .wb-ai-model-selector { min-width: 8rem; }
+  .wb-ai-model-reasoning-trigger { max-width: 8.5rem; }
+  .wb-ai-model-reasoning-summary-full { display: none; }
+  .wb-ai-model-reasoning-summary-compact { display: inline; }
 }
 @media (max-width: 640px) {
   .wb-ai-prompt-footer, .wb-ai-prompt-toolbar { align-items: stretch; flex-direction: column; }

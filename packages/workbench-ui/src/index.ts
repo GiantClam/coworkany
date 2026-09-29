@@ -23,3 +23,4 @@ export * from "./workflow-ai-sidebar";
 export * from "./task-status";
 export { WorkflowCanvas as WorkbenchWorkflowCanvas } from "./workflow-canvas";
 export * from "./design-tokens";
+export * from "./model-reasoning-selector";
