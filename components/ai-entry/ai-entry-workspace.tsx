@@ -1931,13 +1931,21 @@ export function AiEntryWorkspace({
   }, [])
 
   const toggleKnowledgeDataset = useCallback((datasetId: number) => {
+    const removingLastDataset =
+      selectedKnowledgeDatasetIds.length === 1 && selectedKnowledgeDatasetIds[0] === datasetId
+    if (removingLastDataset) {
+      setKnowledgeEnabled(false)
+      setSelectedKnowledgeDatasetIds([])
+      return
+    }
+
     setKnowledgeEnabled(true)
     setSelectedKnowledgeDatasetIds((current) =>
       current.includes(datasetId)
         ? current.filter((item) => item !== datasetId)
         : [...current, datasetId],
     )
-  }, [])
+  }, [selectedKnowledgeDatasetIds])
 
   const disableKnowledge = useCallback(() => {
     setKnowledgeEnabled(false)

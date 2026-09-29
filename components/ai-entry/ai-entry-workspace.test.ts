@@ -55,6 +55,7 @@ test("AI Entry uses one compact AI Elements composer in both entry modes", () =>
   assert.match(source, /knowledgeEnabled \? Math\.max\(1, selectedKnowledgeDatasets\.length\) : 0/)
   assert.match(source, /event\.preventDefault\(\)[\s\S]*?setKnowledgePickerOpen\(true\)/)
   assert.match(source, /data-slot="knowledge-picker"/)
+  assert.match(source, /const removingLastDataset =[\s\S]*?setKnowledgeEnabled\(false\)[\s\S]*?setSelectedKnowledgeDatasetIds\(\[\]\)/)
   assert.match(source, /if \(attachments\.length === 0 && !isPreparingAttachments && !knowledgeEnabled\) return null[\s\S]*?<PromptInputHeader>/)
   assert.match(source, /enterpriseKnowledge:/)
   assert.match(source, /modelConfig:/)

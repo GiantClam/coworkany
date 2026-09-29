@@ -21,6 +21,8 @@ SWITCHABLE_MODEL_ID = "gpt-5.5"
 DEFAULT_NORMAL_MODEL_ID = "gpt-5.4"
 KNOWLEDGE_DATASET_ID = 101
 KNOWLEDGE_DATASET_NAME = "品牌规范"
+ATTACHMENT_ARTIFACT_ID = 501
+ATTACHMENT_NAME = "brief.txt"
 
 
 def expect(condition: bool, message: str):
@@ -191,6 +193,21 @@ def run():
                 ),
             )
 
+        def route_asset_upload(route):
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "data": {
+                            "artifact": {
+                                "id": ATTACHMENT_ARTIFACT_ID,
+                            }
+                        }
+                    }
+                ),
+            )
+
         def route_chat(route):
             try:
                 raw = route.request.post_data or "{}"
@@ -231,6 +248,7 @@ def run():
         page.route("**/api/ai/models", route_models)
         page.route("**/api/ai/agents", route_agents)
         page.route("**/api/knowledge/datasets", route_knowledge_datasets)
+        page.route("**/api/platform/assets/upload", route_asset_upload)
         page.route("**/api/ai/chat", route_chat)
 
         try:
@@ -289,11 +307,36 @@ def run():
             add_menu = page.locator("[data-slot='prompt-input-action-menu-content']:visible")
             expect(add_menu.get_by_text(re.compile(r"(upload|上传).*(file|文件)|(file|文件).*(upload|上传)", re.IGNORECASE)).count() >= 1, "add menu should expose file upload")
             expect(add_menu.get_by_text(re.compile(r"knowledge|知识库", re.IGNORECASE)).count() >= 1, "add menu should expose knowledge selection")
+
+            with page.expect_file_chooser() as file_chooser_info:
+                add_menu.get_by_text(re.compile(r"upload file|上传文件", re.IGNORECASE)).click()
+            file_chooser_info.value.set_files(
+                {
+                    "name": ATTACHMENT_NAME,
+                    "mimeType": "text/plain",
+                    "buffer": b"compact composer attachment",
+                }
+            )
+            attachment_chip = page.locator(".ai-entry-context-rail").get_by_text(ATTACHMENT_NAME, exact=True)
+            attachment_chip.wait_for(state="visible")
+            page.keyboard.press("Escape")
+
+            add_trigger.click()
+            add_menu = page.locator("[data-slot='prompt-input-action-menu-content']:visible")
             add_menu.get_by_text(re.compile(r"knowledge|知识库", re.IGNORECASE)).click()
             page.locator("[data-slot='knowledge-picker']:visible").wait_for(state="visible")
             save_debug(page, "01b-knowledge-picker")
             page.get_by_role("option", name=re.compile(re.escape(KNOWLEDGE_DATASET_NAME), re.IGNORECASE)).click()
-            expect(page.get_by_text(KNOWLEDGE_DATASET_NAME, exact=True).count() >= 1, "selected knowledge dataset should render a context chip")
+            context_rail = page.locator(".ai-entry-context-rail")
+            expect(context_rail.get_by_text(KNOWLEDGE_DATASET_NAME, exact=True).count() == 1, "selected knowledge dataset should render one context chip")
+            page.keyboard.press("Escape")
+            context_rail.get_by_role("button", name=re.compile(r"remove.*品牌规范|移除品牌规范", re.IGNORECASE)).click()
+            expect(context_rail.get_by_text(KNOWLEDGE_DATASET_NAME, exact=True).count() == 0, "removing the last dataset should remove its context chip")
+            expect(context_rail.get_by_text(re.compile(r"all enabled knowledge bases|全部已启用知识库", re.IGNORECASE)).count() == 0, "removing the last dataset must not expand selection to all knowledge bases")
+
+            add_trigger.click()
+            page.locator("[data-slot='prompt-input-action-menu-content']:visible").get_by_text(re.compile(r"knowledge|知识库", re.IGNORECASE)).click()
+            page.get_by_role("option", name=re.compile(re.escape(KNOWLEDGE_DATASET_NAME), re.IGNORECASE)).click()
             page.keyboard.press("Escape")
             expect(
                 page.locator("button:visible").filter(has_text=re.compile(r"knowledge|知识库", re.IGNORECASE)).count() == 0,
@@ -328,9 +371,13 @@ def run():
                 f"consulting reasoning switch not applied: {first_model_config}",
             )
             first_knowledge_config = first_request.get("enterpriseKnowledge", {})
+            first_attachments = first_request.get("attachments", [])
             expect(isinstance(first_knowledge_config, dict), "first request missing enterpriseKnowledge")
             expect(first_knowledge_config.get("enabled") is True, f"knowledge should be enabled: {first_knowledge_config}")
             expect(first_knowledge_config.get("datasetIds") == [KNOWLEDGE_DATASET_ID], f"knowledge dataset mismatch: {first_knowledge_config}")
+            expect(isinstance(first_attachments, list) and len(first_attachments) == 1, f"first request attachment mismatch: {first_attachments}")
+            expect(first_attachments[0].get("name") == ATTACHMENT_NAME, f"attachment name mismatch: {first_attachments}")
+            expect(first_attachments[0].get("artifactId") == ATTACHMENT_ARTIFACT_ID, f"attachment artifact mismatch: {first_attachments}")
 
             # Scenario 2: a business/Agent Platform agent starts from Grok too.
             page.evaluate("localStorage.clear()")
@@ -401,6 +448,7 @@ def run():
                 "agentConfig": first_agent_config,
                 "modelConfig": first_model_config,
                 "enterpriseKnowledge": first_knowledge_config,
+                "attachments": first_attachments,
             }
             result["second_request"] = {
                 "agentConfig": second_agent_config,
