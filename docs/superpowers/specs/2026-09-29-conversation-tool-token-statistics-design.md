@@ -1,240 +1,240 @@
-# Conversation Tool and Token Statistics Design
+# 对话工具调用与 Token 统计设计
 
-Date: 2026-09-29
+日期：2026-09-29
 
-## Summary
+## 概述
 
-Add two related desktop features:
+在桌面端新增两个相关功能：
 
-1. Show tool-call and token statistics for every assistant turn.
-2. Add a global usage page that summarizes models, tool calls, capability executions, tokens, and reported cost.
+1. 在每轮助手回复中展示工具调用与 Token 消耗统计。
+2. 新增全局用量统计页，汇总模型、工具调用、能力执行、Token 与 Provider 返回成本。
 
-The design uses normalized invocation and usage records as the source of truth. The conversation UI presents a compact per-turn summary, while `/dashboard/usage` provides 7-day, 30-day, and all-time analysis. Dify and server-side billing are out of scope.
+设计以标准化的调用记录和用量记录为事实来源。对话界面提供紧凑的单轮摘要；`/dashboard/usage` 提供近 7 天、近 30 天和全部历史分析。Dify 和服务端计费不在本次范围内。
 
-## Goals
+## 目标
 
-- Make each assistant turn auditable without interrupting conversation reading.
-- Distinguish model-initiated tool calls from workflow and capability executions.
-- Report only token values supplied by the Provider or runtime.
-- Preserve partial statistics for failed, cancelled, and interrupted runs.
-- Keep live values, restored conversation history, task evidence, and global statistics consistent.
-- Support AI, Agent, Writer/PPT, workflow, media, and PPT capability runs in the desktop application.
+- 在不打断对话阅读的前提下，让每轮助手执行可审计。
+- 区分模型主动发起的工具调用与工作流/能力执行。
+- 仅展示 Provider 或运行时实际返回的 Token 数据。
+- 保留失败、取消和中断运行的部分统计。
+- 保证实时值、恢复后的会话历史、任务证据和全局统计一致。
+- 覆盖桌面端 AI、Agent、Writer/PPT、工作流、媒体和 PPT 能力运行。
 
-## Non-goals
+## 非目标
 
-- Dify integration.
-- Billing, invoices, credit balances, or quota enforcement.
-- Estimating missing token counts.
-- CSV export, budget alerts, forecasting, or editable model price tables in the first release.
-- Backfilling tool counts from legacy free-form event payloads.
+- 接入 Dify。
+- 账单、发票、额度余额或配额限制。
+- 估算缺失的 Token 数量。
+- 首个版本不提供 CSV 导出、预算告警、消耗预测或可编辑模型价格表。
+- 不从旧版自由格式事件载荷中反推工具调用次数。
 
-## Product Decisions
+## 产品决策
 
-### Invocation categories
+### 调用分类
 
-Statistics expose two independent categories:
+统计展示两个独立类别：
 
-- `model_tool`: a tool call initiated by the model, including local file tools, shell tools, search, Skills, and MCP tools.
-- `capability`: an actual workflow node, media action, PPT engine, or other capability execution.
+- `model_tool`：模型主动发起的工具调用，包括本地文件工具、Shell、搜索、Skill 和 MCP 工具。
+- `capability`：实际执行的工作流节点、媒体动作、PPT 引擎或其他能力。
 
-A model tool call is counted once per stable `toolCallId`. Its started, completed, failed, blocked, and rejected events are state transitions for the same invocation.
+模型工具调用按稳定的 `toolCallId` 计数一次。其 started、completed、failed、blocked 和 rejected 事件都是同一次调用的状态变化。
 
-A capability execution is counted by actual attempt. The identity is derived from `runId`, `nodeKey` or capability key, and an attempt or idempotency key. A real retry therefore counts as another execution, while repeated lifecycle events for the same attempt do not.
+能力执行按实际尝试次数计数，身份由 `runId`、`nodeKey` 或能力键，以及 attempt 或 idempotency key 共同确定。因此，真实重试会增加一次执行；同一尝试的重复生命周期事件不会重复计数。
 
-Failed and rejected invocations remain part of the total. The UI also exposes status breakdowns so totals are not mistaken for successful executions.
+失败和拒绝的调用仍计入总数。界面同时展示状态分布，避免用户把总调用数误认为成功执行数。
 
-### Token and cost semantics
+### Token 与成本语义
 
-- Input and output tokens are recorded when supplied by the Provider or runtime.
-- Cached input and reasoning tokens are recorded only when supplied.
-- Missing fields remain unknown and render as `—` or “Not provided”; they are never converted to zero for a per-run detail.
-- Provider-reported cost and locally estimated cost remain separate fields and are never summed together.
-- Invalid negative, non-finite, or malformed values are rejected and produce a diagnostic warning.
+- Provider 或运行时返回 Input、Output Token 时才记录对应数据。
+- Provider 返回 Cache、Reasoning Token 时才记录对应数据。
+- 缺失字段保持未知，在界面中展示为 `—` 或“未提供”；单次运行详情中不得将其转换为 0。
+- Provider 返回成本与本地估算成本保持为两个独立字段，禁止相加。
+- 负数、非有限数或格式错误的数值不进入统计，并产生诊断警告。
 
-Usage events must declare aggregation semantics:
+用量事件必须声明聚合语义：
 
-- `delta`: add the event to the run total. OpenCode `step-finish` usage uses this mode.
-- `snapshot`: treat the event as a cumulative value and use the latest snapshot for its scope.
+- `delta`：将本事件累加到运行总量。OpenCode 的 `step-finish` 用量使用此模式。
+- `snapshot`：将本事件视为累计值，在对应 scope 内使用最新快照。
 
-Usage events also declare a scope:
+用量事件同时声明作用域：
 
-- `step`: usage belongs to one model step.
-- `run`: usage describes the whole run.
+- `step`：用量属于一个模型步骤。
+- `run`：用量描述整次运行。
 
-This prevents double counting when a Provider emits a cumulative run snapshot after individual step deltas.
+这一设计可避免 Provider 在逐步增量之后又发送整轮累计快照时发生重复计算。
 
-### Time range
+### 时间范围
 
-The global page defaults to the previous 30 days and provides 7-day, 30-day, and all-time ranges. Stored timestamps are UTC; grouping and labels use the user's desktop time zone.
+全局统计页默认展示近 30 天，并提供近 7 天、近 30 天和全部历史。时间戳以 UTC 存储，分桶和界面标签使用用户桌面端所在时区。
 
-## UX Design
+## UX 设计
 
-### Per-turn compact statistics
+### 每轮紧凑统计条
 
-The assistant message displays a compact statistics row after its text, artifacts, and previews and before message actions:
-
-```text
-GPT-5.6 Sol  ·  Tools 4  ·  Capabilities 1  ·  12.8K tokens  ⌄
-```
-
-The row follows these rules:
-
-- Values update during execution with a subtle loading state.
-- The completed run replaces live values with the persisted aggregate.
-- The entire row is keyboard and pointer actionable.
-- Enter, Space, or click expands details.
-- No row is rendered when no trustworthy metric is available.
-- Unknown values are omitted from the compact row and shown as “Not provided” in details.
-
-Expanded content shows:
-
-- Provider and model.
-- Model tool totals grouped by status and tool name.
-- Capability totals grouped by status and capability name.
-- Input, output, cached input, and reasoning tokens.
-- Provider-reported cost and estimated cost as separately labeled values.
-- A “View usage details” action that opens `/dashboard/usage` filtered to the current `runId`.
-
-The shared implementation composes the existing AI Elements `Context` component for token details with a new `RunMetrics` component for model, tool, and capability statistics. Route-specific message surfaces must not implement their own statistics UI.
-
-### Global usage page
-
-Add `/dashboard/usage` under the sidebar's Resources section with the localized label “用量统计” / “Usage”.
-
-The approved layout is overview first, followed by trends, distributions, and a detailed ledger.
-
-#### Filters
-
-- Date range: 7 days, 30 days, all time.
-- Model.
-- Provider.
-- Source: conversation, Agent, workflow, media, or PPT.
-- Agent or conversation search.
-- Optional `runId` supplied by a per-turn deep link.
-
-#### Overview metrics
-
-- Total tokens.
-- Model tool calls.
-- Workflow/capability executions.
-- Provider-reported cost.
-
-For 7-day and 30-day ranges, cards may show comparison with the immediately preceding equal-length period. All-time mode does not show a period comparison.
-
-#### Trends
-
-- Input/output token stacked trend.
-- Model-tool/capability invocation trend.
-- A date bucket with no records may render as zero. A missing field inside an existing record remains unknown and must not silently become zero.
-
-#### Distributions
-
-- Model table: run count, tokens, tool calls, capabilities, and reported cost.
-- Tool ranking: tool name, invocation count, and success rate.
-- Capability ranking: capability name, execution count, and success rate.
-
-#### Per-run ledger
-
-Columns are time, conversation or task, source, model, model tools, capabilities, tokens, cost, and status.
-
-- Conversation rows navigate to the originating conversation and anchor the associated assistant message.
-- Workflow and media rows without a conversation navigate to Task Center evidence.
-- Results are paginated and sorted newest first.
-
-## Architecture
-
-### Alternatives considered
-
-1. Derive all statistics by scanning `run_events`. This minimizes schema changes but is slow, couples metrics to historical event shapes, and makes replay deduplication fragile.
-2. Store only one summary JSON per run. This makes reads simple but removes auditability and cannot explain retries, failures, or aggregation mistakes.
-3. Store normalized invocation and usage records and derive run/query summaries. This adds a small schema and query layer but provides accurate, testable, and extensible statistics.
-
-Use option 3.
-
-### Data flow
+助手消息在正文、产物和预览之后、消息操作按钮之前展示紧凑统计条：
 
 ```text
-Runtime / Provider events
-        ↓
-Statistics normalizer
-        ↓
-Invocation accumulator + usage accumulator
-        ↓
-SQLite normalized records
-        ↓
-Run metrics query service
-        ├─ Live and restored assistant-turn statistics
-        ├─ Global usage page
-        └─ Task Center evidence
+GPT-5.6 Sol  ·  工具 4  ·  能力执行 1  ·  12.8K Token  ⌄
 ```
 
-### Invocation records
+统计条遵循以下规则：
 
-Add a `run_invocations` table with these logical fields:
+- 执行期间实时更新，并展示轻量加载状态。
+- 运行完成后，以持久化聚合结果替换实时值。
+- 整条内容支持键盘和指针操作。
+- 按 Enter、Space 或点击可展开详情。
+- 没有可信统计数据时不渲染统计条。
+- 紧凑统计条省略未知字段；展开详情中显示“未提供”。
 
-| Field | Purpose |
+展开内容包括：
+
+- Provider 与模型。
+- 模型工具总数、状态分布和按工具名称分组的数据。
+- 能力执行总数、状态分布和按能力名称分组的数据。
+- Input、Output、Cache、Reasoning Token。
+- 分别标注的 Provider 返回成本和本地估算成本。
+- “查看统计详情”操作：打开 `/dashboard/usage` 并按当前 `runId` 自动筛选。
+
+共享实现复用现有 AI Elements `Context` 组件展示 Token 详情，并新增共享 `RunMetrics` 组合组件承载模型、工具和能力统计。各路由消息界面不得自行实现独立统计 UI。
+
+### 全局用量统计页
+
+在侧边栏“资源入口”中新增 `/dashboard/usage`，中文名称为“用量统计”，英文名称为“Usage”。
+
+页面采用已确认的结构：概览优先，其后依次为趋势、分布和逐轮明细。
+
+#### 筛选条件
+
+- 时间范围：近 7 天、近 30 天、全部。
+- 模型。
+- Provider。
+- 来源：对话、Agent、工作流、媒体或 PPT。
+- Agent 或会话搜索。
+- 每轮统计深链传入的可选 `runId`。
+
+#### 概览指标
+
+- 总 Token。
+- 模型工具调用次数。
+- 工作流/能力执行次数。
+- Provider 返回成本。
+
+近 7 天和近 30 天范围可以展示与前一个同长度周期的变化。全部历史模式不展示环比。
+
+#### 趋势
+
+- Input/Output Token 堆叠趋势。
+- 模型工具/能力执行调用趋势。
+- 某个日期桶完全没有记录时可以显示为 0；已有记录中的缺失字段仍保持未知，不能被静默转换为 0。
+
+#### 分布
+
+- 模型表：运行次数、Token、工具调用、能力执行和 Provider 返回成本。
+- 工具排行：工具名称、调用次数和成功率。
+- 能力排行：能力名称、执行次数和成功率。
+
+#### 逐轮明细
+
+列包括：时间、会话或任务、来源、模型、模型工具数、能力执行数、Token、成本和状态。
+
+- 对话记录跳转到原始会话，并定位到对应助手消息。
+- 没有对话页面的工作流和媒体记录跳转到任务中心的运行证据。
+- 数据分页加载，默认按时间倒序排列。
+
+## 架构设计
+
+### 已评估方案
+
+1. 扫描 `run_events` 动态推导全部统计。此方案数据库变更少，但查询慢、与历史事件格式强耦合，并且事件重放去重容易出错。
+2. 每次运行仅保存一个汇总 JSON。此方案读取简单，但缺少审计能力，无法解释重试、失败或聚合错误。
+3. 保存标准化调用与用量明细，并由此生成运行和查询汇总。此方案增加少量数据结构和查询层，但统计准确、可测试、可审计，也方便后续扩展。
+
+采用方案 3。
+
+### 数据流
+
+```text
+Runtime / Provider 事件
+        ↓
+统计归一化器
+        ↓
+调用累加器 + 用量累加器
+        ↓
+SQLite 标准化记录
+        ↓
+运行统计查询服务
+        ├─ 实时与历史助手消息统计
+        ├─ 全局用量统计页
+        └─ 任务中心运行证据
+```
+
+### 调用记录
+
+新增 `run_invocations` 表，包含以下逻辑字段：
+
+| 字段 | 用途 |
 | --- | --- |
-| `id` | Local row identity |
-| `run_id` | Owning run |
-| `invocation_id` | Stable runtime or synthesized invocation identity |
-| `category` | `model_tool` or `capability` |
-| `name` | Tool or capability display key |
-| `status` | `running`, `completed`, `failed`, or `rejected` |
-| `attempt` | Actual attempt number, default `1` |
-| `started_at` | First observed start time |
-| `finished_at` | Terminal time when available |
-| `created_at` / `updated_at` | Persistence timestamps |
+| `id` | 本地记录标识 |
+| `run_id` | 所属运行 |
+| `invocation_id` | 运行时提供或本地合成的稳定调用标识 |
+| `category` | `model_tool` 或 `capability` |
+| `name` | 工具或能力展示键 |
+| `status` | `running`、`completed`、`failed` 或 `rejected` |
+| `attempt` | 实际尝试序号，默认为 `1` |
+| `started_at` | 首次观察到的开始时间 |
+| `finished_at` | 终态时间（如果存在） |
+| `created_at` / `updated_at` | 持久化时间戳 |
 
-The unique key is `(run_id, category, invocation_id, attempt)`.
+唯一键为 `(run_id, category, invocation_id, attempt)`。
 
-The merge policy is monotonic: a terminal state cannot be overwritten by a delayed running event. Repeated terminal events update only missing metadata and do not create another invocation.
+状态合并必须保持单调：终态不得被迟到的 running 事件覆盖。重复终态事件只能补充缺失元数据，不能创建新的调用记录。
 
-The table must not store tool arguments, tool output, prompts, API keys, file contents, or other sensitive payloads.
+统计表不得保存工具参数、工具输出、Prompt、API Key、文件内容或其他敏感载荷。
 
-### Usage records
+### 用量记录
 
-Extend the existing `usage_records` table with:
+扩展现有 `usage_records` 表，新增：
 
-- `usage_id` for idempotent replay handling.
-- `reasoning_tokens`.
-- `cached_input_tokens`.
-- `aggregation`: `delta` or `snapshot`.
-- `scope`: `step` or `run`.
-- Optional source step identity when supplied by the runtime.
+- `usage_id`：处理事件重放时的幂等身份。
+- `reasoning_tokens`。
+- `cached_input_tokens`。
+- `aggregation`：`delta` 或 `snapshot`。
+- `scope`：`step` 或 `run`。
+- 运行时提供时记录可选的来源步骤身份。
 
-The unique usage identity is scoped to a run. Existing `idempotency_key` remains accepted during migration and maps to `usage_id` when available.
+用量唯一身份在单次运行范围内生效。迁移期间继续接受现有 `idempotency_key`；存在 `usage_id` 时将其映射为新的唯一身份。
 
-### Query projection
+### 查询投影
 
-`RunMetrics` is a query projection, not a second source of truth. It contains:
+`RunMetrics` 是查询投影，不是第二份事实数据，包含：
 
-- Run, conversation, source, Provider, and model identity.
-- Tool and capability totals plus status breakdowns.
-- Grouped counts by tool/capability name.
-- Input, output, cached input, and reasoning token totals.
-- Provider and estimated cost.
-- `complete | partial | unavailable` data completeness.
+- 运行、会话、来源、Provider 和模型身份。
+- 工具与能力总数及其状态分布。
+- 按工具/能力名称分组的计数。
+- Input、Output、Cache、Reasoning Token 总量。
+- Provider 返回成本和本地估算成本。
+- `complete | partial | unavailable` 数据完整性状态。
 
-Add these client boundaries:
+新增以下客户端边界：
 
 ```ts
 metrics.getRun(runId): Promise<RunMetrics>
 metrics.query(filters): Promise<MetricsQueryResult>
 ```
 
-`metrics.query` returns overview totals, prior-period comparison, time-series buckets, model/tool/capability breakdowns, and one page of run rows. UI code does not parse raw event JSON.
+`metrics.query` 返回概览总量、前一周期对比、时间序列桶、模型/工具/能力分布，以及一页运行明细。UI 不直接解析原始事件 JSON。
 
-### Message integration
+### 消息集成
 
-During a live run, an in-memory accumulator updates the assistant's typed metrics projection from normalized events. On terminal status and history restoration, the SQLite aggregate becomes authoritative.
+运行期间，内存累加器根据标准化事件更新助手消息的类型化统计投影。运行进入终态或历史恢复时，以 SQLite 聚合结果为准。
 
-An assistant message retains its `runId` and persists a lightweight typed `data-runMetrics` display snapshot to prevent layout flicker. The snapshot is a cache: history loading requests `metrics.getRun(runId)` and replaces the snapshot when the authoritative result is available.
+助手消息保留 `runId`，并持久化一个轻量的类型化 `data-runMetrics` 展示快照，避免历史加载时发生布局闪烁。该快照只是缓存：加载历史时请求 `metrics.getRun(runId)`，获得事实结果后替换快照。
 
-The existing `data-usage` rendering remains compatible. The final shared message component combines all usage rows for the run instead of assuming that the last usage event is the whole run total.
+现有 `data-usage` 渲染保持兼容。最终共享消息组件需要合并整次运行的全部 usage 记录，不能假定最后一个 usage 事件就是整轮总量。
 
-## Runtime Event Contract
+## 运行时事件契约
 
-Normalize runtime events to two stable metric inputs:
+运行时事件统一归一化为两类稳定统计输入：
 
 ```ts
 type InvocationMetricEvent = {
@@ -264,80 +264,80 @@ type UsageMetricEvent = {
 };
 ```
 
-Existing OpenCode `tool_call` events map to `model_tool`. Workflow node attempts, media executions, and PPT engine executions map to `capability`. A lifecycle event is normalized once before it reaches message rendering or storage.
+现有 OpenCode `tool_call` 事件映射为 `model_tool`；工作流节点尝试、媒体执行和 PPT 引擎执行映射为 `capability`。每个生命周期事件在进入消息渲染或存储之前只归一化一次。
 
-## Failure Handling
+## 异常处理
 
-- Event replay is idempotent through stable invocation and usage identities.
-- Out-of-order invocation events use monotonic status merging.
-- Failed, cancelled, or interrupted runs retain partial metrics and expose `partial` completeness.
-- A statistics query failure never prevents the conversation message from rendering or the Agent from running.
-- The per-turn row may show “Statistics unavailable” while preserving the assistant response.
-- Unknown Provider/model identity falls back to the model locked at run launch, then to “Unknown model”.
-- Aggregation rejects invalid numeric values and emits a diagnostic warning without failing the run.
-- Queries aggregate in SQLite and paginate run rows to avoid loading full history into the renderer.
+- 通过稳定的 invocation 和 usage identity 保证事件重放幂等。
+- 乱序调用事件使用单调状态合并策略。
+- 失败、取消或中断运行保留部分统计，并将完整性标记为 `partial`。
+- 统计查询失败不得阻止对话消息渲染，也不得影响 Agent 运行。
+- 每轮统计条可以显示“统计暂不可用”，但必须保留助手回复。
+- Provider/模型身份缺失时，优先使用运行启动时锁定的模型，仍缺失则显示“未知模型”。
+- 聚合器拒绝非法数值，产生诊断警告，但不让运行失败。
+- 查询在 SQLite 中完成聚合，运行明细分页返回，避免将全部历史加载到渲染进程。
 
-## Migration
+## 数据迁移
 
-- Create `run_invocations` and its unique and query indexes.
-- Add usage columns and indexes for timestamp, model, Provider, and run identity.
-- Mark legacy usage records as partial.
-- Preserve existing input, output, and cost data exactly.
-- Do not infer legacy tool or capability counts from unversioned JSON event payloads.
-- Keep Task Center as the per-run execution evidence surface; the new page owns cross-run analytics.
+- 创建 `run_invocations` 及其唯一索引和查询索引。
+- 为 usage 表增加新字段，并为时间、模型、Provider 和运行身份建立索引。
+- 将旧版用量记录标记为 partial。
+- 原样保留已有 Input、Output 和成本数据。
+- 不从未版本化的 JSON 事件载荷中推断旧版工具或能力调用次数。
+- 任务中心继续承担单次运行执行证据展示；新增统计页负责跨运行分析。
 
-## Verification
+## 验证方案
 
-### Unit tests
+### 单元测试
 
-- Normalize model tools, capability attempts, usage deltas, and usage snapshots.
-- Deduplicate lifecycle transitions and replayed events.
-- Count real retries as separate attempts.
-- Preserve terminal states when events arrive out of order.
-- Aggregate input, output, cached input, reasoning, reported cost, and estimated cost correctly.
-- Keep unknown fields unknown.
+- 归一化模型工具、能力尝试、usage delta 和 usage snapshot。
+- 去重生命周期状态变化和重放事件。
+- 将真实重试计为不同尝试。
+- 事件乱序时保持终态。
+- 正确聚合 Input、Output、Cache、Reasoning、Provider 返回成本和本地估算成本。
+- 保持未知字段为未知。
 
-### Storage and query tests
+### 存储与查询测试
 
-- Upgrade legacy databases without losing usage data.
-- Enforce invocation and usage idempotency.
-- Query 7-day, 30-day, all-time, model, Provider, source, conversation, and run filters.
-- Validate local-time date bucketing around time-zone boundaries.
-- Paginate and sort run rows.
+- 升级旧数据库且不丢失用量数据。
+- 强制保证 invocation 和 usage 幂等。
+- 验证近 7 天、近 30 天、全部、模型、Provider、来源、会话和运行筛选。
+- 验证时区边界附近的本地日期分桶。
+- 验证明细分页与排序。
 
-### Protocol and UI tests
+### 协议与 UI 测试
 
-- Verify Runtime → Workbench Client → typed message event mapping.
-- Render live, completed, partial, failed, and unavailable per-turn statistics.
-- Verify keyboard expansion and localized labels.
-- Verify deep links to a conversation message or Task Center evidence.
-- Verify the global page overview, trends, distributions, filters, empty states, and pagination.
+- 验证 Runtime → Workbench Client → 类型化消息事件映射。
+- 渲染实时、完成、部分、失败和不可用的每轮统计。
+- 验证键盘展开和中英文标签。
+- 验证跳转到会话消息或任务中心运行证据的深链。
+- 验证全局统计页的概览、趋势、分布、筛选、空状态和分页。
 
-### Integration and regression tests
+### 集成与回归测试
 
-- Run a conversation with multiple model steps and tool calls; verify no double counting.
-- Reload the conversation and compare restored values with live values.
-- Compare the per-turn summary, Task Center evidence, and global usage page for the same run.
-- Cover AI, Agent, Writer/PPT, workflow, media, and PPT engine entry points.
+- 运行包含多个模型步骤和工具调用的对话，验证不会重复计数。
+- 重新加载会话，比较恢复值与实时值。
+- 比较同一运行在每轮摘要、任务中心证据和全局统计页中的数据。
+- 覆盖 AI、Agent、Writer/PPT、工作流、媒体和 PPT 引擎入口。
 
-Manual acceptance is limited to visual density, chart readability, message anchoring, and comparison against a real Provider's reported values.
+人工验收仅保留视觉密度、图表可读性、消息定位，以及与真实 Provider 返回数据的核对。
 
-## Delivery Sequence
+## 交付顺序
 
-1. Add metric contracts, runtime normalization, database migration, aggregation, and query APIs.
-2. Add the shared compact per-turn statistics component and history restoration.
-3. Add `/dashboard/usage` with overview, trends, distributions, filters, and run ledger.
-4. Run cross-entry automated regression and performance verification, then complete the remaining visual and real-Provider manual checks.
+1. 增加统计契约、运行时归一化、数据库迁移、聚合和查询 API。
+2. 增加共享的每轮紧凑统计组件和历史恢复。
+3. 增加 `/dashboard/usage` 的概览、趋势、分布、筛选和逐轮明细。
+4. 执行全入口自动化回归与性能验证，再完成人工视觉和真实 Provider 核对。
 
-## Acceptance Criteria
+## 验收标准
 
-- Every supported assistant turn with trustworthy metrics shows one compact statistics row.
-- Started and completed events for one tool call count once.
-- A true capability retry counts as another execution.
-- Multiple OpenCode step usage events aggregate without losing earlier steps.
-- A run-level snapshot is not added on top of equivalent step deltas.
-- Missing token categories display as unavailable rather than zero.
-- Live, restored, Task Center, and global totals agree for the same run.
-- The usage page defaults to 30 days and supports 7 days and all time.
-- Statistics failures do not block conversations, workflows, or media execution.
-- No sensitive tool input, output, or credentials are added to metric storage.
+- 每个包含可信统计的受支持助手轮次只显示一个紧凑统计条。
+- 同一工具调用的 started 和 completed 事件只计数一次。
+- 一次真实能力重试增加一次执行计数。
+- 多个 OpenCode step usage 事件完整聚合，不丢失前序步骤。
+- run-level snapshot 不与等价的 step delta 重复累加。
+- 缺失的 Token 类别显示为不可用，而不是 0。
+- 同一运行的实时统计、恢复后统计、任务中心统计和全局统计一致。
+- 用量统计页默认近 30 天，并支持近 7 天和全部历史。
+- 统计功能失败不得阻断对话、工作流或媒体执行。
+- 统计存储不得新增任何敏感工具输入、输出或凭据。
