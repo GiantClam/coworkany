@@ -220,8 +220,15 @@ test("normalizes tools, usage, and session errors from serve", () => {
     payload: { type: "session.error", properties: { sessionID: "session-serve", error: { message: "broken" } } },
   }, state);
   assert.deepEqual(tool.events, [{ event: "tool_event", tool: "shell", toolCallId: "tool-1", phase: "completed", message: "done", runId: "run-serve" }]);
-  assert.deepEqual(usage.events, [{ event: "usage", inputTokens: 3, outputTokens: 5, costUsd: 0.01, runId: "run-serve" }]);
+  assert.deepEqual(usage.events, [{ event: "usage", usageId: "session-serve:message:step:3:5:0.01", inputTokens: 3, outputTokens: 5, costUsd: 0.01, aggregation: "delta", scope: "step", runId: "run-serve" }]);
   assert.deepEqual(failure.terminalError, { code: "opencode_error", message: "broken", retryable: true });
+});
+
+test("normalizes cache and reasoning usage with a stable step identity", () => {
+  const result = normalizeOpenCodeServeEvent("run-usage-detail", {
+    payload: { type: "message.part.updated", properties: { sessionID: "session-usage", part: { id: "usage-1", messageID: "assistant-1", type: "step-finish", tokens: { input: 11, output: 7, cache: { read: 5 }, reasoning: 3 }, cost: 0.02 } } },
+  }, createOpenCodeServeEventState());
+  assert.deepEqual(result.events[0], { event: "usage", usageId: "usage-1", inputTokens: 11, outputTokens: 7, cachedInputTokens: 5, reasoningTokens: 3, costUsd: 0.02, aggregation: "delta", scope: "step", runId: "run-usage-detail" });
 });
 
 test("extracts completed PPT preview servers from loopback tool output", () => {

@@ -28,6 +28,7 @@ const ENTRY_CONTRACTS: Readonly<Record<string, EntryContract>> = {
   "/dashboard/agent-platform": { surface: "library" },
   "/dashboard/workflows": { surface: "workflow" },
   "/dashboard/tasks": { surface: "library" },
+  "/dashboard/usage": { surface: "library" },
   "/dashboard/assets": { surface: "library" },
   "/dashboard/knowledge-base": { surface: "library" },
   "/dashboard/video": { surface: "media" },

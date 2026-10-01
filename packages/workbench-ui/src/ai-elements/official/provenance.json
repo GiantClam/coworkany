@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/vercel/ai-elements",
+  "commit": "6a9d5b1822ffb10bba4bd97175f01edd7d8651cd",
+  "license": "Apache-2.0",
+  "upstreamSha256": {
+    "message.tsx": "19c7755740e116f221e4247f7b6d4f20b57a44e4c4fcf66d2db5e1f111476509",
+    "reasoning.tsx": "f138cddde35854f73632ff51d48230f8d6e16e0a49a74b44a93b51993a65550e",
+    "tool.tsx": "5b520e0c33792cba0ceb04e1cb18c69b212cffacdb52d7297e292c7af568dda4",
+    "conversation.tsx": "d7ac46f1e7bc8e46bc49f67c768fc93aebdf17d816397cb35a40deff7173e875"
+  },
+  "adaptedSha256": {
+    "message.tsx": "99723bb7385622b1d1fd3c10f377543acc018fa3daea3871a78c7cd35b463afd",
+    "reasoning.tsx": "07ccc81674c02f32e9f308379e1ebcb5d637b8e93ba8e7572e390d550cd7d296",
+    "tool.tsx": "cae1997ea6dc4f02c30b2fd2f47634183ba11c84bbc992d2952fd4008f30bee6",
+    "conversation.tsx": "a1b07240d5bd252c35c1d2bbdf244e6ffe5a9ee9f52fb558d99179be73de46ba"
+  },
+  "adaptations": [
+    "Reproducible import/type adaptations in scripts/ai-elements-port.mjs; original markup, classes and lifecycle retained.",
+    "Existing desktop UIMessage types replace ai type-only imports; installed Radix controllable-state receives an undefined fallback.",
+    "Optional Streamdown plugins and motion are unavailable: Streamdown default plugins, plain-code fallback, native tooltip fallback and CSS shimmer use installed dependencies only.",
+    "Business classes, metadata, localization and scroll callbacks live exclusively in message-adapters.tsx."
+  ]
+}

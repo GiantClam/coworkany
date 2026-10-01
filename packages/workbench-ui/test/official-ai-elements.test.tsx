@@ -148,7 +148,7 @@ test("process primitives use composable collapsible semantics", () => {
 
 test("tool defaults to a quiet collapsed header after completion", () => {
   const markup = renderToStaticMarkup(<Tool toolName="search" toolCallId="tool-quiet" output="ok" status="completed" locale="en" />);
-  assert.match(markup, /data-state="closed"[^>]*data-status="completed"[^>]*data-slot="tool"/);
+  assert.match(markup, /<div(?=[^>]*data-slot="tool")(?=[^>]*data-state="closed")(?=[^>]*data-status="completed")[^>]*>/);
   assert.match(markup, /data-tool-name="search"/);
   assert.match(markup, /Completed/);
   assert.doesNotMatch(markup, /wb-ai-process-spinner/);
@@ -184,5 +184,5 @@ test("official message toolbar and actions expose the interaction contract", () 
 
 test("message response keeps incomplete Markdown parsing configurable for streaming", () => {
   const markup = renderToStaticMarkup(<MessageResponse content="```ts\nconst answer = 1" streaming parseIncompleteMarkdown={false} />);
-  assert.match(markup, /data-slot="message-response"/);
+  assert.match(markup, /class="[^"]*ai-elements-message-response/);
 });

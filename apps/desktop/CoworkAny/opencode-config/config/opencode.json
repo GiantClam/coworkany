@@ -1,0 +1,30 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "disabled",
+  "autoupdate": false,
+  "skills": {
+    "paths": [
+      "/Users/beihuang/Documents/github/coworkany/apps/desktop/CoworkAny/opencode-config/config/skills"
+    ]
+  },
+  "model": "pptoken_grok/grok-4.6",
+  "permission": {
+    "*": "allow",
+    "question": "allow"
+  },
+  "provider": {
+    "pptoken_grok": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "pptoken_grok",
+      "options": {
+        "baseURL": "https://example.com/v1",
+        "apiKey": "{env:PPTOKEN_GROK_API_KEY}"
+      },
+      "models": {
+        "grok-4.6": {
+          "name": "grok-4.6"
+        }
+      }
+    }
+  }
+}

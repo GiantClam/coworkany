@@ -1,9 +1,9 @@
 use rusqlite::{params, Connection, OpenFlags, Result, TransactionBehavior};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Digest;
 use std::fs;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -21,11 +21,12 @@ CREATE TABLE IF NOT EXISTS identity (id INTEGER PRIMARY KEY CHECK (id = 1), devi
 CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), title TEXT NOT NULL, opencode_session_id TEXT, agent_id TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id), role TEXT NOT NULL, content TEXT NOT NULL, parts_json TEXT, metadata_json TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, conversation_id TEXT REFERENCES conversations(id), status TEXT NOT NULL, model TEXT, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT);
+CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, conversation_id TEXT REFERENCES conversations(id), status TEXT NOT NULL, model TEXT, source TEXT, assistant_message_id TEXT, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT);
 CREATE TABLE IF NOT EXISTS run_events (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id), sequence INTEGER NOT NULL, event_type TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(run_id, sequence));
+CREATE TABLE IF NOT EXISTS run_invocations (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id), invocation_id TEXT NOT NULL, category TEXT NOT NULL, name TEXT NOT NULL, status TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 1, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(run_id, category, invocation_id, attempt));
 CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), relative_path TEXT NOT NULL, mime_type TEXT NOT NULL, byte_length INTEGER NOT NULL, sha256 TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS deleted_artifacts (id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS usage_records (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT REFERENCES runs(id), provider TEXT, model TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER, provider_cost REAL, estimated_cost REAL, idempotency_key TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS usage_records (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT REFERENCES runs(id), usage_id TEXT, provider TEXT, model TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER, cached_input_tokens INTEGER, reasoning_tokens INTEGER, provider_cost REAL, estimated_cost REAL, aggregation TEXT NOT NULL DEFAULT 'delta', scope TEXT NOT NULL DEFAULT 'step', idempotency_key TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS workflows (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), name TEXT NOT NULL, definition_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS workflow_revisions (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflows(id), revision INTEGER NOT NULL, definition_json TEXT NOT NULL, definition_hash TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(workflow_id, revision));
 CREATE TABLE IF NOT EXISTS workflow_ai_operation_groups (workflow_id TEXT NOT NULL REFERENCES workflows(id), id TEXT NOT NULL, conversation_id TEXT NOT NULL, base_revision INTEGER NOT NULL, result_revision INTEGER, commands_json TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(workflow_id, id));
@@ -81,6 +82,21 @@ fn initialize_schema(path: &Path) -> Result<()> {
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (8)", [])?;
     connection.execute("CREATE TABLE IF NOT EXISTS workflow_ai_operation_groups (workflow_id TEXT NOT NULL REFERENCES workflows(id), id TEXT NOT NULL, conversation_id TEXT NOT NULL, base_revision INTEGER NOT NULL, result_revision INTEGER, commands_json TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(workflow_id, id))", [])?;
     connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (9)", [])?;
+    let _ = connection.execute("ALTER TABLE runs ADD COLUMN source TEXT", []);
+    let _ = connection.execute("ALTER TABLE runs ADD COLUMN assistant_message_id TEXT", []);
+    let _ = connection.execute("ALTER TABLE usage_records ADD COLUMN usage_id TEXT", []);
+    let _ = connection.execute("ALTER TABLE usage_records ADD COLUMN cached_input_tokens INTEGER", []);
+    let _ = connection.execute("ALTER TABLE usage_records ADD COLUMN reasoning_tokens INTEGER", []);
+    // Legacy rows did not declare delta-vs-snapshot semantics. Keep these
+    // columns null during migration so history remains explicitly partial.
+    let _ = connection.execute("ALTER TABLE usage_records ADD COLUMN aggregation TEXT", []);
+    let _ = connection.execute("ALTER TABLE usage_records ADD COLUMN scope TEXT", []);
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS usage_record_usage_id ON usage_records(run_id, usage_id) WHERE usage_id IS NOT NULL", [])?;
+    connection.execute("CREATE INDEX IF NOT EXISTS usage_records_created_idx ON usage_records(created_at DESC)", [])?;
+    connection.execute("CREATE INDEX IF NOT EXISTS runs_started_idx ON runs(started_at DESC)", [])?;
+    connection.execute("CREATE TABLE IF NOT EXISTS run_invocations (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id), invocation_id TEXT NOT NULL, category TEXT NOT NULL, name TEXT NOT NULL, status TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 1, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(run_id, category, invocation_id, attempt))", [])?;
+    connection.execute("CREATE INDEX IF NOT EXISTS run_invocations_run_category_idx ON run_invocations(run_id, category)", [])?;
+    connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (10)", [])?;
     Ok(())
 }
 
@@ -199,7 +215,7 @@ pub fn migrations_ready(path: &Path) -> Result<bool> {
 pub fn migrations_ready_without_initialization(path: &Path) -> Result<bool> {
     let connection = open(path)?;
     let latest: i64 = connection.query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |row| row.get(0))?;
-    Ok(latest >= 2)
+    Ok(latest >= 10)
 }
 
 fn open(path: &Path) -> Result<Connection> {
@@ -251,6 +267,115 @@ fn redact_json_value(value: &mut Value) {
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunMetricCount {
+    pub total: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub rejected: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunMetricNameCount {
+    pub name: String,
+    pub total: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub rejected: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunMetricsRow {
+    pub run_id: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub model_tools: RunMetricCount,
+    pub capabilities: RunMetricCount,
+    pub model_tool_breakdown: Vec<RunMetricNameCount>,
+    pub capability_breakdown: Vec<RunMetricNameCount>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cached_input_tokens: Option<i64>,
+    pub reasoning_tokens: Option<i64>,
+    pub provider_cost: Option<f64>,
+    pub estimated_cost: Option<f64>,
+    pub completeness: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsQueryFilters {
+    pub range: String,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub source: Option<String>,
+    pub query: Option<String>,
+    pub run_id: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsOverview {
+    pub tokens: i64,
+    pub model_tools: i64,
+    pub capabilities: i64,
+    pub provider_cost: Option<f64>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsSeriesBucket {
+    pub date: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub model_tools: i64,
+    pub capabilities: i64,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsBreakdownRow {
+    pub name: String,
+    pub runs: i64,
+    pub invocations: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub tokens: Option<i64>,
+    pub provider_cost: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsRunRow {
+    pub run_id: String,
+    pub conversation_id: Option<String>,
+    pub message_id: Option<String>,
+    pub title: String,
+    pub source: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub status: String,
+    pub started_at: String,
+    pub metrics: RunMetricsRow,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsQueryResult {
+    pub overview: MetricsOverview,
+    pub series: Vec<MetricsSeriesBucket>,
+    pub models: Vec<MetricsBreakdownRow>,
+    pub tools: Vec<MetricsBreakdownRow>,
+    pub capabilities: Vec<MetricsBreakdownRow>,
+    pub runs: Vec<MetricsRunRow>,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -369,9 +494,20 @@ pub fn append_message(path: &Path, id: &str, conversation_id: &str, role: &str, 
 }
 
 pub fn create_run(path: &Path, id: &str, conversation_id: Option<&str>, model: Option<&str>) -> Result<()> {
+    create_run_with_context(path, id, conversation_id, model, None, None)
+}
+
+pub fn create_run_with_context(
+    path: &Path,
+    id: &str,
+    conversation_id: Option<&str>,
+    model: Option<&str>,
+    source: Option<&str>,
+    assistant_message_id: Option<&str>,
+) -> Result<()> {
     initialize(path)?;
     let connection = open(path)?;
-    connection.execute("INSERT INTO runs(id, conversation_id, status, model) VALUES (?1, ?2, 'running', ?3) ON CONFLICT(id) DO NOTHING", params![id, conversation_id, model])?;
+    connection.execute("INSERT INTO runs(id, conversation_id, status, model, source, assistant_message_id) VALUES (?1, ?2, 'running', ?3, ?4, ?5) ON CONFLICT(id) DO UPDATE SET source=COALESCE(excluded.source, runs.source), assistant_message_id=COALESCE(excluded.assistant_message_id, runs.assistant_message_id)", params![id, conversation_id, model, source, assistant_message_id])?;
     Ok(())
 }
 
@@ -407,11 +543,406 @@ pub fn finish_run(path: &Path, run_id: &str, status: &str) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn record_usage(path: &Path, run_id: &str, provider: Option<&str>, model: &str, input_tokens: Option<i64>, output_tokens: Option<i64>, provider_cost: Option<f64>, estimated_cost: Option<f64>, idempotency_key: Option<&str>) -> Result<()> {
+    let usage_id = idempotency_key.unwrap_or("");
+    record_usage_detailed(
+        path,
+        run_id,
+        usage_id,
+        provider,
+        model,
+        input_tokens,
+        output_tokens,
+        None,
+        None,
+        provider_cost,
+        estimated_cost,
+        "delta",
+        "step",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn record_usage_detailed(
+    path: &Path,
+    run_id: &str,
+    usage_id: &str,
+    provider: Option<&str>,
+    model: &str,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    cached_input_tokens: Option<i64>,
+    reasoning_tokens: Option<i64>,
+    provider_cost: Option<f64>,
+    estimated_cost: Option<f64>,
+    aggregation: &str,
+    scope: &str,
+) -> Result<()> {
+    if [
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        reasoning_tokens,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value < 0)
+        || [provider_cost, estimated_cost]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_finite() || value < 0.0)
+        || !matches!(aggregation, "delta" | "snapshot")
+        || !matches!(scope, "step" | "run")
+    {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
     initialize(path)?;
     let connection = open(path)?;
-    connection.execute("INSERT INTO usage_records(run_id, provider, model, input_tokens, output_tokens, provider_cost, estimated_cost, idempotency_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(idempotency_key) DO NOTHING", params![run_id, provider, model, input_tokens, output_tokens, provider_cost, estimated_cost, idempotency_key])?;
+    let persisted_usage_id = (!usage_id.is_empty()).then_some(usage_id);
+    connection.execute("INSERT INTO usage_records(run_id, usage_id, provider, model, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, provider_cost, estimated_cost, aggregation, scope, idempotency_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) ON CONFLICT DO NOTHING", params![run_id, persisted_usage_id, provider, model, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, provider_cost, estimated_cost, aggregation, scope, persisted_usage_id])?;
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn record_run_invocation(
+    path: &Path,
+    run_id: &str,
+    invocation_id: &str,
+    category: &str,
+    name: &str,
+    status: &str,
+    attempt: i64,
+    started_at: Option<&str>,
+    finished_at: Option<&str>,
+) -> Result<()> {
+    if !matches!(category, "model_tool" | "capability")
+        || !matches!(
+            status,
+            "running" | "completed" | "failed" | "rejected" | "cancelled" | "interrupted"
+        )
+        || invocation_id.trim().is_empty()
+        || name.trim().is_empty()
+        || attempt < 1
+    {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    initialize(path)?;
+    let connection = open(path)?;
+    connection.execute(
+        "INSERT INTO run_invocations(run_id, invocation_id, category, name, status, attempt, started_at, finished_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(run_id, category, invocation_id, attempt) DO UPDATE SET name=excluded.name, status=CASE WHEN run_invocations.status IN ('completed','failed','rejected','cancelled','interrupted') AND excluded.status='running' THEN run_invocations.status ELSE excluded.status END, started_at=COALESCE(run_invocations.started_at, excluded.started_at), finished_at=COALESCE(excluded.finished_at, run_invocations.finished_at), updated_at=CURRENT_TIMESTAMP",
+        params![run_id, invocation_id, category, name, status, attempt, started_at, finished_at],
+    )?;
+    Ok(())
+}
+
+fn invocation_counts(
+    connection: &Connection,
+    run_id: &str,
+    category: &str,
+) -> Result<(RunMetricCount, Vec<RunMetricNameCount>)> {
+    let mut statement = connection.prepare("SELECT name, COUNT(*), SUM(status='completed'), SUM(status IN ('failed','cancelled','interrupted')), SUM(status='rejected') FROM run_invocations WHERE run_id=?1 AND category=?2 GROUP BY name ORDER BY COUNT(*) DESC, name ASC")?;
+    let breakdown = statement
+        .query_map(params![run_id, category], |row| {
+            Ok(RunMetricNameCount {
+                name: row.get(0)?,
+                total: row.get(1)?,
+                completed: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                failed: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                rejected: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let counts = breakdown
+        .iter()
+        .fold(RunMetricCount::default(), |mut total, row| {
+            total.total += row.total;
+            total.completed += row.completed;
+            total.failed += row.failed;
+            total.rejected += row.rejected;
+            total
+        });
+    Ok((counts, breakdown))
+}
+
+#[derive(Debug)]
+struct UsageMetricRecord {
+    provider: Option<String>,
+    model: String,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    cached_input_tokens: Option<i64>,
+    reasoning_tokens: Option<i64>,
+    provider_cost: Option<f64>,
+    estimated_cost: Option<f64>,
+    aggregation: Option<String>,
+    scope: Option<String>,
+}
+
+fn sum_optional_i64(
+    records: &[UsageMetricRecord],
+    value: impl Fn(&UsageMetricRecord) -> Option<i64>,
+) -> Option<i64> {
+    records
+        .iter()
+        .filter_map(value)
+        .reduce(|left, right| left + right)
+}
+
+fn sum_optional_f64(
+    records: &[UsageMetricRecord],
+    value: impl Fn(&UsageMetricRecord) -> Option<f64>,
+) -> Option<f64> {
+    records
+        .iter()
+        .filter_map(value)
+        .reduce(|left, right| left + right)
+}
+
+pub fn get_run_metrics(path: &Path, run_id: &str) -> Result<RunMetricsRow> {
+    initialize(path)?;
+    let connection = open(path)?;
+    let (model_tools, model_tool_breakdown) = invocation_counts(&connection, run_id, "model_tool")?;
+    let (capabilities, capability_breakdown) =
+        invocation_counts(&connection, run_id, "capability")?;
+    let run_model =
+        connection.query_row("SELECT model FROM runs WHERE id=?1", [run_id], |row| {
+            row.get::<_, Option<String>>(0)
+        })?;
+    let mut statement = connection.prepare("SELECT provider, model, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, provider_cost, estimated_cost, aggregation, scope FROM usage_records WHERE run_id=?1 ORDER BY id ASC")?;
+    let all_records = statement
+        .query_map([run_id], |row| {
+            Ok(UsageMetricRecord {
+                provider: row.get(0)?,
+                model: row.get(1)?,
+                input_tokens: row.get(2)?,
+                output_tokens: row.get(3)?,
+                cached_input_tokens: row.get(4)?,
+                reasoning_tokens: row.get(5)?,
+                provider_cost: row.get(6)?,
+                estimated_cost: row.get(7)?,
+                aggregation: row.get(8)?,
+                scope: row.get(9)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let latest_snapshot = all_records.iter().rposition(|record| {
+        record.aggregation.as_deref() == Some("snapshot") && record.scope.as_deref() == Some("run")
+    });
+    let selected: &[UsageMetricRecord] = latest_snapshot
+        .map(|index| &all_records[index..=index])
+        .unwrap_or(&all_records);
+    let input_tokens = sum_optional_i64(selected, |record| record.input_tokens);
+    let output_tokens = sum_optional_i64(selected, |record| record.output_tokens);
+    let cached_input_tokens = sum_optional_i64(selected, |record| record.cached_input_tokens);
+    let reasoning_tokens = sum_optional_i64(selected, |record| record.reasoning_tokens);
+    let provider_cost = sum_optional_f64(selected, |record| record.provider_cost);
+    let estimated_cost = sum_optional_f64(selected, |record| record.estimated_cost);
+    let latest_identity = selected.last().or_else(|| all_records.last());
+    let provider = latest_identity.and_then(|record| record.provider.clone());
+    let model = latest_identity
+        .map(|record| record.model.clone())
+        .or(run_model);
+    let invocation_total = model_tools.total + capabilities.total;
+    let completeness = if selected.is_empty() {
+        if invocation_total > 0 {
+            "partial"
+        } else {
+            "unavailable"
+        }
+    } else if selected.iter().all(|record| {
+        record.input_tokens.is_some()
+            && record.output_tokens.is_some()
+            && record.aggregation.is_some()
+            && record.scope.is_some()
+    }) {
+        "complete"
+    } else {
+        "partial"
+    };
+    Ok(RunMetricsRow {
+        run_id: run_id.to_string(),
+        provider,
+        model,
+        model_tools,
+        capabilities,
+        model_tool_breakdown,
+        capability_breakdown,
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        reasoning_tokens,
+        provider_cost,
+        estimated_cost,
+        completeness: completeness.to_string(),
+    })
+}
+
+pub fn query_metrics(path: &Path, filters: &MetricsQueryFilters) -> Result<MetricsQueryResult> {
+    initialize(path)?;
+    if !matches!(filters.range.as_str(), "7d" | "30d" | "all") {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    let connection = open(path)?;
+    let date_modifier = match filters.range.as_str() {
+        "7d" => "-7 days",
+        "30d" => "-30 days",
+        _ => "-100 years",
+    };
+    let query_pattern = filters
+        .query
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("%{}%", value.trim()));
+    let mut statement = connection.prepare(
+        "SELECT r.id, r.conversation_id, r.assistant_message_id, COALESCE(c.title, r.id), COALESCE(r.source, 'conversation'), r.status, r.started_at
+         FROM runs r LEFT JOIN conversations c ON c.id=r.conversation_id
+         WHERE (?1='all' OR datetime(r.started_at)>=datetime('now', ?2))
+           AND (?3 IS NULL OR r.model=?3)
+           AND (?4 IS NULL OR COALESCE(r.source, 'conversation')=?4)
+           AND (?5 IS NULL OR r.id=?5)
+           AND (?6 IS NULL OR r.id LIKE ?6 OR COALESCE(c.title, '') LIKE ?6)
+           AND (?7 IS NULL OR EXISTS(SELECT 1 FROM usage_records u WHERE u.run_id=r.id AND u.provider=?7))
+         ORDER BY datetime(r.started_at) DESC, r.id DESC",
+    )?;
+    let run_headers = statement
+        .query_map(
+            params![
+                filters.range,
+                date_modifier,
+                filters.model,
+                filters.source,
+                filters.run_id,
+                query_pattern,
+                filters.provider
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut all_rows = Vec::with_capacity(run_headers.len());
+    for (run_id, conversation_id, message_id, title, source, status, started_at) in run_headers {
+        let metrics = get_run_metrics(path, &run_id)?;
+        all_rows.push(MetricsRunRow {
+            provider: metrics.provider.clone(),
+            model: metrics.model.clone(),
+            run_id,
+            conversation_id,
+            message_id,
+            title,
+            source,
+            status,
+            started_at,
+            metrics,
+        });
+    }
+
+    let mut overview = MetricsOverview::default();
+    let mut series = BTreeMap::<String, MetricsSeriesBucket>::new();
+    let mut models = HashMap::<String, MetricsBreakdownRow>::new();
+    let mut tools = HashMap::<String, MetricsBreakdownRow>::new();
+    let mut capabilities = HashMap::<String, MetricsBreakdownRow>::new();
+    for row in &all_rows {
+        let input = row.metrics.input_tokens.unwrap_or(0);
+        let output = row.metrics.output_tokens.unwrap_or(0);
+        overview.tokens += input + output;
+        overview.model_tools += row.metrics.model_tools.total;
+        overview.capabilities += row.metrics.capabilities.total;
+        if let Some(cost) = row.metrics.provider_cost {
+            overview.provider_cost = Some(overview.provider_cost.unwrap_or(0.0) + cost);
+        }
+        let date = row.started_at.chars().take(10).collect::<String>();
+        let bucket = series
+            .entry(date.clone())
+            .or_insert_with(|| MetricsSeriesBucket {
+                date,
+                ..Default::default()
+            });
+        bucket.input_tokens += input;
+        bucket.output_tokens += output;
+        bucket.model_tools += row.metrics.model_tools.total;
+        bucket.capabilities += row.metrics.capabilities.total;
+        if let Some(model) = row.model.as_ref() {
+            let model_row = models
+                .entry(model.clone())
+                .or_insert_with(|| MetricsBreakdownRow {
+                    name: model.clone(),
+                    ..Default::default()
+                });
+            model_row.runs += 1;
+            model_row.tokens = Some(model_row.tokens.unwrap_or(0) + input + output);
+            model_row.provider_cost = match (model_row.provider_cost, row.metrics.provider_cost) {
+                (Some(total), Some(cost)) => Some(total + cost),
+                (None, Some(cost)) => Some(cost),
+                (current, None) => current,
+            };
+        }
+        for item in &row.metrics.model_tool_breakdown {
+            let aggregate = tools
+                .entry(item.name.clone())
+                .or_insert_with(|| MetricsBreakdownRow {
+                    name: item.name.clone(),
+                    ..Default::default()
+                });
+            aggregate.runs += 1;
+            aggregate.invocations += item.total;
+            aggregate.completed += item.completed;
+            aggregate.failed += item.failed + item.rejected;
+        }
+        for item in &row.metrics.capability_breakdown {
+            let aggregate =
+                capabilities
+                    .entry(item.name.clone())
+                    .or_insert_with(|| MetricsBreakdownRow {
+                        name: item.name.clone(),
+                        ..Default::default()
+                    });
+            aggregate.runs += 1;
+            aggregate.invocations += item.total;
+            aggregate.completed += item.completed;
+            aggregate.failed += item.failed + item.rejected;
+        }
+    }
+    let sort_breakdown = |rows: HashMap<String, MetricsBreakdownRow>| {
+        let mut rows = rows.into_values().collect::<Vec<_>>();
+        rows.sort_by(|left, right| {
+            right
+                .invocations
+                .cmp(&left.invocations)
+                .then_with(|| right.tokens.unwrap_or(0).cmp(&left.tokens.unwrap_or(0)))
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        rows
+    };
+    let limit = filters.limit.unwrap_or(50).clamp(1, 200) as usize;
+    let start = filters
+        .cursor
+        .as_ref()
+        .and_then(|cursor| all_rows.iter().position(|row| &row.run_id == cursor))
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let end = (start + limit).min(all_rows.len());
+    let next_cursor = (end < all_rows.len()).then(|| all_rows[end - 1].run_id.clone());
+    let runs = all_rows.into_iter().skip(start).take(limit).collect();
+    Ok(MetricsQueryResult {
+        overview,
+        series: series.into_values().collect(),
+        models: sort_breakdown(models),
+        tools: sort_breakdown(tools),
+        capabilities: sort_breakdown(capabilities),
+        runs,
+        next_cursor,
+    })
 }
 
 pub fn record_run_node(path: &Path, run_id: &str, node_key: &str, status: &str, output_json: Option<&str>) -> Result<()> {
@@ -696,7 +1227,15 @@ pub fn usage_summary(path: &Path) -> Result<UsageSummary> {
     initialize(path)?;
     let connection = open(path)?;
     let runs: i64 = connection.query_row("SELECT COUNT(*) FROM runs", [], |row| row.get(0))?;
-    let (input_tokens, output_tokens, provider_cost, estimated_cost): (i64, i64, Option<f64>, Option<f64>) = connection.query_row("SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), SUM(provider_cost), SUM(estimated_cost) FROM usage_records", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?;
+    let (input_tokens, output_tokens, provider_cost, estimated_cost):
+        (i64, i64, Option<f64>, Option<f64>) = connection.query_row(
+        "SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), SUM(provider_cost), SUM(estimated_cost)
+         FROM usage_records current
+         WHERE (current.aggregation='snapshot' AND current.scope='run' AND current.id=(SELECT MAX(snapshot.id) FROM usage_records snapshot WHERE snapshot.run_id=current.run_id AND snapshot.aggregation='snapshot' AND snapshot.scope='run'))
+            OR (NOT EXISTS(SELECT 1 FROM usage_records snapshot WHERE snapshot.run_id=current.run_id AND snapshot.aggregation='snapshot' AND snapshot.scope='run') AND (current.aggregation='delta' OR current.aggregation IS NULL))",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
     let artifacts: i64 = connection.query_row("SELECT COUNT(*) FROM artifacts", [], |row| row.get(0))?;
     Ok(UsageSummary { runs, input_tokens, output_tokens, provider_cost, estimated_cost, artifacts })
 }
@@ -1100,6 +1639,340 @@ mod tests {
         assert_eq!(summary.provider_cost, None);
         assert_eq!(summary.estimated_cost, None);
         assert_eq!(summary.input_tokens + summary.output_tokens, 8);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn run_metrics_deduplicate_lifecycle_events_and_keep_real_retries() {
+        let root =
+            std::env::temp_dir().join(format!("coworkany-run-metrics-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("app.db");
+        create_run(&path, "run-metrics", None, Some("model-a")).unwrap();
+        record_run_invocation(
+            &path,
+            "run-metrics",
+            "tool-1",
+            "model_tool",
+            "read",
+            "running",
+            1,
+            Some("2026-09-29T00:00:00Z"),
+            None,
+        )
+        .unwrap();
+        record_run_invocation(
+            &path,
+            "run-metrics",
+            "tool-1",
+            "model_tool",
+            "read",
+            "completed",
+            1,
+            Some("2026-09-29T00:00:00Z"),
+            Some("2026-09-29T00:00:01Z"),
+        )
+        .unwrap();
+        record_run_invocation(
+            &path,
+            "run-metrics",
+            "tool-1",
+            "model_tool",
+            "read",
+            "running",
+            1,
+            None,
+            None,
+        )
+        .unwrap();
+        record_run_invocation(
+            &path,
+            "run-metrics",
+            "image",
+            "capability",
+            "image_generate",
+            "failed",
+            1,
+            None,
+            Some("2026-09-29T00:00:02Z"),
+        )
+        .unwrap();
+        record_run_invocation(
+            &path,
+            "run-metrics",
+            "image",
+            "capability",
+            "image_generate",
+            "completed",
+            2,
+            None,
+            Some("2026-09-29T00:00:03Z"),
+        )
+        .unwrap();
+        record_usage_detailed(
+            &path,
+            "run-metrics",
+            "step-1",
+            Some("provider-a"),
+            "model-a",
+            Some(10),
+            Some(4),
+            Some(2),
+            None,
+            Some(0.01),
+            None,
+            "delta",
+            "step",
+        )
+        .unwrap();
+        record_usage_detailed(
+            &path,
+            "run-metrics",
+            "step-1",
+            Some("provider-a"),
+            "model-a",
+            Some(10),
+            Some(4),
+            Some(2),
+            None,
+            Some(0.01),
+            None,
+            "delta",
+            "step",
+        )
+        .unwrap();
+        record_usage_detailed(
+            &path,
+            "run-metrics",
+            "step-2",
+            Some("provider-a"),
+            "model-a",
+            Some(8),
+            Some(3),
+            None,
+            Some(1),
+            Some(0.02),
+            None,
+            "delta",
+            "step",
+        )
+        .unwrap();
+        let metrics = get_run_metrics(&path, "run-metrics").unwrap();
+        assert_eq!(metrics.model_tools.total, 1);
+        assert_eq!(metrics.model_tools.completed, 1);
+        assert_eq!(metrics.capabilities.total, 2);
+        assert_eq!(metrics.capabilities.failed, 1);
+        assert_eq!(metrics.capabilities.completed, 1);
+        assert_eq!(metrics.input_tokens, Some(18));
+        assert_eq!(metrics.output_tokens, Some(7));
+        assert_eq!(metrics.cached_input_tokens, Some(2));
+        assert_eq!(metrics.reasoning_tokens, Some(1));
+        assert_eq!(metrics.provider_cost, Some(0.03));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn run_metrics_prefer_latest_run_snapshot_over_step_deltas() {
+        let root = std::env::temp_dir().join(format!(
+            "coworkany-run-metrics-snapshot-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("app.db");
+        create_run(&path, "run-snapshot", None, Some("model-a")).unwrap();
+        record_usage_detailed(
+            &path,
+            "run-snapshot",
+            "step-1",
+            Some("provider-a"),
+            "model-a",
+            Some(10),
+            Some(4),
+            None,
+            None,
+            None,
+            None,
+            "delta",
+            "step",
+        )
+        .unwrap();
+        record_usage_detailed(
+            &path,
+            "run-snapshot",
+            "step-2",
+            Some("provider-a"),
+            "model-a",
+            Some(8),
+            Some(3),
+            None,
+            None,
+            None,
+            None,
+            "delta",
+            "step",
+        )
+        .unwrap();
+        record_usage_detailed(
+            &path,
+            "run-snapshot",
+            "final",
+            Some("provider-a"),
+            "model-a",
+            Some(18),
+            Some(7),
+            Some(2),
+            Some(1),
+            Some(0.05),
+            None,
+            "snapshot",
+            "run",
+        )
+        .unwrap();
+        let metrics = get_run_metrics(&path, "run-snapshot").unwrap();
+        assert_eq!(metrics.input_tokens, Some(18));
+        assert_eq!(metrics.output_tokens, Some(7));
+        assert_eq!(metrics.provider_cost, Some(0.05));
+        let summary = usage_summary(&path).unwrap();
+        assert_eq!(summary.input_tokens, 18);
+        assert_eq!(summary.output_tokens, 7);
+        assert_eq!(summary.provider_cost, Some(0.05));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migrated_usage_without_aggregation_semantics_stays_partial() {
+        let root = std::env::temp_dir().join(format!(
+            "coworkany-run-metrics-legacy-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("app.db");
+        let connection = open(&path).unwrap();
+        connection.execute_batch("CREATE TABLE runs (id TEXT PRIMARY KEY, conversation_id TEXT, status TEXT NOT NULL, model TEXT, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT); CREATE TABLE usage_records (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT REFERENCES runs(id), model TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER, estimated_cost REAL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); INSERT INTO runs(id, status, model) VALUES ('run-legacy', 'succeeded', 'legacy-model'); INSERT INTO usage_records(run_id, model, input_tokens, output_tokens) VALUES ('run-legacy', 'legacy-model', 4, 2);").unwrap();
+        drop(connection);
+        initialize(&path).unwrap();
+        assert_eq!(
+            get_run_metrics(&path, "run-legacy").unwrap().completeness,
+            "partial"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn metrics_query_filters_source_and_paginates_without_changing_overview() {
+        let root =
+            std::env::temp_dir().join(format!("coworkany-metrics-query-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join("app.db");
+        create_run_with_context(
+            &path,
+            "run-new-1",
+            None,
+            Some("model-a"),
+            Some("conversation"),
+            None,
+        )
+        .unwrap();
+        create_run_with_context(
+            &path,
+            "run-new-2",
+            None,
+            Some("model-a"),
+            Some("conversation"),
+            None,
+        )
+        .unwrap();
+        create_run_with_context(
+            &path,
+            "run-media",
+            None,
+            Some("model-b"),
+            Some("media"),
+            None,
+        )
+        .unwrap();
+        record_usage_detailed(
+            &path,
+            "run-new-1",
+            "u1",
+            Some("provider-a"),
+            "model-a",
+            Some(5),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+            "delta",
+            "step",
+        )
+        .unwrap();
+        record_usage_detailed(
+            &path,
+            "run-new-2",
+            "u2",
+            Some("provider-a"),
+            "model-a",
+            Some(7),
+            Some(3),
+            None,
+            None,
+            None,
+            None,
+            "delta",
+            "step",
+        )
+        .unwrap();
+        record_usage_detailed(
+            &path,
+            "run-media",
+            "u3",
+            Some("provider-b"),
+            "model-b",
+            Some(100),
+            Some(20),
+            None,
+            None,
+            None,
+            None,
+            "delta",
+            "step",
+        )
+        .unwrap();
+        let first = query_metrics(
+            &path,
+            &MetricsQueryFilters {
+                range: "all".into(),
+                model: None,
+                provider: Some("provider-a".into()),
+                source: Some("conversation".into()),
+                query: None,
+                run_id: None,
+                cursor: None,
+                limit: Some(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(first.overview.tokens, 17);
+        assert_eq!(first.runs.len(), 1);
+        let second = query_metrics(
+            &path,
+            &MetricsQueryFilters {
+                range: "all".into(),
+                model: None,
+                provider: Some("provider-a".into()),
+                source: Some("conversation".into()),
+                query: None,
+                run_id: None,
+                cursor: first.next_cursor.clone(),
+                limit: Some(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(second.overview.tokens, first.overview.tokens);
+        assert_eq!(second.runs.len(), 1);
+        assert_ne!(second.runs[0].run_id, first.runs[0].run_id);
         let _ = std::fs::remove_dir_all(root);
     }
 

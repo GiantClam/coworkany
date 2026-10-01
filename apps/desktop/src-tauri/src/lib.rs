@@ -1525,8 +1525,8 @@ fn append_message(app: tauri::AppHandle, input: MessageInput) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn create_run(app: tauri::AppHandle, run_id: String, conversation_id: Option<String>, model: Option<String>) -> Result<(), String> {
-    storage::create_run(&database_path(&app)?, &run_id, conversation_id.as_deref(), model.as_deref()).map_err(|error| error.to_string())
+fn create_run(app: tauri::AppHandle, run_id: String, conversation_id: Option<String>, model: Option<String>, source: Option<String>, assistant_message_id: Option<String>) -> Result<(), String> {
+    storage::create_run_with_context(&database_path(&app)?, &run_id, conversation_id.as_deref(), model.as_deref(), source.as_deref(), assistant_message_id.as_deref()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1540,8 +1540,24 @@ fn finish_run(app: tauri::AppHandle, run_id: String, status: String) -> Result<(
 }
 
 #[tauri::command]
-fn record_usage(app: tauri::AppHandle, run_id: String, provider: Option<String>, model: String, input_tokens: Option<i64>, output_tokens: Option<i64>, provider_cost: Option<f64>, estimated_cost: Option<f64>, idempotency_key: Option<String>) -> Result<(), String> {
-    storage::record_usage(&database_path(&app)?, &run_id, provider.as_deref(), &model, input_tokens, output_tokens, provider_cost, estimated_cost, idempotency_key.as_deref()).map_err(|error| error.to_string())
+fn record_usage(app: tauri::AppHandle, run_id: String, provider: Option<String>, model: String, input_tokens: Option<i64>, output_tokens: Option<i64>, cached_input_tokens: Option<i64>, reasoning_tokens: Option<i64>, provider_cost: Option<f64>, estimated_cost: Option<f64>, usage_id: Option<String>, aggregation: Option<String>, scope: Option<String>, idempotency_key: Option<String>) -> Result<(), String> {
+    let usage_id = usage_id.as_deref().or(idempotency_key.as_deref()).unwrap_or("");
+    storage::record_usage_detailed(&database_path(&app)?, &run_id, usage_id, provider.as_deref(), &model, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, provider_cost, estimated_cost, aggregation.as_deref().unwrap_or("delta"), scope.as_deref().unwrap_or("step")).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn record_run_invocation(app: tauri::AppHandle, run_id: String, invocation_id: String, category: String, name: String, status: String, attempt: i64, started_at: Option<String>, finished_at: Option<String>) -> Result<(), String> {
+    storage::record_run_invocation(&database_path(&app)?, &run_id, &invocation_id, &category, &name, &status, attempt, started_at.as_deref(), finished_at.as_deref()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_run_metrics(app: tauri::AppHandle, run_id: String) -> Result<storage::RunMetricsRow, String> {
+    storage::get_run_metrics(&database_path(&app)?, &run_id).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn query_metrics(app: tauri::AppHandle, filters: storage::MetricsQueryFilters) -> Result<storage::MetricsQueryResult, String> {
+    storage::query_metrics(&database_path(&app)?, &filters).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1761,7 +1777,7 @@ pub fn run() {
             *state.0.lock().map_err(|_| "startup_state_poisoned")? = Some(StartupResults { local_state, runtime });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, append_diagnostic_log, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, open_external_preview, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, apply_workflow_ai_operation, list_workflow_ai_operation_groups, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
+        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, append_diagnostic_log, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, open_external_preview, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_invocation, get_run_metrics, query_metrics, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, apply_workflow_ai_operation, list_workflow_ai_operation_groups, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
     let app = builder.build(tauri::generate_context!()).expect("error while building CoworkAny");
     drop(startup_progress);
     app.run(|app, event| {

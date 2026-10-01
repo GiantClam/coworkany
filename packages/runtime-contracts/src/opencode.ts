@@ -12,7 +12,7 @@ export type OpenCodeRuntimeEvent =
   | { readonly event: "tool_event"; readonly tool: string; readonly toolCallId?: string; readonly phase: "started" | "progress" | "completed" | "failed"; readonly message?: string; readonly paths?: readonly string[]; readonly runId: string }
   | { readonly event: "artifact"; readonly artifact: { readonly id: string; readonly relativePath: string; readonly title: string; readonly mimeType: string; readonly byteLength: number; readonly sha256: string }; readonly runId: string }
   | { readonly event: "preview"; readonly preview: { readonly kind: "web" | "ppt" | "image" | "video" | "audio" | "document"; readonly title: string; readonly url?: string; readonly relativePath?: string; readonly artifactId?: string; readonly mimeType?: string; readonly previewSessionId?: string; readonly engine?: "ppt-master" | "dashi-ppt" | "generic-web"; readonly interactive?: boolean; readonly status?: "loading" | "ready" | "unavailable"; readonly error?: string }; readonly runId: string }
-  | { readonly event: "usage"; readonly provider?: string; readonly model?: string; readonly inputTokens?: number; readonly outputTokens?: number; readonly costUsd?: number; readonly runId: string }
+  | { readonly event: "usage"; readonly usageId: string; readonly provider?: string; readonly model?: string; readonly inputTokens?: number; readonly outputTokens?: number; readonly cachedInputTokens?: number; readonly reasoningTokens?: number; readonly costUsd?: number; readonly aggregation: "delta" | "snapshot"; readonly scope: "step" | "run"; readonly runId: string }
   | { readonly event: "runtime_warning"; readonly code: string; readonly message: string; readonly runId: string }
   | { readonly event: "permission_request"; readonly permissionId: string; readonly sessionId: string; readonly toolName: string; readonly input?: unknown; readonly title?: string; readonly callId?: string; readonly runId: string }
   | { readonly event: "permission_response"; readonly permissionId: string; readonly sessionId: string; readonly response: "once" | "always" | "reject"; readonly callId?: string; readonly runId: string }
@@ -46,6 +46,10 @@ function readText(...values: unknown[]) {
 
 function readFiniteNumber(...values: unknown[]) {
   return values.find((value): value is number => typeof value === "number" && Number.isFinite(value)) ?? null;
+}
+
+function usageEventId(explicitId: unknown, sessionId: string | null | undefined, messageId: string | null | undefined, inputTokens: number | null, outputTokens: number | null, costUsd: number | null) {
+  return readString(explicitId) ?? `${sessionId ?? "session"}:${messageId ?? "message"}:step:${inputTokens ?? "x"}:${outputTokens ?? "x"}:${costUsd ?? "x"}`;
 }
 
 function sanitizeToolName(value: unknown) {
@@ -258,15 +262,23 @@ function parseEvent(runId: string, value: unknown): OpenCodeRuntimeEvent[] {
 
   if (type === "step_finish") {
     const tokens = readRecord(part?.tokens) || readRecord(record.tokens);
+    const cache = readRecord(tokens?.cache);
     const costUsd = readFiniteNumber(part?.cost, record.cost, part?.costUsd, record.costUsd);
     const inputTokens = readFiniteNumber(tokens?.input, tokens?.inputTokens, part?.inputTokens, record.inputTokens);
     const outputTokens = readFiniteNumber(tokens?.output, tokens?.outputTokens, part?.outputTokens, record.outputTokens);
-    if (inputTokens === null && outputTokens === null && costUsd === null) return [];
+    const cachedInputTokens = readFiniteNumber(tokens?.cachedInput, tokens?.cached_input, tokens?.cacheRead, tokens?.cache_read, tokens?.cache, cache?.read);
+    const reasoningTokens = readFiniteNumber(tokens?.reasoning, tokens?.reasoningTokens, tokens?.reasoning_tokens);
+    if (inputTokens === null && outputTokens === null && cachedInputTokens === null && reasoningTokens === null && costUsd === null) return [];
     return [{
       event: "usage",
+      usageId: usageEventId(part?.id, runId, readString(part?.messageID, part?.messageId, record.messageID, record.messageId), inputTokens, outputTokens, costUsd),
       ...(inputTokens === null ? {} : { inputTokens }),
       ...(outputTokens === null ? {} : { outputTokens }),
+      ...(cachedInputTokens === null ? {} : { cachedInputTokens }),
+      ...(reasoningTokens === null ? {} : { reasoningTokens }),
       ...(costUsd === null ? {} : { costUsd }),
+      aggregation: "delta",
+      scope: "step",
       runId,
     }];
   }
@@ -553,21 +565,29 @@ export function normalizeOpenCodeServeEvent(
     };
   }
   if (partType === "step-finish" || partType === "step_finish") {
-    const usagePartId = readString(part.id);
-    if (usagePartId && state.usagePartIds.has(usagePartId)) return { ...identity, events: [] };
     const tokens = readRecord(part.tokens);
+    const cache = readRecord(tokens?.cache);
     const inputTokens = readFiniteNumber(tokens?.input, tokens?.inputTokens, part.inputTokens);
     const outputTokens = readFiniteNumber(tokens?.output, tokens?.outputTokens, part.outputTokens);
+    const cachedInputTokens = readFiniteNumber(tokens?.cachedInput, tokens?.cached_input, tokens?.cacheRead, tokens?.cache_read, tokens?.cache, cache?.read);
+    const reasoningTokens = readFiniteNumber(tokens?.reasoning, tokens?.reasoningTokens, tokens?.reasoning_tokens);
     const costUsd = readFiniteNumber(part.cost, part.costUsd);
-    if (inputTokens === null && outputTokens === null && costUsd === null) return { ...identity, events: [] };
-    if (usagePartId) state.usagePartIds.add(usagePartId);
+    if (inputTokens === null && outputTokens === null && cachedInputTokens === null && reasoningTokens === null && costUsd === null) return { ...identity, events: [] };
+    const usagePartId = usageEventId(part.id, sessionId, partMessageId ?? messageId, inputTokens, outputTokens, costUsd);
+    if (state.usagePartIds.has(usagePartId)) return { ...identity, events: [] };
+    state.usagePartIds.add(usagePartId);
     return {
       ...identity,
       events: [{
         event: "usage",
+        usageId: usagePartId,
         ...(inputTokens === null ? {} : { inputTokens }),
         ...(outputTokens === null ? {} : { outputTokens }),
+        ...(cachedInputTokens === null ? {} : { cachedInputTokens }),
+        ...(reasoningTokens === null ? {} : { reasoningTokens }),
         ...(costUsd === null ? {} : { costUsd }),
+        aggregation: "delta",
+        scope: "step",
         runId,
       }],
     };

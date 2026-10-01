@@ -217,6 +217,24 @@ test("OpenCode Serve never replaces a persisted session after a transient lookup
   }
 });
 
+test("OpenCode Serve recovers a persisted conversation when its model differs from the active configuration", async () => {
+  const runtimeDirectory = await mkdtemp(resolve(tmpdir(), "coworkany-opencode-model-switch-"));
+  const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");
+  const client = new OpenCodeServeClient(process.execPath, runtimeDirectory, [fixture]);
+  try {
+    const provider = { id: "old-provider", source: "old-provider", model: "old-model" };
+    const environment = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: "new-provider/new-model" }) };
+    assert.equal(await client.attachSession(runtimeDirectory, "model-mismatch", provider, environment), undefined);
+    assert.deepEqual(
+      await client.createOrResumeSession(runtimeDirectory, "model-mismatch", provider, environment),
+      { sessionId: "recovered-session", recovered: true },
+    );
+  } finally {
+    await client.stop();
+    await rm(runtimeDirectory, { recursive: true, force: true });
+  }
+});
+
 test("OpenCode Serve parses CRLF-delimited SSE frames", async () => {
   const runtimeDirectory = await mkdtemp(resolve(tmpdir(), "coworkany-opencode-serve-crlf-"));
   const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");

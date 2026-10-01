@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { advanceAssistantTurn, beginAssistantTurn, type WorkbenchRunEvent } from "@coworkany/workbench-client";
 import { replayPersistedRunToConversationMessage } from "../src/conversation-run-replay";
+
+const interleavedEvents = JSON.parse(readFileSync(new URL("../../../packages/workbench-client/test/fixtures/assistant-turn-interleaved.json", import.meta.url), "utf8")) as WorkbenchRunEvent[];
 
 test("replays a completed PPT run into an assistant message with its artifact part", () => {
   const message = replayPersistedRunToConversationMessage(
@@ -35,4 +39,29 @@ test("replays every text delta after reasoning without dropping the first visibl
   );
 
   assert.equal(message?.content, "你好。需要继续做 PPT 吗？");
+});
+
+test("persisted replay produces the same ordered parts as the live assistant projection", () => {
+  const live = interleavedEvents.reduce(advanceAssistantTurn, beginAssistantTurn({
+    kind: "new",
+    id: "assistant-run-fixture",
+    conversationId: "conversation-fixture",
+    runId: "run-fixture",
+    createdAt: "2026-09-29T00:00:00.000Z",
+  }));
+  const persisted = replayPersistedRunToConversationMessage(
+    { id: "run-fixture", status: "succeeded", started_at: "2026-09-29T00:00:00.000Z", finished_at: "2026-09-29T00:00:07.000Z" },
+    [
+      { sequence: 1, event_type: "reasoning_delta", payload_json: JSON.stringify({ delta: "inspect the request" }), created_at: "2026-09-29T00:00:01.000Z" },
+      { sequence: 2, event_type: "text_delta", payload_json: JSON.stringify({ delta: "I will check the current implementation." }), created_at: "2026-09-29T00:00:02.000Z" },
+      { sequence: 3, event_type: "tool_event", payload_json: JSON.stringify({ tool: "search", toolCallId: "tool-search-1", phase: "started", message: JSON.stringify({ args: { query: "assistant stream order" } }) }), created_at: "2026-09-29T00:00:03.000Z" },
+      { sequence: 4, event_type: "tool_event", payload_json: JSON.stringify({ tool: "search", toolCallId: "tool-search-1", phase: "completed", message: JSON.stringify({ result: { matches: 1 } }) }), created_at: "2026-09-29T00:00:04.000Z" },
+      { sequence: 5, event_type: "text_delta", payload_json: JSON.stringify({ delta: "The tool result confirms the ordering bug." }), created_at: "2026-09-29T00:00:05.000Z" },
+      { sequence: 6, event_type: "artifact", payload_json: JSON.stringify({ artifact: { id: "artifact-order-report", relativePath: "artifacts/order-report.md", title: "order-report.md", mimeType: "text/markdown", byteLength: 42, sha256: "fixture-sha256" } }), created_at: "2026-09-29T00:00:06.000Z" },
+    ],
+    "conversation-fixture",
+  );
+
+  assert.ok(persisted);
+  assert.deepEqual(persisted.parts, live.parts);
 });

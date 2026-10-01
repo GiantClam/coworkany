@@ -1,11 +1,13 @@
 "use client";
 
 import React, { useEffect, useRef, type ReactNode } from "react";
-import { Plus } from "lucide-react";
-import { Attachment, AttachmentInfo, AttachmentPreview, AttachmentRemove, Attachments, ModelSelectorLogo, ModelSelectorName, PromptInput, PromptInputBody, PromptInputButton, PromptInputFooter, PromptInputSelect, PromptInputSubmit, PromptInputTextarea, PromptInputTools, PromptInputHeader, usePromptInputAttachments } from "./ai-elements/index";
+import { CircleOff, Database } from "lucide-react";
+import { Attachment, AttachmentInfo, AttachmentPreview, AttachmentRemove, Attachments, ModelSelectorLogo, ModelSelectorName, PromptInput, PromptInputActionAddAttachments, PromptInputActionMenu, PromptInputActionMenuContent, PromptInputActionMenuItem, PromptInputActionMenuRadioGroup, PromptInputActionMenuRadioItem, PromptInputActionMenuSub, PromptInputActionMenuSubContent, PromptInputActionMenuSubTrigger, PromptInputActionMenuTrigger, PromptInputBody, PromptInputFooter, PromptInputSelect, PromptInputSubmit, PromptInputTextarea, PromptInputTools, PromptInputHeader } from "./ai-elements/index";
+import { WorkbenchModelReasoningSelector, type WorkbenchReasoningOption } from "./model-reasoning-selector";
 
 export type WorkbenchAttachmentItem = { readonly id: string; readonly name: string; readonly mediaType?: string; readonly uri?: string; readonly status?: "queued" | "uploading" | "ready" | "failed"; readonly error?: string };
 export type WorkbenchModelOption = { readonly id: string; readonly label: string; readonly provider?: string; readonly description?: string };
+export type WorkbenchKnowledgeBaseOption = { readonly id: string; readonly label: string; readonly description?: string };
 
 function modelBadge(provider?: string) {
   const normalized = provider?.trim();
@@ -22,9 +24,55 @@ export function WorkbenchAttachments({ attachments, variant = "inline", onRemove
   return <Attachments variant={variant} items={attachments}><>{attachments.map((attachment) => <Attachment key={attachment.id} item={attachment} onRemove={onRemove ? () => onRemove(attachment.id) : undefined} className={attachment.status === "failed" ? "is-failed" : undefined}><AttachmentPreview /><AttachmentInfo />{attachment.status === "failed" ? <button type="button" className="ai-elements-attachment-retry wb-ai-attachment-retry" onClick={() => retry(attachment.id)} aria-label={`${locale === "zh" ? "重试附件" : "Retry attachment"}: ${attachment.name}`}>{locale === "zh" ? "重试" : "Retry"}</button> : null}<AttachmentRemove label={locale === "zh" ? "移除附件" : "Remove attachment"} /></Attachment>)}</></Attachments>;
 }
 
-function PromptInputOpenAttachmentsButton({ label }: { label: string }) {
-  const attachments = usePromptInputAttachments();
-  return <PromptInputButton aria-label={label} onClick={attachments.openFileDialog}><Plus size={16} aria-hidden="true" /></PromptInputButton>;
+function defaultReasoningOptions(locale: "zh" | "en"): readonly WorkbenchReasoningOption[] {
+  return [
+    { id: "auto", label: locale === "zh" ? "自动" : "Auto", shortLabel: locale === "zh" ? "自" : "Auto" },
+    { id: "low", label: locale === "zh" ? "低" : "Low" },
+    { id: "medium", label: locale === "zh" ? "中" : "Medium" },
+    { id: "high", label: locale === "zh" ? "高" : "High" },
+  ];
+}
+
+const NO_KNOWLEDGE_BASE = "__none__";
+
+function PromptInputAddMenu({ attachmentsEnabled, knowledgeBases, knowledgeBase, knowledgeEnabled, onKnowledgeBaseChange, onKnowledgeToggle, disabled, locale }: { attachmentsEnabled: boolean; knowledgeBases: readonly WorkbenchKnowledgeBaseOption[]; knowledgeBase?: string; knowledgeEnabled?: boolean; onKnowledgeBaseChange?: (knowledgeBaseId: string | undefined) => void; onKnowledgeToggle?: () => void; disabled: boolean; locale: "zh" | "en" }) {
+  if (!attachmentsEnabled && !onKnowledgeToggle) return null;
+  const selectedKnowledgeBase = knowledgeBases.find((item) => item.id === knowledgeBase) ?? (knowledgeEnabled ? knowledgeBases[0] : undefined);
+  const knowledgeValue = knowledgeEnabled && selectedKnowledgeBase ? selectedKnowledgeBase.id : NO_KNOWLEDGE_BASE;
+  const selectKnowledgeBase = (value: string) => {
+    if (value === NO_KNOWLEDGE_BASE) {
+      onKnowledgeBaseChange?.(undefined);
+      if (knowledgeEnabled) onKnowledgeToggle?.();
+      return;
+    }
+    onKnowledgeBaseChange?.(value);
+    if (!knowledgeEnabled) onKnowledgeToggle?.();
+  };
+  return <PromptInputActionMenu>
+    <PromptInputActionMenuTrigger aria-label={locale === "zh" ? "添加内容" : "Add content"} disabled={disabled} />
+    <PromptInputActionMenuContent side="top" sideOffset={8} collisionPadding={8} aria-label={locale === "zh" ? "添加到对话" : "Add to conversation"}>
+      {attachmentsEnabled ? <PromptInputActionAddAttachments label={locale === "zh" ? "上传文件" : "Upload files"} description={locale === "zh" ? "添加文档、图片或其他文件" : "Add documents, images, or other files"} /> : null}
+      {onKnowledgeToggle ? <PromptInputActionMenuSub>
+        <PromptInputActionMenuSubTrigger>
+          <span className="ai-elements-prompt-input-action-menu-item-icon"><Database size={16} aria-hidden="true" /></span>
+          <span className="ai-elements-prompt-input-action-menu-item-copy"><span className="ai-elements-prompt-input-action-menu-item-label">{locale === "zh" ? "知识库" : "Knowledge base"}</span><span className="ai-elements-prompt-input-action-menu-item-description">{selectedKnowledgeBase ? selectedKnowledgeBase.label : knowledgeBases.length ? (locale === "zh" ? "选择要使用的知识库" : "Choose a knowledge base") : (locale === "zh" ? "暂无已配置知识库" : "No configured knowledge bases")}</span></span>
+        </PromptInputActionMenuSubTrigger>
+        <PromptInputActionMenuSubContent sideOffset={8} collisionPadding={8} aria-label={locale === "zh" ? "知识库列表" : "Knowledge bases"}>
+          <PromptInputActionMenuRadioGroup value={knowledgeValue} onValueChange={selectKnowledgeBase}>
+            <PromptInputActionMenuRadioItem value={NO_KNOWLEDGE_BASE}>
+              <span className="ai-elements-prompt-input-action-menu-item-icon"><CircleOff size={16} aria-hidden="true" /></span>
+              <span className="ai-elements-prompt-input-action-menu-item-copy"><span className="ai-elements-prompt-input-action-menu-item-label">{locale === "zh" ? "不使用知识库" : "No knowledge base"}</span><span className="ai-elements-prompt-input-action-menu-item-description">{locale === "zh" ? "仅使用当前对话内容" : "Use only the current conversation"}</span></span>
+            </PromptInputActionMenuRadioItem>
+            {knowledgeBases.map((item) => <PromptInputActionMenuRadioItem key={item.id} value={item.id}>
+              <span className="ai-elements-prompt-input-action-menu-item-icon"><Database size={16} aria-hidden="true" /></span>
+              <span className="ai-elements-prompt-input-action-menu-item-copy"><span className="ai-elements-prompt-input-action-menu-item-label">{item.label}</span>{item.description ? <span className="ai-elements-prompt-input-action-menu-item-description">{item.description}</span> : null}</span>
+            </PromptInputActionMenuRadioItem>)}
+            {!knowledgeBases.length ? <PromptInputActionMenuItem disabled><span className="ai-elements-prompt-input-action-menu-item-copy"><span className="ai-elements-prompt-input-action-menu-item-label">{locale === "zh" ? "未配置知识库" : "No knowledge base configured"}</span><span className="ai-elements-prompt-input-action-menu-item-description">{locale === "zh" ? "请先在设置中添加 Obsidian Vault" : "Add an Obsidian Vault in Settings first"}</span></span></PromptInputActionMenuItem> : null}
+          </PromptInputActionMenuRadioGroup>
+        </PromptInputActionMenuSubContent>
+      </PromptInputActionMenuSub> : null}
+    </PromptInputActionMenuContent>
+  </PromptInputActionMenu>;
 }
 
 export function WorkbenchModelSelector({ models, value, onChange, disabled = false, locale = "zh", placeholder, ariaLabel, className }: { models: readonly WorkbenchModelOption[]; value?: string; onChange: (value: string) => void; disabled?: boolean; locale?: "zh" | "en"; placeholder?: string; ariaLabel?: string; className?: string }) {
@@ -105,15 +153,15 @@ export function WorkbenchModelSelector({ models, value, onChange, disabled = fal
   </div>;
 }
 
-export function WorkbenchPromptInput({ value, onValueChange, onSubmit, attachments = [], onAddAttachments, onRemoveAttachment, models = [], model, onModelChange, placeholder, status = "ready", onStop, disabled = false, autoFocus = false, focusRequest = 0, locale = "zh", submitLabel, children }: { value: string; onValueChange: (value: string) => void; onSubmit: () => void; attachments?: readonly WorkbenchAttachmentItem[]; onAddAttachments?: (files: FileList | null) => void; onRemoveAttachment?: (id: string) => void; models?: readonly WorkbenchModelOption[]; model?: string; onModelChange?: (value: string) => void; placeholder?: string; status?: "ready" | "streaming" | "error"; onStop?: () => void; disabled?: boolean; autoFocus?: boolean; focusRequest?: number; locale?: "zh" | "en"; submitLabel?: string; children?: ReactNode }) {
+export type WorkbenchPromptInputProps = { value: string; onValueChange: (value: string) => void; onSubmit: () => void; attachments?: readonly WorkbenchAttachmentItem[]; onAddAttachments?: (files: FileList | null) => void; onRemoveAttachment?: (id: string) => void; models?: readonly WorkbenchModelOption[]; model?: string; onModelChange?: (value: string) => void; reasoningEffort?: string; reasoningOptions?: readonly WorkbenchReasoningOption[]; onReasoningChange?: (value: string) => void; knowledgeBases?: readonly WorkbenchKnowledgeBaseOption[]; knowledgeBase?: string; onKnowledgeBaseChange?: (knowledgeBaseId: string | undefined) => void; knowledgeEnabled?: boolean; onKnowledgeToggle?: () => void; placeholder?: string; status?: "ready" | "streaming" | "error"; onStop?: () => void; disabled?: boolean; autoFocus?: boolean; focusRequest?: number; locale?: "zh" | "en"; submitLabel?: string; children?: ReactNode };
+
+export function WorkbenchPromptInput({ value, onValueChange, onSubmit, attachments = [], onAddAttachments, onRemoveAttachment, models = [], model, onModelChange, reasoningEffort, reasoningOptions, onReasoningChange, knowledgeBases = [], knowledgeBase, onKnowledgeBaseChange, knowledgeEnabled, onKnowledgeToggle, placeholder, status = "ready", onStop, disabled = false, autoFocus = false, focusRequest = 0, locale = "zh", submitLabel, children }: WorkbenchPromptInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const textareaWasFocused = useRef(false);
-  const headerChildren: ReactNode[] = [];
-  const toolChildren: ReactNode[] = [];
+  const contextChildren: ReactNode[] = [];
   React.Children.forEach(children, (child) => {
-    if (React.isValidElement<{ className?: string }>(child) && /composer-selected-agent/u.test(child.props.className ?? "")) headerChildren.push(child);
-    else if (React.isValidElement<{ className?: string }>(child) && /composer-prompt-chips/u.test(child.props.className ?? "")) return;
-    else if (child !== null && child !== undefined) toolChildren.push(child);
+    if (React.isValidElement<{ className?: string }>(child) && /composer-prompt-chips/u.test(child.props.className ?? "")) return;
+    if (child !== null && child !== undefined) contextChildren.push(child);
   });
   useEffect(() => {
     if (status === "streaming" || !textareaWasFocused.current) return;
@@ -125,13 +173,16 @@ export function WorkbenchPromptInput({ value, onValueChange, onSubmit, attachmen
     const frame = window.requestAnimationFrame(() => textareaRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
   }, [autoFocus, focusRequest, status]);
-  return <PromptInput value={value} onValueChange={onValueChange} onSubmit={onSubmit} onAddAttachments={onAddAttachments} attachments={attachments} onRemoveAttachment={onRemoveAttachment} status={status} onStop={onStop} disabled={disabled} locale={locale}>
-    <PromptInputHeader>{headerChildren.length ? <div className="wb-ai-prompt-context">{headerChildren}</div> : null}<WorkbenchAttachments attachments={attachments} variant="inline" onRemove={onRemoveAttachment} locale={locale} /></PromptInputHeader>
-    <PromptInputBody><PromptInputTextarea ref={textareaRef} value={value} autoFocus={autoFocus} onFocus={() => { textareaWasFocused.current = true; }} onChange={(event) => onValueChange(event.target.value)} placeholder={placeholder} /></PromptInputBody>
-    <PromptInputFooter><PromptInputTools>
-      {onAddAttachments ? <PromptInputOpenAttachmentsButton label={locale === "zh" ? "添加附件" : "Add attachment"} /> : null}
-      {models.length && onModelChange ? <PromptInputSelect className="wb-ai-prompt-model-select"><WorkbenchModelSelector models={models} value={model} onChange={onModelChange} disabled={disabled || status === "streaming"} locale={locale} /></PromptInputSelect> : null}
-      {toolChildren.length ? <div className="wb-ai-prompt-custom-tools" data-slot="prompt-input-custom-tools">{toolChildren}</div> : null}
-    </PromptInputTools><div className="wb-ai-prompt-trailing"><PromptInputSubmit aria-label={submitLabel || (status === "streaming" ? (locale === "zh" ? "停止生成" : "Stop generating") : (locale === "zh" ? "发送" : "Send"))} onClick={status === "streaming" ? onStop : undefined} /></div></PromptInputFooter>
+  const controlsDisabled = disabled || status === "streaming";
+  const combinedSelector = onModelChange && reasoningEffort && onReasoningChange;
+  return <PromptInput value={value} onValueChange={onValueChange} onSubmit={onSubmit} onAddAttachments={onAddAttachments} attachments={attachments} onRemoveAttachment={onRemoveAttachment} status={status} onStop={onStop} disabled={disabled} locale={locale} className="wb-ai-prompt-input-compact">
+    <PromptInputHeader>{contextChildren.length ? <div className="wb-ai-prompt-context">{contextChildren}</div> : null}<WorkbenchAttachments attachments={attachments} variant="inline" onRemove={onRemoveAttachment} locale={locale} /></PromptInputHeader>
+    <PromptInputFooter className="wb-ai-prompt-compact-row"><PromptInputTools>
+      <PromptInputAddMenu attachmentsEnabled={Boolean(onAddAttachments)} knowledgeBases={knowledgeBases} knowledgeBase={knowledgeBase} knowledgeEnabled={knowledgeEnabled} onKnowledgeBaseChange={onKnowledgeBaseChange} onKnowledgeToggle={onKnowledgeToggle} disabled={controlsDisabled} locale={locale} />
+    </PromptInputTools>
+      <PromptInputBody><PromptInputTextarea ref={textareaRef} value={value} minRows={1} maxRows={3} submitMode="enter" autoFocus={autoFocus} onFocus={() => { textareaWasFocused.current = true; }} onChange={(event) => onValueChange(event.target.value)} placeholder={placeholder} /></PromptInputBody>
+      {combinedSelector ? <WorkbenchModelReasoningSelector models={models} modelId={model} reasoningOptions={reasoningOptions ?? defaultReasoningOptions(locale)} reasoningId={reasoningEffort} onModelChange={onModelChange} onReasoningChange={onReasoningChange} disabled={controlsDisabled} locale={locale} /> : models.length && onModelChange ? <PromptInputSelect className="wb-ai-prompt-model-select"><WorkbenchModelSelector models={models} value={model} onChange={onModelChange} disabled={controlsDisabled} locale={locale} /></PromptInputSelect> : null}
+      <div className="wb-ai-prompt-trailing"><PromptInputSubmit aria-label={submitLabel || (status === "streaming" ? (locale === "zh" ? "停止生成" : "Stop generating") : (locale === "zh" ? "发送" : "Send"))} onClick={status === "streaming" ? onStop : undefined} /></div>
+    </PromptInputFooter>
   </PromptInput>;
 }

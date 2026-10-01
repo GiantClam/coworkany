@@ -303,6 +303,8 @@ importers:
         specifier: ^8.57.0
         version: 8.57.0(eslint@10.0.3(jiti@2.6.1)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.8.2)
 
+  apps/website: {}
+
   apps/desktop:
     dependencies:
       '@ai-sdk/react':

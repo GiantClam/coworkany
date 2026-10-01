@@ -18,11 +18,20 @@ export async function patchDashiPreviewDesktopBridge(skillRoot) {
     const urlAnchor = "    const localUrl = `https://localhost:${port}/`;\n    const url = isLoopbackHost(host) ? localUrl : `https://${localName}.local:${port}/`;\n    const httpUrl = `http://127.0.0.1:${port}/`;\n    const localHttpUrl = `http://localhost:${port}/`;\n    const lanHttpUrl = isLoopbackHost(host) ? null : `http://${localName}.local:${port}/`;";
     if (launcher.includes(urlAnchor)) {
       launcher = launcher.replace(urlAnchor, `${launcherMarker}\n    const httpUrl = \`http://127.0.0.1:\u0024{port}/\`;\n    const url = httpUrl;\n    const localHttpUrl = \`http://localhost:\u0024{port}/\`;\n    const localUrl = httpUrl;\n    const lanHttpUrl = null;`);
-    } else if (!launcher.includes("const url = httpUrl;")) {
-      throw new Error("dashi_preview_launcher_url_patch_anchor_missing");
     } else {
-      launcher = launcher.replace("// COWORKANY_HTTP_LOOPBACK_ONLY\n", `${launcherMarker}\n`);
-      if (!launcher.includes(launcherMarker)) launcher = launcher.replace("    const httpUrl =", `${launcherMarker}\n    const httpUrl =`);
+      const upstreamLoopbackUrlAnchor = "    const url = `https://${localName}.local:${port}/`;\n    const localUrl = `https://localhost:${port}/`;\n    const httpUrl = `http://127.0.0.1:${port}/`;\n    const localHttpUrl = `http://localhost:${port}/`;\n    const lanHttpUrl = `http://${localName}.local:${port}/`;";
+      if (launcher.includes(upstreamLoopbackUrlAnchor)) {
+        launcher = launcher.replace(upstreamLoopbackUrlAnchor, `${launcherMarker}\n    const httpUrl = \`http://127.0.0.1:\u0024{port}/\`;
+    const url = httpUrl;
+    const localHttpUrl = \`http://localhost:\u0024{port}/\`;
+    const localUrl = httpUrl;
+    const lanHttpUrl = null;`);
+      } else if (launcher.includes("const url = httpUrl;")) {
+        launcher = launcher.replace("// COWORKANY_HTTP_LOOPBACK_ONLY\n", `${launcherMarker}\n`);
+        if (!launcher.includes(launcherMarker)) launcher = launcher.replace("    const httpUrl =", `${launcherMarker}\n    const httpUrl =`);
+      } else {
+        throw new Error("dashi_preview_launcher_url_patch_anchor_missing");
+      }
     }
     const healthAnchor = "      await Promise.all([\n        fetchHttp(`http://${urlHost}:${port}/`),\n        fetchHttps(`https://${urlHost}:${port}/`),\n      ]);";
     if (!launcher.includes(healthAnchor)) throw new Error("dashi_preview_launcher_health_patch_anchor_missing");

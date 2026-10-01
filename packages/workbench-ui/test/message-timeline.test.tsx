@@ -36,8 +36,8 @@ test("shared message timeline renders stable ordered timestamps and accessible a
   assert.match(markup, /data-sequence="3"/);
   assert.ok(markup.indexOf('data-sequence="2"') < markup.indexOf('data-sequence="3"'));
   assert.match(markup, /aria-label="Copy reply"/);
-  assert.match(markup, /class="[^"]*ai-elements-message ai-elements-message-assistant wb-ai-message wb-ai-message-assistant/);
-  assert.match(markup, /class="ai-elements-message-content wb-ai-message-content[^"]*"/);
+  assert.match(markup, /data-slot="message"[^>]*data-message-role="assistant"/);
+  assert.match(markup, /data-slot="message-content"/);
   assert.match(markup, /data-slot="message-actions"/);
   assert.match(markup, /data-slot="message-toolbar"/);
   assert.match(markup, /aria-label="Open artifact: 分析报告"/);
@@ -79,7 +79,7 @@ test("user timeline messages keep their high-contrast body class", () => {
   }]} locale="zh" />);
 
   assert.match(markup, /wb-chat-user-body/);
-  assert.match(markup, /class="[^"]*ai-elements-message ai-elements-message-user wb-ai-message wb-ai-message-user/);
+  assert.match(markup, /data-slot="message"[^>]*data-message-role="user"/);
   assert.doesNotMatch(markup, /assistant-body/);
   assert.match(markup, /wb-chat-user-header/);
 });
@@ -99,7 +99,7 @@ test("user timeline preserves Markdown-looking input as plain text", () => {
   assert.doesNotMatch(markup, /<h1|data-streamdown="strong"|<hr/);
 });
 
-test("assistant timelines separate streaming process evidence from rich results", () => {
+test("assistant timelines preserve interleaved process, text, sources, and results", () => {
   const markup = renderToStaticMarkup(<WorkbenchMessageTimeline messages={[{
     id: "rich-message-1",
     conversationId: "conversation-1",
@@ -116,10 +116,12 @@ test("assistant timelines separate streaming process evidence from rich results"
     ],
   }]} locale="zh" />);
 
-  assert.match(markup, /wb-message-process/);
-  assert.match(markup, /执行过程/);
   assert.match(markup, /120 \+ 80/);
-  assert.match(markup, /wb-message-results/);
-  assert.match(markup, /参考来源/);
   assert.match(markup, /执行摘要/);
+  assert.match(markup, /data-message-order="chronological"/);
+  assert.doesNotMatch(markup, /wb-message-process|wb-message-results/);
+  const markers = ["web_search", "120 + 80", "已完成研究并生成报告。", "市场研究", "执行摘要"];
+  const positions = markers.map((marker) => markup.indexOf(marker));
+  assert.ok(positions.every((position) => position >= 0));
+  assert.deepEqual([...positions].sort((left, right) => left - right), positions);
 });

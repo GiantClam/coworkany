@@ -3,10 +3,60 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { formatWorkbenchMessageTimestamp, MessageAction, WorkbenchMessageSurface, WorkbenchPreview } from "../src/index";
+import { formatWorkbenchMessageTimestamp, MessageAction, workbenchMessageActivityRevision, WorkbenchMessageSurface, WorkbenchPreview } from "../src/index";
 import { createDesktopUIMessage, type DesktopUIMessage } from "@coworkany/workbench-client";
 
 const workbenchStyles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+
+test("renders interleaved assistant parts in chronological DOM order", () => {
+  const message: DesktopUIMessage = {
+    ...createDesktopUIMessage({ id: "assistant-ordered", role: "assistant", conversationId: "conversation-ordered", runId: "run-ordered" }),
+    parts: [
+      { type: "reasoning", text: "ReasoningAlpha", state: "done" },
+      { type: "text", text: "TextBeforeBeta", state: "done" },
+      { type: "dynamic-tool", toolName: "ToolGamma", toolCallId: "tool-ordered", state: "output-available", input: { query: "order" }, output: "ok" },
+      { type: "text", text: "TextAfterDelta", state: "done" },
+      { type: "data-artifact", id: "artifact-ordered", data: { id: "artifact-ordered", relativePath: "artifacts/ArtifactEpsilon.md", title: "ArtifactEpsilon.md", mimeType: "text/markdown", byteLength: 12, sha256: "hash" } },
+    ],
+  };
+  const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[message]} locale="en" />);
+  const positions = [markup.indexOf('data-process-kind="reasoning"'), ...["TextBeforeBeta", "ToolGamma", "TextAfterDelta", "ArtifactEpsilon.md"].map((marker) => markup.indexOf(marker))];
+  assert.ok(positions.every((position) => position >= 0), JSON.stringify(positions));
+  assert.deepEqual(positions, [...positions].sort((left, right) => left - right));
+});
+
+test("changes the conversation revision for updates inside the same message", () => {
+  const base = createDesktopUIMessage({ id: "assistant-revision", role: "assistant", conversationId: "conversation-revision", runId: "run-revision" });
+  const first: DesktopUIMessage = { ...base, parts: [{ type: "text", text: "a", state: "streaming" }], metadata: { ...base.metadata, lastSequence: 1, runStatus: "running" } };
+  const second: DesktopUIMessage = { ...first, parts: [{ type: "text", text: "ab", state: "streaming" }], metadata: { ...first.metadata, lastSequence: 2 } };
+  assert.notEqual(workbenchMessageActivityRevision(first), workbenchMessageActivityRevision(second));
+});
+
+test("keeps a tool-only assistant turn visibly active and accessibly announced", () => {
+  const message: DesktopUIMessage = {
+    ...createDesktopUIMessage({ id: "assistant-tool-only", role: "assistant", conversationId: "conversation-tool-only", runId: "run-tool-only" }),
+    parts: [{ type: "dynamic-tool", toolName: "search", toolCallId: "tool-only", state: "input-available", input: { query: "active state" } }],
+    metadata: { conversationId: "conversation-tool-only", runId: "run-tool-only", createdAt: "2026-09-29T00:00:00.000Z", updatedAt: "2026-09-29T00:00:01.000Z", lastSequence: 1, runStatus: "running" },
+  };
+  const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[message]} pendingMessageId={message.id} locale="en" />);
+  assert.match(markup, /data-message-id="assistant-tool-only"[^>]*>[\s\S]*aria-busy="true"/);
+  assert.match(markup, /role="status"[^>]*aria-live="polite"/);
+  assert.match(markup, /Searching|Running tools/);
+  assert.match(markup, /data-slot="tool-activity-group"/);
+  assert.doesNotMatch(markup, /class="wb-ai-message-activity"/);
+});
+
+test("keeps one empty phase announcement outside busy messages in completed history", () => {
+  const message = createDesktopUIMessage({ id: "assistant-completed-phase", role: "assistant", conversationId: "conversation-completed" });
+  const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[message]} locale="en" />);
+  const region = markup.match(/<span[^>]*data-phase-announcement="true"[^>]*>([\s\S]*?)<\/span>/);
+  assert.equal((markup.match(/role="status"/g) ?? []).length, 1);
+  assert.ok(region, "phase announcement region is missing");
+  assert.equal(region?.[1], "");
+  assert.match(markup, /data-phase-announcement="true"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-atomic="true"/);
+  assert.equal(markup.slice(0, markup.indexOf('data-slot="message"')).includes('aria-busy="true"'), false);
+  assert.doesNotMatch(markup, /class="wb-ai-message-activity"/);
+});
 
 test("renders UIMessage roles, streaming process and structured output in one surface", () => {
   const user = createDesktopUIMessage({ id: "user-1", role: "user", conversationId: "conversation-1", content: "生成一张图" });
@@ -22,13 +72,15 @@ test("renders UIMessage roles, streaming process and structured output in one su
   const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[user, assistant]} pendingMessageId="assistant-1" locale="zh" onCopy={() => undefined} onRetry={() => undefined} onArtifactOpen={() => undefined} onArtifactDownload={() => undefined} />);
   assert.match(markup, /data-uimessage-surface="true"/);
   assert.match(markup, /data-message-role="user"/);
-  assert.match(markup, /执行过程/);
   assert.match(markup, /结果已准备/);
   assert.match(markup, /result\.png/);
-  assert.match(markup, /data-slot="reasoning"[^>]*aria-busy="true"/);
-  assert.match(markup, /data-slot="reasoning-content"[^>]*aria-live="polite"/);
+  assert.match(markup, /data-process-kind="reasoning"[^>]*data-status="running"[^>]*aria-busy="true"/);
+  assert.doesNotMatch(markup, /data-slot="reasoning-content"[^>]*aria-live=/);
+  assert.match(markup, /role="status" aria-live="polite"/);
+  assert.ok(markup.indexOf("结果已准备") < markup.indexOf('data-slot="artifact-results"'));
+  assert.ok(markup.indexOf('data-slot="artifact-results"') < markup.indexOf('data-process-id="reasoning:3"'));
   assert.doesNotMatch(markup, /任务状态|Task status/);
-  assert.match(markup, /data-sd-animate/);
+  assert.doesNotMatch(markup, /data-sd-animate/);
 });
 
 test("keeps empty state inside the conversation surface", () => {
@@ -36,16 +88,14 @@ test("keeps empty state inside the conversation surface", () => {
   assert.match(markup, /Start a new conversation/);
 });
 
-test("shows an AI Elements pending process before the assistant response arrives", () => {
+test("shows one accessible waiting activity before the assistant response arrives", () => {
   const user = createDesktopUIMessage({ id: "user-pending", role: "user", conversationId: "conversation-1", content: "开始执行" });
   const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[user]} pendingMessageId="pending-assistant" locale="zh" />);
   assert.match(markup, /data-message-id="pending-assistant"/);
-  assert.match(markup, /data-message-group="execution-process"/);
-  assert.match(markup, /data-slot="reasoning"[^>]*aria-busy="true"/);
-  assert.match(markup, /data-slot="reasoning-trigger"/);
-  assert.match(markup, /data-slot="reasoning-content"/);
-  assert.match(markup, /正在等待模型响应…/);
-  assert.match(markup, /ai-elements-shimmer/);
+  assert.match(markup, /<div(?=[^>]*data-slot="message")(?=[^>]*data-message-status="running")(?=[^>]*aria-busy="true")[^>]*>/);
+  assert.match(markup, /data-phase-announcement="true"[^>]*role="status" aria-live="polite"/);
+  assert.match(markup, /data-phase-announcement="true"[^>]*aria-atomic="true"><\/span>/);
+  assert.doesNotMatch(markup, /data-slot="reasoning"/);
 });
 
 test("does not append a second pending assistant after a live assistant arrives", () => {
@@ -57,8 +107,8 @@ test("does not append a second pending assistant after a live assistant arrives"
   const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[user, assistant]} pendingMessageId="active-assistant" locale="zh" />);
   assert.equal((markup.match(/data-message-id="active-assistant"/g) ?? []).length, 0);
   assert.match(markup, /data-message-id="sdk-assistant-live"/);
-  assert.match(markup, /正在处理/);
-  assert.match(markup, /data-slot="reasoning"[^>]*aria-busy="true"/);
+  assert.match(markup, /data-process-id="reasoning:0"/);
+  assert.match(markup, /data-process-kind="reasoning"[^>]*data-status="running"[^>]*aria-busy="true"/);
 });
 
 test("renders source citations, reports and media output slots", () => {
@@ -76,6 +126,102 @@ test("renders source citations, reports and media output slots", () => {
   assert.match(markup, /Generated report/);
   assert.match(markup, /data-language="markdown"/);
   assert.match(markup, /assets\/preview\.png/);
+});
+
+test("prefers one aggregated run metrics row over legacy usage parts", () => {
+  const count = { total: 1, completed: 1, failed: 0, rejected: 0, running: 0, byName: [] };
+  const message: DesktopUIMessage = {
+    ...createDesktopUIMessage({ id: "assistant-metrics", role: "assistant", conversationId: "conversation-1", runId: "run-1" }),
+    parts: [
+      { type: "data-usage", id: "usage:u1", data: { runId: "run-1", usageId: "u1", model: "model-a", inputTokens: 4, outputTokens: 2 } },
+      { type: "data-runMetrics", id: "run-metrics:run-1", data: { runId: "run-1", model: "model-a", modelTools: count, capabilities: { ...count, total: 0, completed: 0 }, tokens: { input: 4, output: 2 }, completeness: "complete" } },
+    ],
+  };
+  const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[message]} locale="zh" />);
+  assert.equal((markup.match(/class="wb-run-metrics"/g) ?? []).length, 1);
+  assert.doesNotMatch(markup, /ai-elements-context-trigger/);
+  assert.match(markup, /工具 1/);
+});
+
+test("merges four legacy usage events into one token summary without a fabricated context percentage", () => {
+  const message: DesktopUIMessage = {
+    ...createDesktopUIMessage({ id: "assistant-legacy-usage", role: "assistant", conversationId: "conversation-1", runId: "run-1" }),
+    parts: [
+      { type: "text", text: "Completed answer", state: "done" },
+      ...[[1200, 250], [3200, 500], [4000, 642], [300, 100]].map(([inputTokens, outputTokens], index): DesktopUIMessage["parts"][number] => ({
+        type: "data-usage", id: `usage:step-${index}`, data: { runId: "run-1", model: "model-a", inputTokens, outputTokens },
+      })),
+    ],
+  };
+  const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[message]} locale="zh" />);
+  assert.equal((markup.match(/data-slot="usage-summary"/g) ?? []).length, 1);
+  assert.match(markup, /10,192 Token/);
+  assert.match(markup, /输入[\s\S]*?>8,700</);
+  assert.match(markup, /输出[\s\S]*?>1,492</);
+  assert.doesNotMatch(markup, /% used|context-trigger|<progress/);
+
+  const pendingMarkup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[message]} pendingMessageId={message.id} locale="zh" />);
+  assert.doesNotMatch(pendingMarkup, /data-slot="usage-summary"/);
+});
+
+test("does not count replayed usage twice and uses the latest run snapshot instead of summing snapshots and steps", () => {
+  const usage = { runId: "run-1", usageId: "step-1", model: "model-a", inputTokens: 100, outputTokens: 20 };
+  const message: DesktopUIMessage = {
+    ...createDesktopUIMessage({ id: "assistant-usage-snapshots", role: "assistant", conversationId: "conversation-1", runId: "run-1" }),
+    parts: [
+      { type: "data-usage", id: "usage:original", data: usage },
+      { type: "data-usage", id: "usage:replayed", data: usage },
+    ],
+  };
+  const deltasMarkup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[message]} locale="en" />);
+  assert.match(deltasMarkup, /120 Token/);
+  assert.equal((deltasMarkup.match(/data-slot="usage-summary"/g) ?? []).length, 1);
+
+  // More than ten snapshots also verifies numeric part order is preserved.
+  const snapshots: DesktopUIMessage["parts"] = Array.from({ length: 12 }, (_, index) => ({
+    type: "data-usage", id: `usage:snapshot-${index}`, data: { ...usage, usageId: `snapshot-${index}`, inputTokens: 100 + index, outputTokens: 20 + index, aggregation: "snapshot", scope: "run" },
+  }));
+  const snapshotsMarkup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[{ ...message, parts: [...message.parts, ...snapshots] }]} locale="en" />);
+  assert.match(snapshotsMarkup, /142 Token/);
+  assert.match(snapshotsMarkup, /Input[\s\S]*?>111</);
+  assert.match(snapshotsMarkup, /Output[\s\S]*?>31</);
+  assert.doesNotMatch(snapshotsMarkup, /% used|<progress/);
+});
+
+test("keeps zero usage distinct from missing or invalid token counts in the legacy summary", () => {
+  const base = createDesktopUIMessage({ id: "assistant-usage-availability", role: "assistant", conversationId: "conversation-1", runId: "run-1" });
+  const zero: DesktopUIMessage = { ...base, parts: [{ type: "data-usage", id: "usage:zero", data: { runId: "run-1", model: "model-a", inputTokens: 0 } }] };
+  const zeroMarkup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[zero]} locale="zh" />);
+  assert.match(zeroMarkup, /0 Token/);
+  assert.match(zeroMarkup, /输入[\s\S]*?>0</);
+  assert.match(zeroMarkup, /输出[\s\S]*?>未提供</);
+
+  const invalid: DesktopUIMessage = { ...base, parts: [{ type: "data-usage", id: "usage:invalid", data: { runId: "run-1", model: "model-a", inputTokens: -1, outputTokens: Number.NaN } }] };
+  const invalidMarkup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[invalid]} locale="en" />);
+  assert.match(invalidMarkup, /Token unavailable/);
+  assert.doesNotMatch(invalidMarkup, /NaN|% used|>0 Token</);
+});
+
+test("reveals run metrics only after the assistant turn completes", () => {
+  const count = { total: 1, completed: 1, failed: 0, rejected: 0, running: 0, byName: [] };
+  const base = createDesktopUIMessage({ id: "assistant-metrics-lifecycle", role: "assistant", conversationId: "conversation-1", runId: "run-1" });
+  const parts: DesktopUIMessage["parts"] = [
+    { type: "text", text: "结果", state: "streaming" },
+    { type: "data-runMetrics", id: "run-metrics:run-1", data: { runId: "run-1", model: "model-a", modelTools: count, capabilities: { ...count, total: 0, completed: 0 }, tokens: { input: 4, output: 2 }, completeness: "complete" } },
+  ];
+
+  for (const runStatus of ["queued", "running", "waiting", "failed", "cancelled"] as const) {
+    const message: DesktopUIMessage = { ...base, parts, metadata: { ...base.metadata, runStatus } };
+    const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[message]} locale="zh" />);
+    assert.doesNotMatch(markup, /class="wb-run-metrics"/, `${runStatus} turn exposed metrics`);
+  }
+
+  const completed: DesktopUIMessage = { ...base, parts, metadata: { ...base.metadata, runStatus: "completed" } };
+  const completedMarkup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[completed]} locale="zh" />);
+  assert.match(completedMarkup, /class="wb-run-metrics"/);
+
+  const pendingMarkup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[completed]} pendingMessageId={completed.id} locale="zh" />);
+  assert.doesNotMatch(pendingMarkup, /class="wb-run-metrics"/);
 });
 
 test("uses the host media resolver for local artifact previews instead of a raw relative URL", () => {
@@ -284,19 +430,17 @@ test("does not reserve an empty action toolbar for messages without actions", ()
 
 test("keeps the chat surface and message article free of legacy card geometry", () => {
   assert.match(workbenchStyles, /\.wb-ai-message-surface\s*\{[^}]*border:\s*0/s);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.wb-ai-message\s*\{[^}]*display:\s*block/s);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.wb-ai-message\s*\{[^}]*gap:\s*0/s);
+  assert.doesNotMatch(workbenchStyles, /\.wb-ai-message-surface \.wb-ai-message\s*\{/);
+  assert.doesNotMatch(workbenchStyles, /\.wb-ai-message-surface \.ai-elements-message-content\s*\{[^}]*display:\s*grid/s);
 });
 
-test("keeps execution details visually subordinate to the answer", () => {
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.wb-ai-message-execution > \.wb-ai-process\s*\{[\s\S]*background:\s*transparent;/);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.wb-ai-message-execution > \.wb-ai-process\s*\{[\s\S]*box-shadow:\s*none;/);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.wb-ai-message-execution > \.wb-ai-task\[data-status="running"\]\s*\{[\s\S]*background:/);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.wb-ai-message-execution > \.wb-ai-task\[data-status="failed"\][\s\S]*background:/);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.wb-ai-message-execution \.ai-elements-reasoning-content\s*\{[\s\S]*font-size:\s*\.72rem/);
+test("keeps ordered process parts within the native message hierarchy", () => {
+  assert.doesNotMatch(workbenchStyles, /\.wb-ai-message-output\[data-message-order="chronological"\] > \.wb-ai-process\s*\{/);
+  assert.match(workbenchStyles, /\.wb-ai-message-activity\s*\{[^}]*color:\s*var\(--ai-elements-muted\)/);
+  assert.doesNotMatch(workbenchStyles, /\.wb-ai-message-execution/);
 });
 
-test("uses AI Elements message slots for execution, output and actions", () => {
+test("uses AI Elements message slots in chronological order", () => {
   const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[{
     ...createDesktopUIMessage({ id: "assistant-stream", role: "assistant", conversationId: "conversation-1" }),
     parts: [
@@ -306,8 +450,6 @@ test("uses AI Elements message slots for execution, output and actions", () => {
       { type: "dynamic-tool", toolName: "webfetch", toolCallId: "tool-1", state: "output-available", input: { url: "https://example.com" }, output: "ok" },
     ],
   }]} pendingMessageId="assistant-stream" locale="en" onCopy={() => undefined} onRetry={() => undefined} />);
-  assert.match(markup, /data-slot="message-group"/);
-  assert.match(markup, /data-message-group="execution-process"/);
   assert.doesNotMatch(markup, /class="[^"]*ai-elements-task[^"]*"/);
   assert.doesNotMatch(markup, /wb-ai-run-status/);
   assert.match(markup, /data-slot="message-output"/);
@@ -315,16 +457,17 @@ test("uses AI Elements message slots for execution, output and actions", () => {
   assert.match(markup, /data-streaming="true"/);
   assert.match(markup, /Copy message/);
   assert.match(markup, /aria-label="Retry"/);
-  assert.match(markup, /data-slot="tool-header"/);
+  assert.match(markup, /data-slot="tool-activity-trigger"/);
   assert.match(markup, /data-tool-name="webfetch"/);
-  assert.match(markup, /data-state="closed"[^>]*data-status="completed"[^>]*data-slot="tool"/);
-  assert.equal((markup.match(/data-slot="tool"/g) ?? []).length, 1);
-  assert.match(markup, /Completed/);
-  assert.match(markup, /data-slot="tool-content"/);
-  assert.ok(markup.indexOf('data-message-group="execution-process"') < markup.indexOf('data-slot="message-output"'));
+  assert.match(markup, /<div(?=[^>]*data-slot="tool-activity-group")(?=[^>]*data-state="closed")(?=[^>]*data-status="completed")[^>]*>/);
+  assert.equal((markup.match(/data-slot="tool-activity-group"/g) ?? []).length, 2);
+  assert.match(markup, /1 tool operation/);
+  assert.match(markup, /data-slot="tool-activity-list"/);
+  assert.ok(markup.indexOf('data-process-id="reasoning:0"') < markup.indexOf("streamed answer"));
+  assert.ok(markup.indexOf("streamed answer") < markup.indexOf('data-tool-name="webfetch"'));
 });
 
-test("consolidates streamed reasoning fragments into one collapsible process", () => {
+test("keeps distinct reasoning occurrences as distinct collapsible parts", () => {
   const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[{
     ...createDesktopUIMessage({ id: "assistant-reasoning-fragments", role: "assistant", conversationId: "conversation-1" }),
     parts: [
@@ -334,11 +477,11 @@ test("consolidates streamed reasoning fragments into one collapsible process", (
     ],
   }]} locale="zh" />);
 
-  assert.equal((markup.match(/data-slot="reasoning"/g) ?? []).length, 1);
-  assert.equal((markup.match(/>推理过程</g) ?? []).length, 1);
-  assert.match(markup, /data-slot="reasoning-content"/);
-  assert.doesNotMatch(markup, /先确认目标\n\n再检查约束/u);
-  assert.match(markup, /data-status="completed"/);
+  assert.equal((markup.match(/data-process-kind="reasoning"/g) ?? []).length, 1);
+  assert.equal((markup.match(/data-slot="tool-activity-trigger"/g) ?? []).length, 1);
+  assert.doesNotMatch(markup, /先确认目标|再检查约束/u);
+  assert.match(markup, /data-process-id="reasoning:0"[^>]*data-status="completed"/);
+  assert.doesNotMatch(markup, /data-state="open"/);
 });
 
 test("allows feature actions to share the native message action bar", () => {
@@ -348,12 +491,12 @@ test("allows feature actions to share the native message action bar", () => {
     renderAssistantActions={() => <MessageAction label="Preview" title="Preview">P</MessageAction>}
   />);
 
-  const actions = markup.match(/<div class="ai-elements-message-actions"[^>]*>([\s\S]*?)<\/div>/)?.[1] ?? "";
+  const actions = markup.match(/<div[^>]*data-slot="message-actions"[^>]*>([\s\S]*?)<\/div>/)?.[1] ?? "";
   assert.match(actions, /aria-label="Preview"/);
   assert.match(actions, /title="Preview"/);
 });
 
-test("keeps reasoning out of the message body while exposing it in execution process", () => {
+test("keeps reasoning and public text ordered inside one message body", () => {
   const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[{
     ...createDesktopUIMessage({ id: "assistant-body-boundary", role: "assistant", conversationId: "conversation-1" }),
     parts: [
@@ -361,10 +504,11 @@ test("keeps reasoning out of the message body while exposing it in execution pro
       { type: "text", text: "public answer", state: "done" },
     ],
   }]} locale="en" />);
-  const output = markup.match(/<div class="wb-ai-message-output"[^>]*>([\s\S]*?)<\/div>/)?.[1] ?? "";
-  assert.match(markup, /data-slot="reasoning"/);
-  assert.match(output, /public answer/);
-  assert.doesNotMatch(output, /private thinking/);
+  assert.match(markup, /data-process-kind="reasoning"/);
+  assert.match(markup, /data-state="closed"/);
+  assert.doesNotMatch(markup, /private thinking/);
+  assert.match(markup, /class="wb-ai-message-output"[^>]*data-message-order="chronological"/);
+  assert.ok(markup.indexOf("private thinking") < markup.indexOf("public answer"));
 });
 
 test("renders assistant Markdown as semantic elements in the message body", () => {
@@ -450,9 +594,8 @@ test("does not move text parts into reasoning based on language or wording", () 
       { type: "text", text: "Theuserisaskingtolistthethreerisks.Letmeloadtheskillfirst.Nofilegenerationneeded.Giveaconciseanswer.审查时最需要关注的三项风险：1.付款与资金条款风险", state: "done" },
     ],
   }]} locale="zh" />);
-  const output = markup.match(/<div class="wb-ai-message-output"[^>]*>([\s\S]*?)<\/div>/)?.[1] ?? "";
-  assert.match(output, /Theuserisaskingtolistthethreerisks\.Letmeloadtheskillfirst\.Nofilegenerationneeded\./u);
-  assert.match(output, /付款与资金条款风险/);
+  assert.match(markup, /Theuserisaskingtolistthethreerisks\.Letmeloadtheskillfirst\.Nofilegenerationneeded\./u);
+  assert.match(markup, /付款与资金条款风险/);
 });
 
 test("renders an AI Elements confirmation for a blocked tool call", () => {
@@ -460,10 +603,10 @@ test("renders an AI Elements confirmation for a blocked tool call", () => {
     ...createDesktopUIMessage({ id: "assistant-approval", role: "assistant", conversationId: "conversation-1" }),
     parts: [{ type: "dynamic-tool", toolName: "bash", toolCallId: "tool-approval", state: "approval-requested", input: { command: "pwd" }, approval: { id: "permission-1", reason: "Run pwd" } }],
   }]} locale="en" />);
-  assert.match(markup, /data-state="open"[^>]*data-status="waiting"[^>]*data-slot="tool"/);
+  assert.match(markup, /<div(?=[^>]*data-slot="tool")(?=[^>]*data-state="open")(?=[^>]*data-status="waiting")[^>]*>/);
   assert.match(markup, /data-slot="confirmation"/);
   assert.match(markup, /data-tool-name="bash"/);
-  assert.match(markup, /Awaiting approval/);
+  assert.match(markup, /Awaiting Approval/);
   assert.match(markup, /data-slot="tool-content"/);
 });
 
@@ -508,38 +651,25 @@ test("renders workflow output and data attachments through native AI Elements pr
   assert.doesNotMatch(markup, /Some content is unavailable/);
 });
 
-test("keeps Streamdown code lines block-formatted and preserves code whitespace", () => {
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.ai-elements-message-response pre > code > span\s*\{[^}]*display:\s*block/s);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.ai-elements-message-response pre\s*\{[^}]*white-space:\s*pre/s);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.ai-elements-message-response pre\s*\{[^}]*overflow-wrap:\s*normal/s);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.ai-elements-message-response > div > p\s*\{[^}]*margin:\s*\.75rem 0/s);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.ai-elements-message-response > div > :is\(h1, h2, h3, h4\)\s*\{[^}]*line-height:\s*1\.3/s);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.ai-elements-message-response \[data-streamdown="code-block-body"\]\s*\{[^}]*overflow:\s*auto/s);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.ai-elements-message-response pre\s*\{[^}]*font:\s*\.875rem\/1\.5/s);
+test("renders semantic Markdown through Streamdown without a second authored stylesheet", () => {
+  const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[
+    createDesktopUIMessage({ id: "markdown", role: "assistant", conversationId: "conversation-1", content: "## Result\n\n**Strong** and `inline`.\n\n- first\n- second\n\n> quote\n\n| Name | Value |\n| --- | --- |\n| order | preserved |\n\n```ts\nconst answer = 42;\n```" }),
+  ]} />);
+  for (const tag of ["h2", "ul", "blockquote", "table", "pre", "code"]) {
+    assert.match(markup, new RegExp(`<${tag}[ >]`));
+  }
+  assert.match(markup, /data-streamdown="strong"/);
+  assert.match(markup, /const answer = 42;/);
+  assert.doesNotMatch(workbenchStyles, /\.ai-elements-message-response > div/);
 });
 
-test("preserves single line breaks in assistant Markdown prose without changing code blocks", () => {
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.ai-elements-message-response > div > :is\(p, li, blockquote\)\s*\{[^}]*white-space:\s*pre-wrap/s);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.ai-elements-message-response > div\s*\{[^}]*white-space:\s*normal/s);
-  assert.match(workbenchStyles, /\.wb-ai-message-surface \.ai-elements-message-response pre\s*\{[^}]*white-space:\s*pre/s);
-});
-
-test("restores semantic Markdown styles after Tailwind preflight", () => {
-  assert.match(workbenchStyles, /\.ai-elements-message-response > div ul\s*\{[^}]*list-style-type:\s*disc/s);
-  assert.match(workbenchStyles, /\.ai-elements-message-response > div ol\s*\{[^}]*list-style-type:\s*decimal/s);
-  assert.match(workbenchStyles, /\.ai-elements-message-response > div > :is\(h1, h2, h3, h4, h5, h6\)\s*\{[^}]*font-weight:\s*700/s);
-  assert.match(workbenchStyles, /\.ai-elements-message-response > div blockquote\s*\{[^}]*border-left:/s);
-  assert.match(workbenchStyles, /\.ai-elements-message-response > div table\s*\{[^}]*border-collapse:\s*collapse/s);
-  assert.match(workbenchStyles, /\.ai-elements-message-response > div :not\(pre\) > code\s*\{[^}]*border:/s);
-  assert.match(workbenchStyles, /\.ai-elements-message-response > div :is\(\[data-streamdown="strong"\], \.font-semibold, \.font-bold\)\s*\{[^}]*font-weight:\s*700/s);
-});
-
-test("enables Streamdown animation for streaming assistant Markdown", () => {
+test("keeps streaming assistant Markdown free of per-token animation", () => {
   const markup = renderToStaticMarkup(<WorkbenchMessageSurface messages={[{
     ...createDesktopUIMessage({ id: "assistant-animated", role: "assistant", conversationId: "conversation-1" }),
     parts: [{ type: "text", text: "Streaming response with several words", state: "streaming" }],
   }]} pendingMessageId="assistant-animated" locale="en" />);
-  assert.match(markup, /data-sd-animate/);
-  assert.match(workbenchStyles, /@keyframes sd-fadeIn/);
-  assert.match(workbenchStyles, /\[data-sd-animate\]\s*\{[^}]*animation:/s);
+  assert.match(markup, /data-streaming="true"/);
+  assert.doesNotMatch(markup, /data-sd-animate/);
+  assert.doesNotMatch(workbenchStyles, /@keyframes sd-fadeIn/);
+  assert.doesNotMatch(workbenchStyles, /\[data-sd-animate\]\s*\{[^}]*animation:/s);
 });

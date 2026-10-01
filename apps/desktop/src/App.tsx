@@ -1,14 +1,14 @@
 import { createContext, lazy, startTransition, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type SetStateAction } from "react";
 import { ArrowLeft, Copy as CopyIcon, Eye, FileText, ImagePlus, Maximize2, Sparkles, Trash2 } from "lucide-react";
-import { AudioPlayer, Image, MessageResponse, Queue, Suggestion, Suggestions, buildOnlineAgentGroups, formatWorkbenchModelLabel, getWorkbenchTaskStatusLabel, isWorkbenchTaskActive, isWorkbenchTaskRetryable, normalizeWorkbenchTaskStatus, resolveWorkbenchMediaFeature, workbenchSessionScope, WORKBENCH_HOME_COPY, WORKBENCH_HOME_GROUPS, WORKBENCH_MEDIA_FEATURES, WORKBENCH_MESSAGE_FRAME, WORKBENCH_ROUTE_MANIFEST, WORKBENCH_THEME, WORKBENCH_WRITER_CONTENT_TYPES, WORKBENCH_WRITER_LANGUAGES, WORKBENCH_WRITER_MODES, WORKBENCH_WRITER_PLATFORMS, WORKBENCH_WRITER_QUICK_PROMPTS, WORKFLOW_PALETTE_DRAG_EVENT, WORKFLOW_PALETTE_DROP_EVENT, WorkbenchAgentDirectory, WorkbenchCapabilityCenter, WorkbenchMessageSurface, WorkbenchPromptInput, WorkbenchRouteIcon, WorkbenchShell, WorkbenchTask, WorkbenchWorkflowDirectory, WorkbenchWorkflowParameterFields, WorkflowAiSidebar, type ModelOption, type WorkbenchAgentDirectoryGroup, type WorkbenchCapabilityCenterGroup, type WorkbenchMediaFeatureId, type WorkbenchWorkflowDirectoryAction, type WorkbenchWorkflowDirectoryRun, type WorkbenchWorkflowDirectoryTemplate, type WorkbenchWorkflowDirectoryWorkflow } from "@coworkany/workbench-ui/desktop";
+import { AudioPlayer, Image, MessageResponse, Queue, Suggestion, Suggestions, buildOnlineAgentGroups, formatWorkbenchModelLabel, getWorkbenchTaskStatusLabel, isWorkbenchTaskActive, isWorkbenchTaskRetryable, normalizeWorkbenchTaskStatus, resolveWorkbenchMediaFeature, workbenchSessionScope, WORKBENCH_HOME_COPY, WORKBENCH_HOME_GROUPS, WORKBENCH_MEDIA_FEATURES, WORKBENCH_MESSAGE_FRAME, WORKBENCH_ROUTE_MANIFEST, WORKBENCH_THEME, WORKBENCH_WRITER_CONTENT_TYPES, WORKBENCH_WRITER_LANGUAGES, WORKBENCH_WRITER_MODES, WORKBENCH_WRITER_PLATFORMS, WORKBENCH_WRITER_QUICK_PROMPTS, WORKFLOW_PALETTE_DRAG_EVENT, WORKFLOW_PALETTE_DROP_EVENT, WorkbenchAgentDirectory, WorkbenchCapabilityCenter, WorkbenchMessageSurface, WorkbenchPromptInput, WorkbenchRouteIcon, WorkbenchShell, WorkbenchTask, WorkbenchWorkflowDirectory, WorkbenchWorkflowParameterFields, WorkflowAiSidebar, type ModelOption, type WorkbenchAgentDirectoryGroup, type WorkbenchCapabilityCenterGroup, type WorkbenchKnowledgeBaseOption, type WorkbenchMediaFeatureId, type WorkbenchWorkflowDirectoryAction, type WorkbenchWorkflowDirectoryRun, type WorkbenchWorkflowDirectoryTemplate, type WorkbenchWorkflowDirectoryWorkflow } from "@coworkany/workbench-ui/desktop";
 import { MessageAction } from "@coworkany/workbench-ui/desktop";
 import type { WorkbenchArtifactSource, WorkbenchMediaSource, WorkbenchPreviewContext, WorkbenchPreviewSource, WorkflowCanvasExecutionSnapshot } from "@coworkany/workbench-ui/desktop";
 import { createUniqueWorkflowNodeKey, repairWorkflowNodeKeys } from "./workflow-node-keys";
 import { applyWorkflowNodeEvent, createWorkflowNodeSnapshots, finalizeWorkflowNodeSnapshots } from "./workflow-node-status";
 import { localFileUploadErrorCode, persistLocalFile } from "./local-file-upload";
 import { hashWorkflowDefinition, migrateWorkflowDefinitionToCurrent, validateWorkflowDefinition, workflowNodeRegistry, type WorkflowDefinitionEnvelope, type WorkflowDefinitionNodeV2 } from "@coworkany/workflow-core";
-import { applyDesktopUIMessageRunEventToParts as applyWorkbenchRunEventToParts, createDesktopUIMessage, createWorkflowAiPrompt, desktopUIMessageText, parseDesktopUIMessage } from "@coworkany/workbench-client";
-import type { DesktopArtifactData, DesktopMediaData, DesktopPreviewData, DesktopUIMessage, DesktopUIMessagePart, WorkbenchArtifact, WorkbenchClient, WorkbenchKnowledgeResult, WorkbenchRun, WorkbenchRunDetail, WorkbenchWorkflow, WorkflowAiContext, WorkflowAiOperationGroup } from "@coworkany/workbench-client";
+import { applyDesktopUIMessageRunEventToParts as applyWorkbenchRunEventToParts, applyRunMetricsEvent, createDesktopUIMessage, createRunMetricsAccumulator, createWorkflowAiPrompt, desktopUIMessageStorage, desktopUIMessageText, parseDesktopUIMessage, toRunMetrics } from "@coworkany/workbench-client";
+import type { DesktopArtifactData, DesktopMediaData, DesktopPreviewData, DesktopUIMessage, DesktopUIMessagePart, RunMetricsAccumulator, UsageMetricEvent, WorkbenchArtifact, WorkbenchClient, WorkbenchKnowledgeResult, WorkbenchRun, WorkbenchRunDetail, WorkbenchWorkflow, WorkflowAiContext, WorkflowAiOperationGroup } from "@coworkany/workbench-client";
 import type { ChatTransport } from "ai";
 import { isTauriBridgeAvailable, tauriBridge } from "./tauri";
 import { createDesktopChatTransport, createDesktopWorkbenchClient, type DesktopChatTransportOptions } from "./workbench-client";
@@ -17,7 +17,7 @@ import { buildAgencyAgentGroups } from "./agency-agent-catalog";
 import { closeDesktopMediaTab, createDesktopMediaTab, openDesktopMediaTab, syncDesktopMediaTabModel, type DesktopMediaTabState } from "./media-tabs";
 import { PROVIDER_PLATFORM_OPTIONS, platformIdForProvider, providerPlatformForId } from "./provider-platforms";
 import { capabilityEnglish, desktopCopy, desktopWriterCopy, homeGroupLabels, mediaEnglish, mediaFieldEnglish, mediaOptionEnglish, mediaPlaceholderEnglish, mediaSubmitEnglish, mediaSummaryEnglish, quickPromptsForDesktopRoute, resolveDesktopLocale, workflowActionEnglish, writerContentTypeEnglish, writerLanguageEnglish, writerModeEnglish, writerPlatformEnglish, type DesktopLocalePreference } from "./i18n";
-import { capabilityForWorkflowAction, configuredModelOptions, configuredProviderEntries, isDevelopmentRunningHubWorkflowId, isMediaProviderConfigured, modelOptionsForProvider, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, requiresConfiguredProviderForWorkflowAction, supportsProviderCapability, supportsRunningHubWorkflowCapability, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "./provider-config";
+import { capabilityForWorkflowAction, configuredModelOptions, configuredProviderEntries, configuredTextModelOptions, configuredTextModelSelectionId, isDevelopmentRunningHubWorkflowId, isMediaProviderConfigured, modelOptionsForProvider, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, requiresConfiguredProviderForWorkflowAction, selectConfiguredTextModel, supportsProviderCapability, supportsRunningHubWorkflowCapability, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "./provider-config";
 import { bindWorkflowProviderDefaults, isMediaWorkflowNodeType } from "./workflow-provider-binding";
 import { applyConfiguredMediaModels } from "./media-model-options";
 import { buildDesktopImageRunInput, getDesktopImageParameterSchema, normalizeDesktopImageSettings, resolveDesktopImageModelKind } from "./image-model-parameters";
@@ -28,7 +28,7 @@ import { resolveDesktopRunAction, workflowActionForMediaFeature } from "./route-
 import { resolveVideoMediaCapabilities, supportsVideoMediaRole } from "../runtime/media-capabilities";
 import type { MiniMaxVoiceOption } from "@coworkany/media-runtime";
 import { buildConversationTitleFromPrompt, defaultConversationTitle, resolveConversationTitleUpdate } from "./conversation-title";
-import { mergeConversationMessages, mergeDesktopUIMessageViews } from "./conversation-history";
+import { mergeConversationMessages } from "./conversation-history";
 import { writerImageArtifactsForArticle } from "./writer-preview";
 import { replayPersistedRunToConversationMessage } from "./conversation-run-replay";
 import { WorkflowOutputPreview } from "./workflow-output-view";
@@ -43,6 +43,8 @@ import { NativeRunQuestions } from "./native-run-questions";
 import { isWorkbenchQuestionToolEvent } from "@coworkany/workbench-client";
 import { questionConversationForRoute, questionSessionIdForRoute } from "./question-session-route";
 import { isCurrentWorkflowRestore, type WorkflowRestoreToken } from "./workflow-restore-guard";
+import { normalizeDesktopMetricEvent } from "./run-metrics-events";
+import { DesktopUsageDashboard } from "./usage-dashboard";
 import { ImageMaskEditor } from "./image-mask-editor";
 import { createWorkflowAiController, parseWorkflowAiAssistantResponse, recordWorkflowAiRepairAttempt, resolveWorkflowAiTextProvider, shouldRetryWorkflowAiRepair, workflowAiProviderOptions, type WorkflowAiController } from "./workflow-ai-controller";
 import { DesktopPreviewSessionRegistry, resolveDesktopLoopbackPreviewUrl, resolveDesktopPreviewRuntimeUrl } from "./preview-session";
@@ -60,6 +62,10 @@ function createDesktopChatUserMessage(input: {
   readonly providerId: string;
   readonly modelId: string;
   readonly route: string;
+  readonly executionPrompt?: string;
+  readonly skillId?: string;
+  readonly allowArtifacts?: boolean;
+  readonly attachments?: readonly LocalAttachment[];
 }): DesktopUIMessage {
   const message = createDesktopUIMessage({
     id: `message-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`,
@@ -73,7 +79,25 @@ function createDesktopChatUserMessage(input: {
     createdAt: new Date().toISOString(),
   });
   const createdAt = message.metadata?.createdAt ?? new Date().toISOString();
-  return { ...message, metadata: { conversationId: input.conversationId, ...(message.metadata ?? {}), createdAt, updatedAt: message.metadata?.updatedAt ?? createdAt, modelLocked: true } };
+  const attachmentParts: DesktopUIMessagePart[] = (input.attachments ?? []).map((attachment) => ({
+    type: "data-attachment",
+    id: `attachment:${attachment.id}`,
+    data: { attachmentId: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status ?? "ready" },
+  }));
+  return {
+    ...message,
+    parts: [...message.parts, ...attachmentParts],
+    metadata: {
+      conversationId: input.conversationId,
+      ...(message.metadata ?? {}),
+      createdAt,
+      updatedAt: message.metadata?.updatedAt ?? createdAt,
+      modelLocked: true,
+      ...(input.executionPrompt ? { executionPrompt: input.executionPrompt } : {}),
+      ...(input.skillId ? { skillId: input.skillId } : {}),
+      ...(input.allowArtifacts === undefined ? {} : { allowArtifacts: input.allowArtifacts }),
+    },
+  };
 }
 
 async function copyWriterContent(text: string, html?: string) {
@@ -197,6 +221,14 @@ type WorkflowAction = "upload" | "text_input" | "text_split" | "file_create" | "
 type MediaFeatureId = WorkbenchMediaFeatureId;
 type EmbeddingConfig = { mode: "local" | "remote"; baseUrl?: string; model?: string; apiKey?: string };
 type DesktopConfig = { schemaVersion: 1; locale?: DesktopLocalePreference; workspacePath: string; obsidianVaultPath?: string; obsidianIndexPath?: string; embedding?: EmbeddingConfig; provider: DesktopProviderConfig & { model: string; skillId?: SkillId }; providers?: DesktopProviderProfiles; defaults?: DesktopProviderDefaults; menuAgentIds?: string[]; runtime: { source: "system" | "private"; nodePath?: string; opencodePath?: string; pythonPath?: string; hostPath?: string; skillsPath?: string; fontsPath?: string; lancedbPath?: string; embeddingPath?: string }; offlineRuntimeZipPath?: string };
+
+export function knowledgeBaseOptionsForConfig(config: Pick<DesktopConfig, "obsidianVaultPath" | "obsidianIndexPath">, locale: "zh" | "en"): WorkbenchKnowledgeBaseOption[] {
+  const vaultPath = config.obsidianVaultPath?.trim();
+  if (!vaultPath) return [];
+  const normalizedPath = vaultPath.replace(/[\\/]+$/u, "");
+  const vaultName = normalizedPath.split(/[\\/]/u).at(-1) || (locale === "zh" ? "本地知识库" : "Local knowledge base");
+  return [{ id: config.obsidianIndexPath?.trim() || vaultPath, label: vaultName, description: `Obsidian Vault · ${vaultPath}` }];
+}
 type RuntimeProbe = {
   ready: boolean;
   development?: boolean;
@@ -406,7 +438,7 @@ type DesktopConversationMessage = {
   readonly status?: "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "interrupted";
   readonly parts?: readonly DesktopUIMessagePart[];
 };
-const CONVERSATION_PAGE_SIZE = 10;
+const CONVERSATION_PAGE_SIZE = 5;
 type ConversationHistoryCursor = { readonly createdAt: string; readonly id: string };
 type DesktopConversationSummary = { id: string; title: string; updated_at: string; opencode_session_id?: string | null; agent_id?: string | null };
 type LocalAttachment = { id: string; name: string; size: number; mediaType: string; relativePath?: string; previewUrl?: string; text?: string; textCharCount?: number; truncated?: boolean; status?: "queued" | "uploading" | "ready" | "failed"; error?: string };
@@ -505,43 +537,6 @@ function formatDateTime(value: string | undefined, locale: "zh" | "en") {
   return new Date(value).toLocaleString(locale === "zh" ? "zh-CN" : "en-US");
 }
 
-function ModelControls({
-  model,
-  models,
-  providerSource,
-  reasoningEffort,
-  skillId,
-  onModelChange,
-  onReasoningChange,
-  onSkillChange,
-  showSkill = true,
-  hideModel = false,
-  locale = "zh",
-}: {
-  model: string;
-  models?: readonly string[];
-  providerSource?: string;
-  reasoningEffort: string;
-  skillId: SkillId;
-  onModelChange: (value: string) => void;
-  onReasoningChange: (value: string) => void;
-  onSkillChange: (value: SkillId) => void;
-  showSkill?: boolean;
-  hideModel?: boolean;
-  locale?: "zh" | "en";
-}) {
-  const activeLocale = locale === "zh" && typeof document !== "undefined" && document.documentElement.lang === "en" ? "en" : locale;
-  const copy = activeLocale === "en" ? { aria: "Model and reasoning settings", automatic: "Auto", writing: "Content writing", analysis: "Marketing analysis", model: showSkill ? "Model" : "Standard", skill: "Skill", reasoning: "Reasoning", unconfigured: "Model not configured", low: "Low", medium: "Medium", high: "High" } : { aria: "模型与推理设置", automatic: "自动", writing: "内容写作", analysis: "营销分析", model: showSkill ? "模型" : "标准", skill: "Skill", reasoning: "推理", unconfigured: "未配置模型", low: "低", medium: "中", high: "高" };
-  const providerLabel = providerSource && providerSource !== "local" ? providerSource : formatWorkbenchModelLabel(model, { zh: "本地模型", en: "Local model" }, activeLocale);
-  const configuredModels = configuredModelOptions({ model, models });
-  const modelOptions = configuredModels.length ? configuredModels : (model ? [model] : []);
-  return <div className="model-controls" aria-label={copy.aria}>
-    {showSkill ? <label className="model-select-control"><span>{copy.skill}</span><select value={skillId} onChange={(event) => onSkillChange(event.target.value as SkillId)}><option value="auto">{copy.automatic}</option><option value="writer-orchestrator">{copy.writing}</option><option value="content-analyzer">{copy.analysis}</option><option value="ppt-master">ppt-master</option><option value="dashi-ppt">dashi-ppt</option><option value="khazix-writer">khazix-writer</option></select></label> : null}
-    {!hideModel ? <label className="model-select-control"><span>{copy.model}</span><select value={model} onChange={(event) => onModelChange(event.target.value)}>{modelOptions.length ? modelOptions.map((option) => <option key={option} value={option}>{showSkill ? option : formatWorkbenchModelLabel(option, { zh: "本地模型", en: "Local model" }, activeLocale)}</option>) : <option value="">{showSkill ? copy.unconfigured : providerLabel}</option>}</select></label> : null}
-    <label className="model-select-control"><span>{copy.reasoning}</span><select value={reasoningEffort} onChange={(event) => onReasoningChange(event.target.value)}><option value="auto">{copy.automatic}</option><option value="low">{copy.low}</option><option value="medium">{copy.medium}</option><option value="high">{copy.high}</option></select></label>
-  </div>;
-}
-
 const routeIconKeys: Record<string, string> = {
   "/dashboard": "home",
   "/dashboard/ai": "chat",
@@ -555,6 +550,7 @@ const routeIconKeys: Record<string, string> = {
   "/dashboard/capabilities": "capability",
   "/dashboard/workflows": "workflow",
   "/dashboard/tasks": "task",
+  "/dashboard/usage": "usage",
   "/dashboard/assets": "asset",
   "/dashboard/works": "asset",
   "/dashboard/knowledge-base": "knowledge",
@@ -632,7 +628,8 @@ function DesktopBootstrapScreen({ locale, status, phase, style, onExportDiagnost
   const failed = phase === "error";
   return <main className="bootstrap-screen" style={style} role="status" aria-live="polite">
     <section className="bootstrap-card">
-      <div className="bootstrap-card-header"><div className="bootstrap-mark">AI</div><div><div className="eyebrow">LOCAL RUNTIME BOOTSTRAP</div><h1>{locale === "zh" ? "正在启动本地工作台" : "Starting local workbench"}</h1></div><span className={`bootstrap-spinner ${failed ? "is-failed" : phase === "ready" ? "is-ready" : ""}`} aria-hidden="true" /></div>
+      <img className="bootstrap-logo" src="/brand/coworkany-logo.png" alt="Coworkany" width={1120} height={228} />
+      <div className="bootstrap-card-header"><div className="bootstrap-mark" role="img" aria-label="Coworkany" /><div><div className="eyebrow">LOCAL RUNTIME BOOTSTRAP</div><h1>{locale === "zh" ? "正在启动本地工作台" : "Starting local workbench"}</h1></div><span className={`bootstrap-spinner ${failed ? "is-failed" : phase === "ready" ? "is-ready" : ""}`} aria-hidden="true" /></div>
       <div className="bootstrap-progress" aria-hidden="true"><span style={{ width: `${Math.min(100, Math.max(8, ((activeIndex + (phase === "ready" ? 1 : 0)) / stages.length) * 100))}%` }} /></div>
       <ol className="bootstrap-stages">{stages.map((stage, index) => { const complete = phase === "ready" || index < activeIndex; const active = !complete && index === activeIndex && !failed; return <li key={stage.id} className={complete ? "is-complete" : active ? "is-active" : failed && index === activeIndex ? "is-failed" : ""}><span aria-hidden="true">{complete ? "✓" : active ? "•" : failed && index === activeIndex ? "!" : "○"}</span><span>{stage.label}</span>{active ? <small>{locale === "zh" ? "进行中" : "In progress"}</small> : complete ? <small>{locale === "zh" ? "完成" : "Done"}</small> : null}</li>; })}</ol>
       <p className="bootstrap-status-label">{locale === "zh" ? "当前子步骤" : "Current sub-step"}</p>
@@ -1162,30 +1159,27 @@ function DesktopConversationWorkspace({
   onPromptChange,
   runStatus,
   activeRunId,
-  onRun,
   onGenerateImages,
   onCancel,
-  activePrompt,
-  activePromptAt,
   assistantText,
-  assistantAt,
   messages,
   conversationId,
   chatTransport,
   chatReady,
   providerId,
   onArtifactDownload,
-  activeAssistantParts,
-  toolEvents,
+  knowledgeBases,
   knowledgeEnabled,
   onKnowledgeToggle,
+  onPrepareExecutionPrompt,
   onAssistantTextChange,
   onSaveDraft,
   onExportDraft,
-  artifacts,
   onArtifactOpen,
   model,
   models,
+  configuredModels,
+  modelSelection,
   reasoningEffort,
   skillId,
   attachments,
@@ -1198,6 +1192,7 @@ function DesktopConversationWorkspace({
   onReachTop,
   conversationScrollTop,
   onConversationScroll,
+  onChatFinish,
   locale,
 }: {
   route: DesktopRoute;
@@ -1205,33 +1200,30 @@ function DesktopConversationWorkspace({
   onPromptChange: (value: string) => void;
   runStatus: string;
   activeRunId: string | null;
-  onRun: (value?: string, displayedValue?: string) => void;
   onGenerateImages?: (article: DesktopUIMessage) => void;
   onCancel: () => void;
-  activePrompt: string;
-  activePromptAt?: string;
   assistantText: string;
   onAssistantTextChange: (value: string) => void;
   onSaveDraft: (value: string) => void | Promise<unknown>;
   onExportDraft?: (value: string) => void | Promise<void>;
-  assistantAt?: string;
   messages: DesktopConversationMessage[];
   conversationId: string | null;
   chatTransport: ChatTransport<DesktopUIMessage>;
   chatReady: boolean;
   providerId: string;
   onArtifactDownload?: (artifactId: string) => void | Promise<void>;
-  activeAssistantParts?: readonly DesktopUIMessagePart[];
-  toolEvents: string[];
   conversations: Array<{ id: string; title: string; updated_at: string; agent_id?: string | null }>;
   onNavigate: (path: string) => void;
   onNewConversation?: () => void;
+  knowledgeBases: readonly WorkbenchKnowledgeBaseOption[];
   knowledgeEnabled: boolean;
   onKnowledgeToggle: () => void;
-  artifacts: Array<{ id: string; relative_path: string; mime_type: string; byte_length?: number }>;
+  onPrepareExecutionPrompt?: (value: string) => Promise<string>;
   onArtifactOpen: (relativePath: string, mimeType: string) => void | Promise<void>;
   model: string;
   models?: readonly string[];
+  configuredModels?: readonly ModelOption[];
+  modelSelection?: string;
   reasoningEffort: string;
   skillId: SkillId;
   attachments: LocalAttachment[];
@@ -1244,13 +1236,24 @@ function DesktopConversationWorkspace({
   onReachTop?: (viewport: HTMLDivElement) => void;
   conversationScrollTop?: number;
   onConversationScroll?: (scrollTop: number) => void;
+  onChatFinish?: (conversationId: string, options: { readonly message: DesktopUIMessage; readonly isAbort: boolean; readonly isDisconnect: boolean; readonly isError: boolean }) => void | Promise<void>;
   locale: "zh" | "en";
 }) {
   const visibleMessages = useMemo(() => conversationId ? messages.filter((message) => message.conversationId === conversationId) : [], [conversationId, messages]);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const conversationLoading = route.conversationLoading === true;
   const initialUIMessages = useMemo(() => visibleMessages.map(desktopConversationMessageToUIMessage), [visibleMessages]);
-  const desktopChat = useDesktopChat({ chatId: conversationId, transport: chatTransport, initialMessages: initialUIMessages, resume: false });
+  const desktopChat = useDesktopChat({
+    chatId: conversationId,
+    transport: chatTransport,
+    initialMessages: initialUIMessages,
+    resume: false,
+    onFinish: (options) => {
+      const messageConversationId = options.message.metadata?.conversationId;
+      const resolvedConversationId = typeof messageConversationId === "string" && messageConversationId ? messageConversationId : conversationId;
+      return resolvedConversationId ? onChatFinish?.(resolvedConversationId, options) : undefined;
+    },
+  });
   const stopChat = useCallback(() => {
     // The AI SDK chat owns the AbortController for the direct ChatTransport
     // path.  The legacy run id is intentionally unset for that path, so the
@@ -1261,23 +1264,25 @@ function DesktopConversationWorkspace({
   }, [chatTransport, desktopChat.stop, onCancel]);
   const resolvedChatReady = chatReady || !conversationId;
   const isWriter = route.mode === "writer";
-  const localizedStatus = localizeDesktopStatus(runStatus, locale);
-  const localizedRunStatus = isDesktopErrorStatus(localizedStatus) ? "" : localizedStatus;
   const quickPrompts = quickPromptsForDesktopRoute(route.path, locale);
   const isPlainChat = route.path === "/dashboard/ai";
-  const chatSubtitle = isPlainChat
-    ? (locale === "zh" ? "通用 AI 对话入口" : "General-purpose AI chat")
-    : route.description;
   const chatPlaceholder = isPlainChat
     ? (locale === "zh" ? "输入你的问题..." : "Ask anything...")
     : (isWriter ? (locale === "zh" ? "描述你要写作的主题、平台和语气……" : "Describe the topic, platform, and tone you want to write for…") : (locale === "zh" ? "输入你的营销任务……" : "Describe your marketing task…"));
-  const isEmptyConversation = !conversationLoading && visibleMessages.length === 0 && !activePrompt && !assistantText && !activeRunId;
+  const isEmptyConversation = !conversationLoading && desktopChat.messages.length === 0 && desktopChat.status === "ready" && !activeRunId;
   // AI Elements' chatbot empty state keeps the suggestions and composer
   // together: a suggestion fills the input, and the user can still adjust it
   // before sending.  The composer disappears only after the first turn.
   const showLanding = isEmptyConversation;
   const chatSectionRef = useRef<HTMLElement>(null);
   const composerDockRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (isWriter || conversationLoading || !conversationId) return;
+    const viewport = chatSectionRef.current?.querySelector<HTMLDivElement>(".ai-elements-conversation-viewport");
+    // A short latest page may not overflow the viewport, so the user cannot
+    // scroll to the top to request older pages. Fill that empty space lazily.
+    if (viewport && viewport.clientHeight > 0 && viewport.scrollHeight <= viewport.clientHeight + 48) onReachTop?.(viewport);
+  }, [conversationId, conversationLoading, isWriter, onReachTop, visibleMessages.length]);
   useEffect(() => {
     if (isWriter) return;
     const section = chatSectionRef.current;
@@ -1298,37 +1303,43 @@ function DesktopConversationWorkspace({
   useEffect(() => () => {
     if (conversationId) void desktopPreviewSessions.closeConversation(conversationId);
   }, [conversationId]);
-  if (isWriter) return <DesktopWriterCloudWorkspace locale={locale} route={route} prompt={prompt} onPromptChange={onPromptChange} runStatus={runStatus} activeRunId={activeRunId} onRun={(value, displayedValue) => onRun(value, displayedValue)} onGenerateImages={onGenerateImages} onCancel={stopChat} activePrompt={activePrompt} activePromptAt={activePromptAt} assistantText={assistantText} onAssistantTextChange={onAssistantTextChange} onSaveDraft={onSaveDraft} onExportDraft={onExportDraft} assistantAt={assistantAt} messages={visibleMessages} uiMessages={desktopChat.messages} activeAssistantParts={activeAssistantParts} toolEvents={toolEvents} artifacts={artifacts} onArtifactOpen={onArtifactOpen} onArtifactDownload={onArtifactDownload} model={model} models={models} reasoningEffort={reasoningEffort} skillId={skillId} attachments={attachments} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} knowledgeEnabled={knowledgeEnabled} onKnowledgeToggle={onKnowledgeToggle} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} onToolApproval={onToolApproval} onReachTop={onReachTop} conversationId={conversationId} conversationScrollTop={conversationScrollTop} onConversationScroll={onConversationScroll} />;
-  const baseMessages = conversationLoading ? [] : visibleMessages.length ? visibleMessages : [
-    ...(activePrompt ? [{ id: "active-user", conversationId: "active", role: "user" as const, content: activePrompt, createdAt: activePromptAt ?? new Date(0).toISOString() }] : []),
-  ];
-  const hasPersistedAssistant = !activeRunId && baseMessages.some((message) => message.role === "assistant" && message.content === assistantText);
-  const hasCurrentAssistant = !conversationLoading && Boolean(assistantText || activeRunId || activeAssistantParts?.length) && !hasPersistedAssistant;
+  const sendThroughChat = async (executionText: string, displayedText = executionText) => {
+    if (!resolvedChatReady) return;
+    const pendingAttachments = [...attachments];
+    const fallbackPrompt = locale === "zh" ? "请处理我提供的本地附件" : "Please process the local attachments I provided";
+    const visibleText = displayedText.trim() || fallbackPrompt;
+    const attachmentContext = pendingAttachments.length ? (locale === "zh"
+      ? `\n\n本地附件（已复制到当前项目目录）：\n${pendingAttachments.map((attachment) => `- ${attachment.relativePath ?? attachment.name} (${attachment.mediaType}, ${attachment.size} bytes)${attachment.text ? `\n  文件正文：\n${attachment.text}${attachment.truncated ? "\n  [正文已截断]" : ""}` : "\n  请使用本地文件工具读取该附件内容。"}`).join("\n")}`
+      : `\n\nLocal attachments copied into the current project:\n${pendingAttachments.map((attachment) => `- ${attachment.relativePath ?? attachment.name} (${attachment.mediaType}, ${attachment.size} bytes)${attachment.text ? `\n  Extracted content:\n${attachment.text}${attachment.truncated ? "\n  [Content truncated]" : ""}` : "\n  Use the local file tools to read this attachment."}`).join("\n")}`)
+      : "";
+    const baseExecutionPrompt = `${executionText.trim() || visibleText}${attachmentContext}`;
+    const runtimePrompt = knowledgeEnabled && onPrepareExecutionPrompt
+      ? await onPrepareExecutionPrompt(baseExecutionPrompt)
+      : baseExecutionPrompt;
+    void desktopChat.sendMessage(createDesktopChatUserMessage({
+      conversationId: desktopChat.chatId,
+      text: visibleText,
+      executionPrompt: runtimePrompt,
+      providerId,
+      modelId: model,
+      route: route.path,
+      skillId,
+      allowArtifacts: chatAllowsArtifactRegistration(runtimePrompt, { skillId, route: route.path }),
+      attachments: pendingAttachments,
+    }));
+    pendingAttachments.forEach((attachment) => onRemoveAttachment(attachment.id));
+    onPromptChange("");
+  };
+  if (isWriter) return <DesktopWriterCloudWorkspace locale={locale} route={route} prompt={prompt} onPromptChange={onPromptChange} runStatus={runStatus} activeRunId={activeRunId} onSendChat={sendThroughChat} onGenerateImages={onGenerateImages} onCancel={stopChat} assistantText={assistantText} onAssistantTextChange={onAssistantTextChange} onSaveDraft={onSaveDraft} onExportDraft={onExportDraft} uiMessages={desktopChat.messages} onArtifactOpen={onArtifactOpen} onArtifactDownload={onArtifactDownload} model={model} models={models} reasoningEffort={reasoningEffort} skillId={skillId} attachments={attachments} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} knowledgeBases={knowledgeBases} knowledgeEnabled={knowledgeEnabled} onKnowledgeToggle={onKnowledgeToggle} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} onToolApproval={onToolApproval} onReachTop={onReachTop} conversationId={conversationId} conversationScrollTop={conversationScrollTop} onConversationScroll={onConversationScroll} />;
   const activeAssistantMessageId = activeRunId ? `assistant-${activeRunId}` : "active-assistant";
-  const displayedMessages: DesktopConversationMessage[] = hasCurrentAssistant ? [...baseMessages, {
-    id: activeAssistantMessageId,
-    conversationId: "active",
-    role: "assistant" as const,
-    content: assistantText,
-    createdAt: assistantAt ?? activePromptAt ?? new Date(0).toISOString(),
-    runId: activeRunId ?? undefined,
-    status: activeRunId ? "running" : "succeeded",
-    parts: activeAssistantParts?.length ? activeAssistantParts : [
-      ...(assistantText ? [{ type: "text" as const, text: assistantText, state: "streaming" as const }] : []),
-      ...toolEvents.map((item, index) => ({ type: "data-status" as const, id: `active-assistant:tool:${index}`, data: { status: "running" as const, message: item } })),
-      ...artifacts.map((artifact) => ({ type: "data-artifact" as const, id: `active-assistant:artifact:${artifact.id}`, data: { id: artifact.id, title: artifact.relative_path, relativePath: artifact.relative_path, mimeType: artifact.mime_type, byteLength: artifact.byte_length ?? 0, sha256: "" } })),
-    ],
-  }] : baseMessages;
-  const modelOptions = (models ?? []).map((item) => ({ id: item, label: formatWorkbenchModelLabel(item, { zh: "本地模型", en: "Local model" }, locale), provider: locale === "zh" ? "已配置模型" : "Configured models" }));
-  const displayedUIMessages = displayedMessages.map(desktopConversationMessageToUIMessage);
-  const renderedUIMessages = mergeDesktopUIMessageViews(displayedUIMessages, desktopChat.messages, activeAssistantMessageId);
+  const modelOptions = configuredModels ?? (models ?? []).map((item) => ({ id: item, label: formatWorkbenchModelLabel(item, { zh: "本地模型", en: "Local model" }, locale), provider: locale === "zh" ? "已配置模型" : "Configured models" }));
+  const renderedUIMessages = [...desktopChat.messages];
   const submitMessage = () => {
-    if (conversationId && resolvedChatReady && !attachments.length && !knowledgeEnabled && prompt.trim()) {
-      void desktopChat.sendMessage(createDesktopChatUserMessage({ conversationId: desktopChat.chatId, text: prompt, providerId, modelId: model, route: route.path }));
-      onPromptChange("");
+    if ((prompt.trim() || attachments.length) && !knowledgeEnabled) {
+      void sendThroughChat(prompt, prompt);
       return;
     }
-    onRun();
+    void sendThroughChat(prompt, prompt);
   };
   const revealComposer = (suggestedPrompt?: string) => {
     if (suggestedPrompt) onPromptChange(suggestedPrompt);
@@ -1336,15 +1347,14 @@ function DesktopConversationWorkspace({
   };
   return <div className="chat-canvas flex h-full min-h-0 justify-center">
     <section ref={chatSectionRef} className={`chat-workspace-section ${showLanding ? "landing-active" : ""}`.trim()}>
-      {!showLanding ? <header className="chat-page-header"><div><h1 className="chat-page-title">{route.label}</h1><p className="chat-page-subtitle">{chatSubtitle}</p></div></header> : null}
       <div className="chat-message-scroll">
         <div className="chat-message-column">
-          <WorkbenchMessageSurface messages={renderedUIMessages} locale={locale} pendingMessageId={activeRunId || desktopChat.status === "submitted" || desktopChat.status === "streaming" ? activeAssistantMessageId : undefined} onReachTop={onReachTop} scrollStateKey={conversationId ?? undefined} restoreScrollTop={conversationScrollTop} onViewportScroll={(viewport) => onConversationScroll?.(viewport.scrollTop)} onCopy={(message) => navigator.clipboard?.writeText(desktopUIMessageText(message))} onRetry={(message) => { const index = renderedUIMessages.findIndex((item) => item.id === message.id); const previous = [...renderedUIMessages.slice(0, index)].reverse().find((item) => item.role === "user"); const retryPrompt = previous ? desktopUIMessageText(previous) : activePrompt; if (retryPrompt.trim()) onRun(retryPrompt); }} onToolApproval={onToolApproval} onArtifactOpen={(artifact) => onArtifactOpen(artifact.relativePath, artifact.mimeType)} onArtifactDownload={onArtifactDownload} resolveMediaSource={resolveDesktopMediaSource} resolveArtifactSource={resolveDesktopArtifactSource} resolvePreviewSource={resolveDesktopPreviewSource} onPreviewDownload={(preview) => { if (preview.artifactId) return onArtifactDownload?.(preview.artifactId); if (preview.relativePath) return onArtifactOpen(preview.relativePath, preview.mimeType ?? "application/octet-stream"); }} onPreviewExport={(preview) => exportDesktopPreview(preview, onArtifactDownload)} onPreviewOpenExternal={openDesktopPreviewInBrowser} />
+          <WorkbenchMessageSurface messages={renderedUIMessages} locale={locale} pendingMessageId={activeRunId || desktopChat.status === "submitted" || desktopChat.status === "streaming" ? activeAssistantMessageId : undefined} onReachTop={onReachTop} scrollStateKey={conversationId ?? desktopChat.chatId} restoreScrollTop={conversationScrollTop} onViewportScroll={(viewport) => onConversationScroll?.(viewport.scrollTop)} onCopy={(message) => navigator.clipboard?.writeText(desktopUIMessageText(message))} onRetry={(message) => { const index = renderedUIMessages.findIndex((item) => item.id === message.id); const previous = [...renderedUIMessages.slice(0, index)].reverse().find((item) => item.role === "user"); const retryPrompt = previous ? desktopUIMessageText(previous) : ""; if (retryPrompt.trim()) void sendThroughChat(retryPrompt); }} onToolApproval={onToolApproval} onArtifactOpen={(artifact) => onArtifactOpen(artifact.relativePath, artifact.mimeType)} onArtifactDownload={onArtifactDownload} resolveMediaSource={resolveDesktopMediaSource} resolveArtifactSource={resolveDesktopArtifactSource} resolvePreviewSource={resolveDesktopPreviewSource} onPreviewDownload={(preview) => { if (preview.artifactId) return onArtifactDownload?.(preview.artifactId); if (preview.relativePath) return onArtifactOpen(preview.relativePath, preview.mimeType ?? "application/octet-stream"); }} onPreviewExport={(preview) => exportDesktopPreview(preview, onArtifactDownload)} onPreviewOpenExternal={openDesktopPreviewInBrowser} />
           {conversationLoading ? <div className="chat-conversation-loading muted" role="status">{locale === "zh" ? "正在加载会话…" : "Loading conversation…"}</div> : null}
           {showLanding ? <div className="chat-landing" data-cloud-surface="ai-entry"><div className="chat-landing-kicker"><span className="public-signal" aria-hidden="true" /><span className="dashboard-kicker">AI WORKSPACE</span></div><h1 className="dashboard-title">{route.label}</h1><p>{locale === "zh" ? "选择一个推荐任务，或在下方直接描述你的需求" : "Choose a recommended task, or describe your request below"}</p><Suggestions className="chat-ai-suggestions chat-prompt-card-grid" data-cloud-surface="prompt-suggestions" aria-label={locale === "zh" ? "推荐提示词" : "Recommended prompts"}>{quickPrompts.map((item, index) => <Suggestion key={item} className="chat-prompt-card" suggestion={item} onClick={revealComposer}><span className="chat-prompt-card-index">{String(index + 1).padStart(2, "0")}</span><span className="chat-prompt-card-copy">{item}</span><span className="chat-prompt-card-arrow" aria-hidden="true">↗</span></Suggestion>)}</Suggestions></div> : null}
         </div>
       </div>
-      <div ref={composerDockRef} className="chat-composer-dock"><div className="chat-composer" data-cloud-surface="composer"><WorkbenchPromptInput value={prompt} onValueChange={onPromptChange} onSubmit={submitMessage} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} models={modelOptions} model={model} onModelChange={onModelChange} placeholder={chatPlaceholder} status={activeRunId || desktopChat.status === "submitted" || desktopChat.status === "streaming" ? "streaming" : "ready"} onStop={stopChat} autoFocus={showLanding && !activeRunId} focusRequest={composerFocusRequest} locale={locale}>{route.path.includes("?") ? <div className="composer-selected-agent">{locale === "zh" ? "当前 Agent" : "Selected Agent"}：<strong>{route.label}</strong></div> : null}{knowledgeEnabled ? <div className="composer-knowledge-control"><button type="button" className="composer-knowledge-button" onClick={onKnowledgeToggle}>{locale === "zh" ? "⌑ Obsidian 知识库" : "⌑ Obsidian context"}</button><button type="button" className="composer-knowledge-close" aria-label={locale === "zh" ? "关闭 Obsidian 知识库上下文" : "Disable Obsidian knowledge"} onClick={onKnowledgeToggle}>×</button></div> : <button type="button" className="composer-knowledge-button" onClick={onKnowledgeToggle}>{locale === "zh" ? "⌑ 添加 Obsidian 知识库" : "⌑ Add Obsidian context"}</button>}<div className="composer-ai-controls"><span className="muted composer-hint">{localizedRunStatus || (locale === "zh" ? "Ctrl+Enter 发送 · Enter 换行" : "Ctrl+Enter to send · Enter for a new line")}</span><ModelControls locale={locale} model={model} models={models} reasoningEffort={reasoningEffort} skillId={skillId} showSkill={false} hideModel onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} /></div></WorkbenchPromptInput></div></div>
+      <div ref={composerDockRef} className="chat-composer-dock"><div className="chat-composer" data-cloud-surface="composer"><WorkbenchPromptInput value={prompt} onValueChange={onPromptChange} onSubmit={submitMessage} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} models={modelOptions} model={modelSelection ?? model} onModelChange={onModelChange} reasoningEffort={reasoningEffort} onReasoningChange={onReasoningChange} knowledgeBases={knowledgeBases} knowledgeEnabled={knowledgeEnabled} onKnowledgeToggle={onKnowledgeToggle} placeholder={chatPlaceholder} status={activeRunId || desktopChat.status === "submitted" || desktopChat.status === "streaming" ? "streaming" : "ready"} onStop={stopChat} autoFocus={showLanding && !activeRunId} focusRequest={composerFocusRequest} locale={locale}>{route.path.includes("?") ? <div className="composer-selected-agent">{locale === "zh" ? "当前 Agent" : "Selected Agent"}：<strong>{route.label}</strong></div> : null}</WorkbenchPromptInput></div></div>
     </section>
   </div>;
 }
@@ -1356,22 +1366,15 @@ type DesktopWriterCloudWorkspaceProps = {
   onPromptChange: (value: string) => void;
   runStatus: string;
   activeRunId: string | null;
-  onRun: (value: string, displayedValue?: string) => void;
+  onSendChat: (value: string, displayedValue?: string) => void | Promise<void>;
   onGenerateImages?: (article: DesktopUIMessage) => void;
   onCancel: () => void;
-  activePrompt: string;
-  activePromptAt?: string;
   assistantText: string;
   onAssistantTextChange: (value: string) => void;
   onSaveDraft: (value: string) => void | Promise<unknown>;
   onExportDraft?: (value: string) => void | Promise<void>;
-  assistantAt?: string;
-  messages: DesktopConversationMessage[];
   uiMessages: readonly DesktopUIMessage[];
   onArtifactDownload?: (artifactId: string) => void;
-  activeAssistantParts?: readonly DesktopUIMessagePart[];
-  toolEvents: string[];
-  artifacts: Array<{ id: string; relative_path: string; mime_type: string; byte_length?: number }>;
   onArtifactOpen: (relativePath: string, mimeType: string) => void;
   model: string;
   models?: readonly string[];
@@ -1380,6 +1383,7 @@ type DesktopWriterCloudWorkspaceProps = {
   attachments: LocalAttachment[];
   onAddAttachments: (files: FileList | null) => void;
   onRemoveAttachment: (id: string) => void;
+  knowledgeBases: readonly WorkbenchKnowledgeBaseOption[];
   knowledgeEnabled: boolean;
   onKnowledgeToggle: () => void;
   onModelChange: (value: string) => void;
@@ -1473,7 +1477,7 @@ function WriterPlatformPreview({ platform, locale, content, images = [], onImage
 }
 
 function DesktopWriterCloudWorkspace(props: DesktopWriterCloudWorkspaceProps) {
-  const { locale, route, prompt, onPromptChange, runStatus, activeRunId, onRun, onGenerateImages, onCancel, activePrompt, activePromptAt, assistantText, onAssistantTextChange, onSaveDraft, onExportDraft, assistantAt, messages, uiMessages, onArtifactDownload, activeAssistantParts, toolEvents, artifacts, onArtifactOpen, model, models, reasoningEffort, skillId, attachments, onAddAttachments, onRemoveAttachment, knowledgeEnabled, onKnowledgeToggle, onModelChange, onReasoningChange, onSkillChange, onToolApproval, onReachTop, conversationId, conversationScrollTop, onConversationScroll } = props;
+  const { locale, prompt, onPromptChange, runStatus, activeRunId, onSendChat, onGenerateImages, onCancel, assistantText, onAssistantTextChange, onSaveDraft, onExportDraft, uiMessages, onArtifactDownload, onArtifactOpen, model, models, reasoningEffort, attachments, onAddAttachments, onRemoveAttachment, knowledgeBases, knowledgeEnabled, onKnowledgeToggle, onModelChange, onReasoningChange, onToolApproval, onReachTop, conversationId, conversationScrollTop, onConversationScroll } = props;
   const writerCopy = desktopWriterCopy[locale];
   const writerQuickPrompts = locale === "zh" ? WORKBENCH_WRITER_QUICK_PROMPTS : ["Write a high-converting campaign article", "Turn this brief into a social media thread", "Create a concise product launch email"];
   const localizedStatus = localizeDesktopStatus(runStatus, locale);
@@ -1489,18 +1493,9 @@ function DesktopWriterCloudWorkspace(props: DesktopWriterCloudWorkspaceProps) {
   const [copyKind, setCopyKind] = useState<"rich" | "markdown" | null>(null);
   const messageSurfaceRef = useRef<HTMLDivElement>(null);
   const previewContentRef = useRef<HTMLDivElement>(null);
-  const baseMessages = messages.length ? messages : (activePrompt ? [{ id: "active-user", conversationId: "active", role: "user" as const, content: activePrompt, createdAt: activePromptAt ?? new Date(0).toISOString() }] : []);
-  const hasPersistedAssistant = !activeRunId && baseMessages.some((message) => message.role === "assistant" && message.content === assistantText);
-  const currentAssistant = Boolean(assistantText || activeRunId) && !hasPersistedAssistant;
   const activeAssistantMessageId = activeRunId ? `assistant-${activeRunId}` : "active-assistant";
-  const displayedMessages: DesktopConversationMessage[] = currentAssistant ? [...baseMessages, { id: activeAssistantMessageId, conversationId: "active", role: "assistant" as const, content: assistantText, createdAt: assistantAt ?? activePromptAt ?? new Date(0).toISOString(), runId: activeRunId ?? undefined, status: activeRunId ? "running" as const : "succeeded" as const, parts: activeAssistantParts?.length ? activeAssistantParts : [
-    ...(assistantText ? [{ type: "text" as const, text: assistantText, state: "streaming" as const }] : []),
-    ...toolEvents.map((item, index) => ({ type: "data-status" as const, id: `active-assistant:tool:${index}`, data: { status: "running" as const, message: item } })),
-    ...artifacts.map((artifact) => ({ type: "data-artifact" as const, id: `active-assistant:artifact:${artifact.id}`, data: { id: artifact.id, title: artifact.relative_path, relativePath: artifact.relative_path, mimeType: artifact.mime_type, byteLength: artifact.byte_length ?? 0, sha256: "" } })),
-  ] }] : baseMessages;
-  const displayedUIMessages = displayedMessages.map(desktopConversationMessageToUIMessage);
-  const renderedUIMessages = mergeDesktopUIMessageViews(displayedUIMessages, uiMessages, activeAssistantMessageId);
-  const hasMessages = displayedMessages.length > 0;
+  const renderedUIMessages = [...uiMessages];
+  const hasMessages = renderedUIMessages.length > 0;
   const latestArticle = [...renderedUIMessages].reverse().find(isWriterArticleMessage);
   const selectedPreviewMessage = previewMessage ?? latestArticle ?? null;
   const previewText = selectedPreviewMessage ? desktopUIMessageText(selectedPreviewMessage) : assistantText;
@@ -1508,7 +1503,7 @@ function DesktopWriterCloudWorkspace(props: DesktopWriterCloudWorkspaceProps) {
   const canEditPreview = selectedPreviewMessage?.id === latestArticle?.id;
   const openPreview = (message: DesktopUIMessage) => { setPreviewMessage(message); setPreviewEditing(false); setPreviewDraft(desktopUIMessageText(message)); setPreviewOpen(true); };
   const commitPreviewDraft = () => { const next = previewDraft.trim(); if (!next || !canEditPreview) return; onAssistantTextChange(next); setPreviewEditing(false); void onSaveDraft(next); };
-  const submit = () => onRun([
+  const submit = () => onSendChat([
     `${writerCopy.platform}: ${writerOptionLabel("platform", WORKBENCH_WRITER_PLATFORMS.find((item) => item.id === platform) ?? { id: platform, label: platform }, locale)}`,
     `${writerCopy.content}: ${writerOptionLabel("content", WORKBENCH_WRITER_CONTENT_TYPES.find((item) => item.id === contentType) ?? { id: contentType, label: contentType }, locale)}`,
     `${writerCopy.mode}: ${writerOptionLabel("mode", WORKBENCH_WRITER_MODES.find((item) => item.id === mode) ?? { id: mode, label: mode }, locale)}`,
@@ -1532,10 +1527,9 @@ function DesktopWriterCloudWorkspace(props: DesktopWriterCloudWorkspaceProps) {
   return (
     <div className="chat-canvas flex h-full min-h-0 justify-center">
       <section className="chat-workspace-section writer-cloud-workspace">
-        <header className="chat-page-header"><div><h1 className="chat-page-title">{route.label}</h1><p className="chat-page-subtitle">{route.description}</p></div></header>
         <div className="writer-cloud-scroll chat-message-scroll"><div className="chat-message-column">
           {!hasMessages ? <div className="writer-quick-start"><div className="dashboard-kicker">{writerCopy.quick}</div><div className="writer-quick-start-grid">{writerQuickPrompts.map((item) => <button key={item} type="button" className="home-quick-start-card" onClick={() => onPromptChange(item)}><span className="dashboard-kicker">✦ {writerCopy.quickStart}</span><span>{item}</span></button>)}</div></div> : null}
-          <div ref={messageSurfaceRef} className="writer-cloud-message-shell"><WorkbenchMessageSurface className="writer-cloud-message-surface" messages={renderedUIMessages} locale={locale} pendingMessageId={activeRunId ? activeAssistantMessageId : undefined} onReachTop={onReachTop} scrollStateKey={conversationId ?? undefined} restoreScrollTop={conversationScrollTop} onViewportScroll={(viewport) => onConversationScroll?.(viewport.scrollTop)} onRetry={(message) => { const index = renderedUIMessages.findIndex((item) => item.id === message.id); const previous = [...renderedUIMessages.slice(0, index)].reverse().find((item) => item.role === "user"); const retryPrompt = previous ? desktopUIMessageText(previous) : activePrompt; if (retryPrompt.trim()) onRun(retryPrompt); }} renderAssistantActions={(message) => {
+          <div ref={messageSurfaceRef} className="writer-cloud-message-shell"><WorkbenchMessageSurface className="writer-cloud-message-surface" messages={renderedUIMessages} locale={locale} pendingMessageId={activeRunId ? activeAssistantMessageId : undefined} onReachTop={onReachTop} scrollStateKey={conversationId ?? undefined} restoreScrollTop={conversationScrollTop} onViewportScroll={(viewport) => onConversationScroll?.(viewport.scrollTop)} onRetry={(message) => { const index = renderedUIMessages.findIndex((item) => item.id === message.id); const previous = [...renderedUIMessages.slice(0, index)].reverse().find((item) => item.role === "user"); const retryPrompt = previous ? desktopUIMessageText(previous) : ""; if (retryPrompt.trim()) void onSendChat(retryPrompt); }} renderAssistantActions={(message) => {
             const bodyText = desktopUIMessageText(message);
             if (!bodyText.trim() || !isWriterArticleMessage(message)) return null;
             return <>
@@ -1547,7 +1541,7 @@ function DesktopWriterCloudWorkspace(props: DesktopWriterCloudWorkspaceProps) {
           }} onToolApproval={onToolApproval} onArtifactOpen={(artifact) => onArtifactOpen(artifact.relativePath, artifact.mimeType)} onArtifactDownload={onArtifactDownload} resolveMediaSource={resolveDesktopMediaSource} resolveArtifactSource={resolveDesktopArtifactSource} resolvePreviewSource={resolveDesktopPreviewSource} onPreviewDownload={(preview) => { if (preview.artifactId) return onArtifactDownload?.(preview.artifactId); if (preview.relativePath) return onArtifactOpen(preview.relativePath, preview.mimeType ?? "application/octet-stream"); }} onPreviewExport={(preview) => exportDesktopPreview(preview, onArtifactDownload)} onPreviewOpenExternal={openDesktopPreviewInBrowser} /></div>
           {!hasMessages && localizedRunStatus ? <div className="writer-status-message">{localizedRunStatus}</div> : null}
         </div></div>
-        <div className="chat-composer-dock"><div className="chat-composer writer-cloud-composer"><WorkbenchPromptInput value={prompt} onValueChange={onPromptChange} onSubmit={submit} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} models={(models ?? []).map((item) => ({ id: item, label: formatWorkbenchModelLabel(item, { zh: "本地模型", en: "Local model" }, locale), provider: locale === "zh" ? "已配置模型" : "Configured models" }))} model={model} onModelChange={onModelChange} placeholder={writerCopy.placeholder} status={activeRunId ? "streaming" : "ready"} onStop={onCancel} locale={locale}><div className="writer-composer-options"><span>{writerOptionLabel("platform", WORKBENCH_WRITER_PLATFORMS.find((item) => item.id === platform) ?? { id: platform, label: platform }, locale)} / {writerOptionLabel("mode", WORKBENCH_WRITER_MODES.find((item) => item.id === mode) ?? { id: mode, label: mode }, locale)} / {writerOptionLabel("language", WORKBENCH_WRITER_LANGUAGES.find((item) => item.id === language) ?? { id: language, label: language }, locale)} / {writerCopy.previewHint}</span>{knowledgeEnabled ? <span className="composer-knowledge-control"><button type="button" className="composer-knowledge-button" onClick={onKnowledgeToggle}>{locale === "zh" ? "⌑ Obsidian 知识库" : "⌑ Obsidian context"}</button><button type="button" className="composer-knowledge-close" aria-label={locale === "zh" ? "关闭 Obsidian 知识库上下文" : "Disable Obsidian knowledge"} onClick={onKnowledgeToggle}>×</button></span> : <button type="button" className="composer-knowledge-button" onClick={onKnowledgeToggle}>{locale === "zh" ? "⌑ 添加 Obsidian 知识库" : "⌑ Add Obsidian context"}</button>}<ModelControls locale={locale} model={model} models={models} providerSource={formatWorkbenchModelLabel(model, { zh: "本地模型", en: "Local model" }, locale)} reasoningEffort={reasoningEffort} skillId={skillId} showSkill={false} hideModel onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} /></div></WorkbenchPromptInput></div></div>
+        <div className="chat-composer-dock"><div className="chat-composer writer-cloud-composer"><WorkbenchPromptInput value={prompt} onValueChange={onPromptChange} onSubmit={submit} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} models={(models ?? []).map((item) => ({ id: item, label: formatWorkbenchModelLabel(item, { zh: "本地模型", en: "Local model" }, locale), provider: locale === "zh" ? "已配置模型" : "Configured models" }))} model={model} onModelChange={onModelChange} reasoningEffort={reasoningEffort} onReasoningChange={onReasoningChange} knowledgeBases={knowledgeBases} knowledgeEnabled={knowledgeEnabled} onKnowledgeToggle={onKnowledgeToggle} placeholder={writerCopy.placeholder} status={activeRunId ? "streaming" : "ready"} onStop={onCancel} locale={locale}><div className="writer-composer-options"><span>{writerOptionLabel("platform", WORKBENCH_WRITER_PLATFORMS.find((item) => item.id === platform) ?? { id: platform, label: platform }, locale)} / {writerOptionLabel("mode", WORKBENCH_WRITER_MODES.find((item) => item.id === mode) ?? { id: mode, label: mode }, locale)} / {writerOptionLabel("language", WORKBENCH_WRITER_LANGUAGES.find((item) => item.id === language) ?? { id: language, label: language }, locale)} / {writerCopy.previewHint}</span></div></WorkbenchPromptInput></div></div>
         {previewOpen ? <div className="writer-preview-overlay" role="dialog" aria-modal="true" aria-labelledby="writer-preview-title"><section className="writer-preview-sheet"><header><div><div className="dashboard-kicker">{writerCopy.preview}</div><h2 id="writer-preview-title">{writerCopy.finalPreview}</h2><p className="writer-preview-description">{writerCopy.previewHint}</p></div><button type="button" className="ghost" onClick={() => setPreviewOpen(false)}>{writerCopy.close}</button></header>{previewEditing ? <textarea className="writer-preview-editor" data-testid="writer-preview-editor" aria-label={writerCopy.edit} autoFocus value={previewDraft} onChange={(event) => setPreviewDraft(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); commitPreviewDraft(); } if (event.key === "Escape") { event.preventDefault(); setPreviewDraft(previewText); setPreviewEditing(false); } }} /> : <div ref={previewContentRef} className="writer-preview-content" data-testid="writer-preview-content"><WriterPlatformPreview platform={platform} locale={locale} content={previewText} images={previewImages} onImageOpen={(artifact) => onArtifactOpen(artifact.relativePath, artifact.mimeType)} /></div>}<div className="writer-preview-actions"><button type="button" className="dashboard-button-secondary" data-testid="writer-preview-edit" onClick={() => { if (previewEditing) commitPreviewDraft(); else setPreviewEditing(true); }} disabled={!canEditPreview || !previewText}>{previewEditing ? writerCopy.done : writerCopy.edit}</button><button type="button" className="dashboard-button-primary" data-testid="writer-preview-copy-rich" onClick={() => selectedPreviewMessage && void copyText("rich", selectedPreviewMessage)} disabled={!selectedPreviewMessage}>{copyKind === "rich" ? writerCopy.copied : writerCopy.rich}</button><button type="button" className="dashboard-button-secondary" data-testid="writer-preview-copy-markdown" onClick={() => selectedPreviewMessage && void copyText("markdown", selectedPreviewMessage)} disabled={!selectedPreviewMessage}>{copyKind === "markdown" ? writerCopy.copied : writerCopy.markdown}</button>{onExportDraft ? <button type="button" className="dashboard-button-secondary" data-testid="writer-preview-export" onClick={() => void onExportDraft(previewEditing ? previewDraft : previewText)} disabled={!previewText}>{writerCopy.export}</button> : null}<button type="button" className="dashboard-button-secondary" onClick={() => { setPreviewOpen(false); if (selectedPreviewMessage) onGenerateImages?.(selectedPreviewMessage); }} disabled={!selectedPreviewMessage}>{writerCopy.generateImageWithCopy}</button><button type="button" className="ghost" onClick={() => setPreviewOpen(false)}>{writerCopy.done}</button></div></section></div> : null}
       </section>
     </div>
@@ -2650,6 +2644,8 @@ function DesktopMediaWorkspaceBody({
   model,
   models,
   onModelChange,
+  reasoningEffort,
+  onReasoningChange,
   locale,
   mediaFeatureId,
   onMediaFeatureChange,
@@ -2918,7 +2914,7 @@ function DesktopMediaWorkspaceBody({
          {isVideo ? <div className="media-field-grid">{activeFeature.fields.filter((field) => field.id !== "prompt" && field.id !== "model").map((field) => <label key={field.id} className="media-field"><span>{field.label}</span>{activeFeature.id === "voice-synthesis" && field.id === "voiceId" ? <select value={fieldValues[field.id] ?? ""} onChange={(event) => updateField(field.id, event.target.value)}><option value="">{locale === "en" ? "Select a voice" : "选择音色"}</option>{voiceOptions.map((voice) => <option key={`${voice.category}-${voice.voiceId}`} value={voice.voiceId}>{voice.voiceName} · {voiceCategoryLabel(voice.category)}</option>)}</select> : field.type === "textarea" ? <textarea value={fieldValues[field.id] ?? ""} onChange={(event) => updateField(field.id, event.target.value)} placeholder={field.placeholder} /> : field.type === "select" ? <select value={fieldValues[field.id] ?? field.defaultValue ?? ""} onChange={(event) => updateField(field.id, event.target.value)}>{field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <input type={field.type === "number" ? "number" : "text"} value={fieldValues[field.id] ?? ""} onChange={(event) => updateField(field.id, event.target.value)} placeholder={field.placeholder} />}{field.type === "url" && artifactRows.length ? <div className="media-asset-picker">{artifactRows.slice(0, 3).map((artifact) => <button key={`${field.id}-${artifact.id}`} type="button" onClick={() => updateField(field.id, artifact.relative_path)}>{artifact.relative_path}</button>)}</div> : null}{activeFeature.id === "voice-synthesis" && field.id === "voiceId" && fieldValues[field.id] ? <small className="voice-selected-description">{voiceOptions.find((voice) => voice.voiceId === fieldValues[field.id])?.description?.[0] ?? fieldValues[field.id]}</small> : null}</label>)}</div> : isImage ? <div className="image-field-grid" data-image-model-kind={imageModelKind}>
            {imageParameterFields.map((field) => <label key={field.id} className={`media-field ${field.type === "text" ? "image-field-wide" : ""}`} data-image-parameter={field.id}><span>{field.label}{field.id === "responseFormat" ? (locale === "en" ? " · fixed" : "（固定）") : ""}</span>{field.id === "referenceImages" || field.id === "inputImageUrl" ? <button type="button" className="media-reference-dropzone" onClick={() => document.getElementById("desktop-media-upload")?.click()}><span aria-hidden="true">↥</span><strong>{locale === "en" ? "Click or drop an image here" : "点击或拖拽图片到此处上传"}</strong><small>{locale === "en" ? "JPG, PNG or WEBP · up to 10 MB" : "支持 JPG、PNG、WEBP，单张不超过 10MB"}</small></button> : null}{isImage && (field.id === "referenceImages" || field.id === "inputImageUrl") && attachments?.some((attachment) => attachment.mediaType.startsWith("image/")) ? <div className="image-reference-cards" aria-label={locale === "en" ? "Uploaded reference images" : "已上传的参考图片"}>{attachments.filter((attachment) => attachment.mediaType.startsWith("image/")).map((attachment) => <div className="image-reference-card" data-status={attachment.status} key={attachment.id}><div className="image-reference-thumbnail">{attachment.previewUrl ? <img src={attachment.previewUrl} alt={attachment.name} /> : <span aria-hidden="true">▧</span>}</div><div className="image-reference-copy"><strong title={attachment.name}>{attachment.name}</strong><small>{attachment.status === "failed" ? (locale === "en" ? "Upload failed" : "上传失败") : `${Math.max(1, Math.ceil(attachment.size / 1024))} KB`}</small></div><button type="button" className="image-reference-remove" aria-label={`${locale === "en" ? "Remove" : "移除"} ${attachment.name}`} onClick={() => onRemoveAttachment?.(attachment.id)}>×</button></div>)}</div> : null}{field.type === "select" ? <select value={imageSettings[field.id] ?? field.defaultValue ?? ""} disabled={field.id === "responseFormat"} aria-readonly={field.id === "responseFormat" || undefined} onChange={(event) => updateImageSettings((current) => normalizeDesktopImageSettings(model, { ...current, [field.id]: event.target.value }))}>{field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <input type={field.type === "number" ? "number" : "text"} min={field.min} max={field.max} value={imageSettings[field.id] ?? ""} onChange={(event) => updateImageSettings((current) => normalizeDesktopImageSettings(model, { ...current, [field.id]: event.target.value }))} placeholder={field.placeholder} />}{field.type === "text" && artifactRows.length ? <div className="media-asset-picker">{artifactRows.slice(0, 3).map((artifact) => <button key={`${field.id}-${artifact.id}`} type="button" onClick={() => updateImageSettings((current) => normalizeDesktopImageSettings(model, { ...current, [field.id]: field.id === "referenceImages" && current[field.id] ? `${current[field.id]},${artifact.relative_path}` : artifact.relative_path }))}>{artifact.relative_path}</button>)}</div> : null}</label>)}
          </div> : null}
-         {isImage ? <div data-image-parameter="model" className="sr-only" aria-hidden="true" /> : null}<div data-image-parameter={isImage ? "model" : undefined}><WorkbenchPromptInput value={workspacePrompt} onValueChange={updateWorkspacePrompt} onSubmit={() => onRun(isVideo ? buildMediaPrompt() : isImage ? buildImagePrompt() : undefined, isVideo ? activeFeature.id : undefined, isVideo ? { ...Object.fromEntries(Object.entries(fieldValues).filter(([, value]) => value.trim())), model: activeMediaModel, ...(localAttachmentPaths.length ? { localAttachments: localAttachmentPaths } : {}) } : isImage ? buildDesktopImageRunInput(model, imageSettings, localAttachmentPaths) : undefined)} attachments={mediaAttachmentItems} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} models={isImage ? imageModelOptions : mediaModelOptions} model={isImage ? model : activeMediaModel} onModelChange={isImage ? handleMediaModelChange : (value) => updateField("model", value)} placeholder={isImage ? (locale === "en" ? "Describe the subject, composition, style and safe areas…" : "描述主体、构图、风格和需要保留的安全区域……") : isVideo ? mediaUi.describe : mediaUi.describe} status={activeRunId ? "streaming" : /失败|failed|error/iu.test(runStatus) ? "error" : "ready"} onStop={onCancel} disabled={!providerConfigured || imageRequiredInputMissing} submitLabel={isVideo ? activeFeature.submitLabel : mediaUi.generate} locale={locale} /></div>
+         {isImage ? <div data-image-parameter="model" className="sr-only" aria-hidden="true" /> : null}<div data-image-parameter={isImage ? "model" : undefined}><WorkbenchPromptInput value={workspacePrompt} onValueChange={updateWorkspacePrompt} onSubmit={() => onRun(isVideo ? buildMediaPrompt() : isImage ? buildImagePrompt() : undefined, isVideo ? activeFeature.id : undefined, isVideo ? { ...Object.fromEntries(Object.entries(fieldValues).filter(([, value]) => value.trim())), model: activeMediaModel, ...(localAttachmentPaths.length ? { localAttachments: localAttachmentPaths } : {}) } : isImage ? buildDesktopImageRunInput(model, imageSettings, localAttachmentPaths) : undefined)} attachments={mediaAttachmentItems} onAddAttachments={onAddAttachments} onRemoveAttachment={onRemoveAttachment} models={isImage ? imageModelOptions : mediaModelOptions} model={isImage ? model : activeMediaModel} onModelChange={isImage ? handleMediaModelChange : (value) => updateField("model", value)} reasoningEffort={reasoningEffort} onReasoningChange={onReasoningChange} placeholder={isImage ? (locale === "en" ? "Describe the subject, composition, style and safe areas…" : "描述主体、构图、风格和需要保留的安全区域……") : isVideo ? mediaUi.describe : mediaUi.describe} status={activeRunId ? "streaming" : /失败|failed|error/iu.test(runStatus) ? "error" : "ready"} onStop={onCancel} disabled={!providerConfigured || imageRequiredInputMissing} submitLabel={isVideo ? activeFeature.submitLabel : mediaUi.generate} locale={locale} /></div>
          {!isImage ? <WorkbenchTask title={isVideo ? activeFeature.title : (locale === "en" ? "Media task" : "媒体任务")} status={taskStatus} steps={[{ id: "submit", title: localizedRunStatus || (locale === "en" ? "Waiting for submission" : "等待提交"), status: taskStatus }]} locale={locale} /> : null}
       </section>
       <section className="media-preview-panel">
@@ -3834,7 +3830,7 @@ export function App() {
   const [workflowMetadata, setWorkflowMetadata] = useState<WorkflowMetadata>({ title: "未命名工作流", description: "", status: "draft" });
   const [workflowBuilderOpen, setWorkflowBuilderOpen] = useState(false);
   const [localePreference, setLocalePreference] = useState<DesktopLocalePreference>("auto");
-  const [skillId, setSkillIdState] = useState<SkillId>("auto");
+  const [, setSkillIdState] = useState<SkillId>("auto");
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const [attachmentsPreparing, setAttachmentsPreparing] = useState(false);
@@ -3885,6 +3881,7 @@ export function App() {
   const assistantCreatedAtRef = useRef(new Map<string, string>());
   const workflowOutputsRef = useRef(new Map<string, string>());
   const assistantPartsRef = useRef(new Map<string, DesktopUIMessagePart[]>());
+  const chatOwnedRunIdsRef = useRef(new Set<string>());
   const runModelsRef = useRef(new Map<string, string>());
   const [toolEvents, setToolEvents] = useState<string[]>([]);
   const [taskCount, setTaskCount] = useState(0);
@@ -3955,6 +3952,7 @@ export function App() {
   const workflowRestoreRequestRef = useRef<string | null>(null);
   const workflowRestoreGenerationRef = useRef(0);
   const locale = resolveDesktopLocale(localePreference);
+  const knowledgeBaseOptions = useMemo(() => knowledgeBaseOptionsForConfig(config, locale), [config.obsidianIndexPath, config.obsidianVaultPath, locale]);
   const copy = desktopCopy[locale];
   const homeCopy = WORKBENCH_HOME_COPY[locale];
   const routes = useMemo(() => buildRoutes(locale), [locale]);
@@ -3984,6 +3982,8 @@ export function App() {
   const activeProvider = providerForCapability(config, activeCapability);
   const activeModel = activeProvider.model;
   const activeModels = modelOptionsForProvider(config, activeProvider) ?? [];
+  const textProvider = providerForCapability(config, "text");
+  const textModelOptions = configuredTextModelOptions(config);
   const providerForWorkflowNode = (nodeType: string, selectedProviderId?: string) => {
     const capability = capabilityForWorkflowAction(nodeType);
     const selectedProfile = selectedProviderId ? config.providers?.[selectedProviderId] : undefined;
@@ -4165,6 +4165,7 @@ export function App() {
     if (profileId && current.providers?.[profileId]) return { ...current, providers: { ...current.providers, [profileId]: { ...current.providers[profileId], model } } };
     return { ...current, provider: { ...current.provider, model } };
   });
+  const updateChatTextModel = (selectionId: string) => persistProviderSelection((current) => selectConfiguredTextModel(current, selectionId));
   const updateReasoning = (reasoning: string) => persistProviderSelection((current) => {
     const profileId = providerForCapability(current, activeCapability).id;
     if (profileId && current.providers?.[profileId]) return { ...current, providers: { ...current.providers, [profileId]: { ...current.providers[profileId], reasoningEffort: reasoning } } };
@@ -4303,6 +4304,7 @@ export function App() {
       return { sessionId: resolvedSessionId, ...(recoveryContext ? { recoveryContext } : {}) };
     },
     resolveSkillId: (message) => {
+      if (message.metadata?.skillId) return message.metadata.skillId;
       const messageConversationId = message.metadata?.conversationId;
       const messageAgentId = typeof messageConversationId === "string" ? conversationsRef.current.find((item) => item.id === messageConversationId)?.agent_id?.trim() : undefined;
       const selectedAgentId = messageAgentId ?? requestedAgentId;
@@ -4315,9 +4317,10 @@ export function App() {
       const messageConversationId = message.metadata?.conversationId;
       const messageAgentId = typeof messageConversationId === "string" ? conversationsRef.current.find((item) => item.id === messageConversationId)?.agent_id?.trim() : undefined;
       const selectedAgentId = messageAgentId ?? requestedAgentId;
-      return desktopExecutionPrompt(resolveDesktopSkillId(activePathRef.current, selectedAgentId), promptText, locale);
+      const executionPrompt = message.metadata?.executionPrompt ?? promptText;
+      return desktopExecutionPrompt(message.metadata?.skillId ?? resolveDesktopSkillId(activePathRef.current, selectedAgentId), executionPrompt, locale);
     },
-    resolveAllowArtifacts: resolveChatArtifactPolicy,
+    resolveAllowArtifacts: (message) => message.metadata?.allowArtifacts ?? resolveChatArtifactPolicy(message),
     resolveSystemPrompt: (message) => {
       const messageConversationId = message.metadata?.conversationId;
       const messageAgentId = typeof messageConversationId === "string" ? conversationsRef.current.find((item) => item.id === messageConversationId)?.agent_id?.trim() : undefined;
@@ -4332,6 +4335,7 @@ export function App() {
       return selectedAgentId?.startsWith("agency-") || selectedAgentId === "workflow-ai" ? selectedAgentId : undefined;
     },
     onRunStarted: (runId, chatId, message) => {
+      chatOwnedRunIdsRef.current.add(runId);
       const createdAt = message.metadata?.createdAt ?? new Date().toISOString();
       const optimisticUserMessage = desktopUIMessageToConversationMessage(message);
       updateVisibleConversationMessages(chatId, (current) => current.some((item) => item.id === optimisticUserMessage.id)
@@ -4343,6 +4347,10 @@ export function App() {
       runContextsRef.current.set(runId, workflowKey ? { kind: "workflow", launchPath: activePathRef.current, workflowKey } : { kind: "conversation", launchPath: activePathRef.current, conversationId: chatId });
       runModelsRef.current.set(runId, message.metadata?.modelId ?? activeModel);
       assistantPartsRef.current.set(runId, [{ type: "data-status", id: `${runId}:status`, data: { status: "running", message: locale === "zh" ? "正在等待模型响应…" : "Waiting for the model response…" } }]);
+      if (!conversationIdFromPath(activePathRef.current)) {
+        const conversation = conversationsRef.current.find((item) => item.id === chatId);
+        workbenchClient.navigation.go(conversationRoute({ id: chatId, agent_id: conversation?.agent_id ?? null }));
+      }
       const visible = !workflowKey && (conversationIdFromPath(activePathRef.current) === chatId || activeConversationRef.current === chatId);
       if (visible) {
         activeRunRef.current = runId;
@@ -4361,6 +4369,35 @@ export function App() {
     });
   }, [activeModel, conversationScope, locale, markQuestionSessionAvailable, requestedAgentId, updateConversationMessages, workbenchClient]);
   const desktopChatTransport = useMemo(() => createDesktopChatTransportWithOverrides(), [createDesktopChatTransportWithOverrides]);
+  const persistFinishedChatMessage = useCallback(async (conversationId: string, options: { readonly message: DesktopUIMessage; readonly isAbort: boolean; readonly isDisconnect: boolean; readonly isError: boolean }) => {
+    const createdAt = options.message.metadata?.createdAt ?? new Date().toISOString();
+    const updatedAt = new Date().toISOString();
+    const runId = options.message.metadata?.runId ?? (options.message.id.startsWith("assistant-") ? options.message.id.slice("assistant-".length) : undefined);
+    const runStatus = options.isAbort || options.isDisconnect ? "cancelled" as const : options.isError ? "failed" as const : "completed" as const;
+    const message: DesktopUIMessage = {
+      ...options.message,
+      metadata: {
+        ...(options.message.metadata ?? {}),
+        conversationId,
+        createdAt,
+        updatedAt,
+        ...(runId ? { runId } : {}),
+        runStatus,
+      },
+    };
+    const stored = desktopUIMessageStorage(message);
+    const conversationMessage = desktopUIMessageToConversationMessage(message);
+    updateVisibleConversationMessages(conversationId, (current) => [...current.filter((item) => item.id !== message.id), conversationMessage]);
+    await tauriBridge.invoke("append_message", { input: {
+      id: message.id,
+      conversation_id: conversationId,
+      role: "assistant",
+      content: stored.content,
+      parts_json: stored.parts_json,
+      metadata_json: stored.metadata_json,
+      created_at: createdAt,
+    } });
+  }, [updateVisibleConversationMessages]);
 
   const questionConversation = questionConversationForRoute(activePath, conversations);
   useEffect(() => {
@@ -4773,6 +4810,16 @@ export function App() {
   }, [activePath, loadConversationMessages, locale]);
 
   useEffect(() => {
+    const messageId = new URLSearchParams(activePath.split("?", 2)[1] ?? "").get("message");
+    if (!messageId || !conversationLoadedId) return;
+    const frame = window.requestAnimationFrame(() => {
+      const escaped = globalThis.CSS?.escape ? globalThis.CSS.escape(messageId) : messageId.replace(/["\\]/gu, "\\$&");
+      workspaceRef.current?.querySelector<HTMLElement>(`[data-message-id="${escaped}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activePath, conversationLoadedId]);
+
+  useEffect(() => {
     const onPopState = () => setActivePath(`${window.location.pathname}${window.location.search}`);
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -4965,6 +5012,7 @@ export function App() {
     let disposeRuntimeProgress: (() => void) | undefined;
     const sequences = new Map<string, number>();
     const assistantBuffers = new Map<string, string>();
+    const metricAccumulators = new Map<string, RunMetricsAccumulator>();
     void tauriBridge.listen<{ message: string }>("desktop://runtime-progress", (payload) => {
       setRuntimePhase("repair");
       setRuntimeStatus(localizeRuntimeProgress(payload.message, locale));
@@ -5024,7 +5072,7 @@ export function App() {
     void tauriBridge.listen<{ raw: string }>("desktop://runtime-response", (payload) => {
       try {
         const separator = payload.raw.indexOf(":");
-        const frame = JSON.parse(payload.raw.slice(separator + 1)) as { requestId?: string; ok?: boolean; data?: { sessionId?: string; event?: { event?: string; provider?: string; model?: string; delta?: string; runId?: string; inputTokens?: number; outputTokens?: number; costUsd?: number; code?: string; message?: string; permissionId?: string; sessionId?: string; callId?: string; toolName?: string; input?: unknown; response?: string; artifact?: unknown; preview?: unknown } } };
+        const frame = JSON.parse(payload.raw.slice(separator + 1)) as { requestId?: string; ok?: boolean; data?: { sessionId?: string; event?: { event?: string; provider?: string; model?: string; delta?: string; runId?: string; usageId?: string; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; reasoningTokens?: number; aggregation?: string; scope?: string; costUsd?: number; code?: string; message?: string; permissionId?: string; sessionId?: string; callId?: string; toolCallId?: string; toolName?: string; tool?: string; phase?: string; input?: unknown; response?: string; artifact?: unknown; preview?: unknown; data?: unknown } } };
         if (frame.requestId) responseWaiters.current.get(frame.requestId)?.(frame as unknown as Record<string, unknown>);
         if (frame.requestId && frame.data?.sessionId) {
           const sessionMarker = ":session:";
@@ -5048,6 +5096,7 @@ export function App() {
               ? currentMediaRunId === event?.runId
               : false;
         const isVisibleEvent = isVisibleRoute && isDisplayedRun;
+        const isChatOwnedEvent = Boolean(event?.runId && chatOwnedRunIdsRef.current.has(event.runId));
         const eventType = event?.event ?? "unknown";
         const sequence = event?.runId ? (sequences.get(event.runId) ?? 0) + 1 : undefined;
         if (event?.runId && sequence !== undefined) sequences.set(event.runId, sequence);
@@ -5059,7 +5108,7 @@ export function App() {
           assistantCreatedAtRef.current.set(runId, createdAt);
           const existing = assistantPartsRef.current.get(runId) ?? [];
           assistantPartsRef.current.set(runId, applyWorkbenchRunEventToParts(existing, { type: "text", delta: event.delta, sequence, createdAt }));
-          if (isVisibleEvent) {
+          if (isVisibleEvent && !isChatOwnedEvent) {
             setAssistantAt(createdAt);
             setAssistantText(content);
           }
@@ -5069,9 +5118,9 @@ export function App() {
           const existing = assistantPartsRef.current.get(runId) ?? [];
           const createdAt = assistantCreatedAtRef.current.get(runId) ?? new Date().toISOString();
           assistantCreatedAtRef.current.set(runId, createdAt);
-          if (isVisibleEvent) setAssistantAt(createdAt);
+          if (isVisibleEvent && !isChatOwnedEvent) setAssistantAt(createdAt);
           assistantPartsRef.current.set(runId, applyWorkbenchRunEventToParts(existing, { type: "reasoning", delta: event.delta, sequence, createdAt }));
-          if (isVisibleEvent) setRunStatus(locale === "zh" ? "正在分析请求…" : "Analyzing the request…");
+          if (isVisibleEvent && !isChatOwnedEvent) setRunStatus(locale === "zh" ? "正在分析请求…" : "Analyzing the request…");
         }
         if (event?.event === "runtime_warning" && event.runId) {
           const runId = event.runId;
@@ -5082,10 +5131,51 @@ export function App() {
             data: { code: String(event.code ?? "runtime_warning"), message: event.message ?? (locale === "zh" ? "运行时提示" : "Runtime warning") },
           };
           assistantPartsRef.current.set(runId, [...existing, warningPart]);
-          if (isVisibleEvent) setRunStatus(warningPart.data.message);
+          if (isVisibleEvent && !isChatOwnedEvent) setRunStatus(warningPart.data.message);
         }
         if (event?.runId) {
           void tauriBridge.invoke("append_run_event", { runId: event.runId, sequence: sequence ?? 0, eventType, payloadJson: JSON.stringify(event) });
+          const normalizedMetric = normalizeDesktopMetricEvent(event as Record<string, unknown>, sequence ?? 0);
+          if (normalizedMetric) {
+            const metric = normalizedMetric.kind === "usage" ? {
+              ...normalizedMetric,
+              provider: normalizedMetric.provider ?? configRef.current.provider.id,
+              model: normalizedMetric.model ?? runModelsRef.current.get(event.runId) ?? configRef.current.provider.model ?? "unknown",
+            } satisfies UsageMetricEvent : normalizedMetric;
+            const accumulator = applyRunMetricsEvent(metricAccumulators.get(event.runId) ?? createRunMetricsAccumulator(event.runId), metric);
+            metricAccumulators.set(event.runId, accumulator);
+            const runMetrics = toRunMetrics(accumulator);
+            const currentParts = assistantPartsRef.current.get(event.runId) ?? [];
+            assistantPartsRef.current.set(event.runId, [...currentParts.filter((part) => part.type !== "data-runMetrics"), { type: "data-runMetrics", id: `run-metrics:${event.runId}`, data: runMetrics }]);
+            if (metric.kind === "invocation") {
+              void tauriBridge.invoke("record_run_invocation", {
+                runId: metric.runId,
+                invocationId: metric.invocationId,
+                category: metric.category,
+                name: metric.name,
+                status: metric.phase === "started" ? "running" : metric.phase,
+                attempt: metric.attempt,
+                startedAt: metric.phase === "started" ? metric.createdAt : null,
+                finishedAt: metric.phase === "started" ? null : metric.createdAt,
+              }).catch(() => undefined);
+            } else {
+              void tauriBridge.invoke("record_usage", {
+                runId: metric.runId,
+                usageId: metric.usageId,
+                provider: metric.provider ?? null,
+                model: metric.model ?? "unknown",
+                inputTokens: metric.inputTokens ?? null,
+                outputTokens: metric.outputTokens ?? null,
+                cachedInputTokens: metric.cachedInputTokens ?? null,
+                reasoningTokens: metric.reasoningTokens ?? null,
+                providerCost: metric.providerCost ?? null,
+                estimatedCost: metric.estimatedCost ?? null,
+                aggregation: metric.aggregation,
+                scope: metric.scope,
+                idempotencyKey: metric.usageId,
+              }).catch(() => undefined);
+            }
+          }
           if (isWorkbenchQuestionToolEvent(event)) return;
           if (eventType === "permission_request" || eventType === "permission_response") {
             const parts = assistantPartsRef.current.get(event.runId) ?? [];
@@ -5102,24 +5192,23 @@ export function App() {
               sequence,
               createdAt: new Date().toISOString(),
             }));
-            if (isVisibleEvent) setRunStatus(locale === "zh" ? (eventType === "permission_request" ? "工具调用等待审批" : event.response === "reject" ? "已拒绝工具调用" : "已批准工具调用，继续执行…") : (eventType === "permission_request" ? "Tool call awaiting approval" : event.response === "reject" ? "Tool call rejected" : "Tool approved; continuing…"));
+            if (isVisibleEvent && !isChatOwnedEvent) setRunStatus(locale === "zh" ? (eventType === "permission_request" ? "工具调用等待审批" : event.response === "reject" ? "已拒绝工具调用" : "已批准工具调用，继续执行…") : (eventType === "permission_request" ? "Tool call awaiting approval" : event.response === "reject" ? "Tool call rejected" : "Tool approved; continuing…"));
           }
           if (eventType === "usage") {
             const provider = event.provider ?? configRef.current.provider.id;
             const model = event.model?.trim() || runModelsRef.current.get(event.runId) || configRef.current.provider.model || "unknown";
             const createdAt = new Date().toISOString();
             const parts = assistantPartsRef.current.get(event.runId) ?? [];
-            assistantPartsRef.current.set(event.runId, applyWorkbenchRunEventToParts(parts, { type: "usage", usage: { runId: event.runId, provider, model, inputTokens: event.inputTokens, outputTokens: event.outputTokens, providerCost: event.costUsd }, sequence, createdAt }));
+            assistantPartsRef.current.set(event.runId, applyWorkbenchRunEventToParts(parts, { type: "usage", usage: { runId: event.runId, usageId: event.usageId, provider, model, inputTokens: event.inputTokens, outputTokens: event.outputTokens, cachedInputTokens: event.cachedInputTokens, reasoningTokens: event.reasoningTokens, providerCost: event.costUsd, aggregation: event.aggregation === "snapshot" ? "snapshot" : "delta", scope: event.scope === "run" ? "run" : "step" }, sequence, createdAt }));
             setTokenCount((current) => current + (event.inputTokens ?? 0) + (event.outputTokens ?? 0));
             const costUsd = event.costUsd;
             if (typeof costUsd === "number") setProviderCost((current) => (current ?? 0) + costUsd);
-            void tauriBridge.invoke("record_usage", { runId: event.runId, provider: provider ?? null, model, inputTokens: event.inputTokens ?? null, outputTokens: event.outputTokens ?? null, providerCost: event.costUsd ?? null, estimatedCost: null, idempotencyKey: `${event.runId}:usage:${sequence}` });
           }
           if (eventType === "tool_event") {
             const toolEvent = event as { tool?: string; message?: string; phase?: string; toolCallId?: string; callId?: string };
             const tool = typeof toolEvent.tool === "string" ? toolEvent.tool : "tool";
             const detail = typeof toolEvent.message === "string" ? toolEvent.message : "";
-            if (isVisibleEvent) setToolEvents((current) => [...current, `${tool}${detail ? ` · ${detail.slice(0, 180)}` : ""}`].slice(-6));
+            if (isVisibleEvent && !isChatOwnedEvent) setToolEvents((current) => [...current, `${tool}${detail ? ` · ${detail.slice(0, 180)}` : ""}`].slice(-6));
             const phase = toolEvent.phase;
             const status = phase === "failed" ? "failed" : phase === "completed" ? "completed" : "running";
             const parts = assistantPartsRef.current.get(event.runId) ?? [];
@@ -5159,7 +5248,7 @@ export function App() {
               sequence,
               createdAt: new Date().toISOString(),
             }));
-            if (isVisibleEvent) setToolEvents((current) => [...current]);
+            if (isVisibleEvent && !isChatOwnedEvent) setToolEvents((current) => [...current]);
           }
           const eventTool = typeof (event as { tool?: string }).tool === "string" ? (event as { tool: string }).tool : "";
           const isLegacyArtifactEvent = eventType === "tool_event" && eventTool.startsWith("artifact:");
@@ -5237,8 +5326,13 @@ export function App() {
                 model: `${payload.provider ?? "media"}/${payload.model ?? "unknown"}`,
                 inputTokens: typeof usage.inputTokens === "number" ? usage.inputTokens : null,
                 outputTokens: typeof usage.outputTokens === "number" ? usage.outputTokens : null,
+                cachedInputTokens: typeof usage.cachedInputTokens === "number" ? usage.cachedInputTokens : null,
+                reasoningTokens: typeof usage.reasoningTokens === "number" ? usage.reasoningTokens : null,
                 providerCost: typeof usage.providerCost === "number" ? usage.providerCost : null,
                 estimatedCost: typeof usage.estimatedCost === "number" ? usage.estimatedCost : null,
+                usageId: `${event.runId}:${nodeKey}:media-usage`,
+                aggregation: "delta",
+                scope: "step",
                 idempotencyKey: `${event.runId}:${nodeKey}:media-usage`,
               });
             } catch { /* event remains in run_events */ }
@@ -5260,14 +5354,15 @@ export function App() {
             setRuns((current) => current.map((run) => run.id === event.runId ? { ...run, status: "succeeded", finished_at: new Date().toISOString() } : run));
             if (isVisibleEvent && !isWorkflowEvent) setRunStatus(locale === "zh" ? "媒体任务已完成" : "Media task completed");
             const assistant = assistantBuffers.get(event.runId) ?? "";
-            if (assistant && conversationId) {
+            const chatOwnedRun = chatOwnedRunIdsRef.current.has(event.runId);
+            if (!chatOwnedRun && assistant && conversationId) {
               const createdAt = assistantCreatedAtRef.current.get(event.runId) ?? new Date().toISOString();
               const parts: DesktopUIMessagePart[] = [...(assistantPartsRef.current.get(event.runId) ?? []).filter((part) => !("id" in part) || part.id !== `${event.runId}:status`).map((part) => part.type === "reasoning" ? { ...part, state: "done" as const } : part), { type: "data-status", id: `${event.runId}:status`, data: { status: "completed" as const } }];
               const assistantMessage: DesktopConversationMessage = { id: `assistant-${event.runId}`, conversationId, role: "assistant", content: assistant, createdAt, status: "succeeded", parts };
               if (conversationId === activeConversationRef.current) updateConversationMessages((current) => [...current, assistantMessage]);
               else updateCachedConversationMessages(conversationId, (messages) => [...messages.filter((message) => message.id !== assistantMessage.id), assistantMessage]);
               void tauriBridge.invoke("append_message", { input: { id: `assistant-${event.runId}`, conversation_id: conversationId, role: "assistant", content: assistant, parts_json: JSON.stringify(parts), created_at: createdAt } });
-            } else if (conversationId) {
+            } else if (!chatOwnedRun && conversationId) {
               const createdAt = new Date().toISOString();
               const content = locale === "zh" ? "任务已完成，但模型没有返回可展示的文本。请在任务中心查看运行事件。" : "The task completed, but the model returned no displayable text. Check Tasks for the run events.";
               const parts: DesktopUIMessagePart[] = [...(assistantPartsRef.current.get(event.runId) ?? []).filter((part) => !("id" in part) || part.id !== `${event.runId}:status`).map((part) => part.type === "reasoning" ? { ...part, state: "done" as const } : part), { type: "data-status", id: `${event.runId}:status`, data: { status: "completed" as const } }];
@@ -5284,6 +5379,8 @@ export function App() {
             runConversationIdsRef.current.delete(event.runId);
             standaloneMediaRunsRef.current.delete(event.runId);
             runContextsRef.current.delete(event.runId);
+            metricAccumulators.delete(event.runId);
+            chatOwnedRunIdsRef.current.delete(event.runId);
             void tauriBridge.invoke("finish_run", { runId: event.runId, status: "succeeded" });
             if (workflowKey) removeWorkflowTracking(workflowKey);
           }
@@ -5303,7 +5400,8 @@ export function App() {
             setRuns((current) => current.map((run) => run.id === event.runId ? { ...run, status, finished_at: new Date().toISOString() } : run));
             if (isVisibleEvent) setRunStatus(detail);
             const currentAssistant = assistantBuffers.get(event.runId) ?? "";
-            if (conversationId) {
+            const chatOwnedRun = chatOwnedRunIdsRef.current.has(event.runId);
+            if (conversationId && !chatOwnedRun) {
               const createdAt = assistantCreatedAtRef.current.get(event.runId) ?? new Date().toISOString();
               const content = currentAssistant || (locale === "zh" ? `本地 Agent 未能完成这次请求：${detail}` : `The local Agent could not complete this request: ${detail}`);
               const parts: DesktopUIMessagePart[] = [...(assistantPartsRef.current.get(event.runId) ?? []).filter((part) => !("id" in part) || part.id !== `${event.runId}:status`).map((part) => part.type === "reasoning" ? { ...part, state: "done" as const } : part), { type: "data-status", id: `${event.runId}:status`, data: { status: status === "cancelled" ? "cancelled" as const : "failed" as const, message: detail } }];
@@ -5320,6 +5418,8 @@ export function App() {
             runConversationIdsRef.current.delete(event.runId);
             standaloneMediaRunsRef.current.delete(event.runId);
             runContextsRef.current.delete(event.runId);
+            metricAccumulators.delete(event.runId);
+            chatOwnedRunIdsRef.current.delete(event.runId);
             void tauriBridge.invoke("finish_run", { runId: event.runId, status });
             if (workflowKey) removeWorkflowTracking(workflowKey);
           }
@@ -5937,6 +6037,28 @@ export function App() {
     } catch (error) { setRunStatus(locale === "zh" ? `工作流导入失败：${error instanceof Error ? error.message : String(error)}` : `Workflow import failed: ${error instanceof Error ? error.message : String(error)}`); return false; }
   }
 
+  async function prepareChatExecutionPrompt(executionText: string) {
+    const trimmed = executionText.trim();
+    const launchConfig = configRef.current;
+    if (!knowledgeContextEnabled || !trimmed || !launchConfig.obsidianIndexPath) return executionText;
+    try {
+      const results = await workbenchClient.knowledge.search({
+        indexPath: launchConfig.obsidianIndexPath,
+        query: trimmed,
+        limit: 6,
+        embedding: embeddingPayload(launchConfig),
+      });
+      if (!results.length) return executionText;
+      const knowledgeHeader = locale === "zh"
+        ? "本地 Obsidian 知识库上下文（仅来自已选择的 Vault，请优先基于引用回答）"
+        : "Local Obsidian knowledge context (selected Vault only; prefer cited sources)";
+      return `${executionText}\n\n${knowledgeHeader}:\n${results.map((item) => `[${item.documentPath}${item.heading ? `#${item.heading}` : ""}] ${item.excerpt}`).join("\n")}`;
+    } catch {
+      setRunStatus(locale === "zh" ? "Obsidian 检索不可用，本轮继续使用普通 OpenCode 上下文" : "Obsidian search is unavailable; this turn will use ordinary OpenCode context");
+      return executionText;
+    }
+  }
+
   async function runAgent(promptOverride?: string, mediaFeatureId?: MediaFeatureId | "image_generate", mediaInputs?: Record<string, unknown>, workflowOverride?: unknown, workflowRetry?: WorkflowRetryState, displayedPromptOverride?: string, writerArticleMessageId?: string) {
     // Snapshot launch context before any attachment/knowledge await. A user can
     // switch to another agent or workspace while a long-running preparation is
@@ -6129,7 +6251,8 @@ export function App() {
        // Keep the writer Skill out of this run so a Skill's example provider or
        // model can never compete with the configured image capability.
        const runSkillId: SkillId = actionId === "image_generate" ? "auto" : launchEffectiveSkillId;
-       await workbenchClient.runs.start({ id: runId, conversationId, prompt: userPrompt, model: selectedProvider.model || undefined, skillId: runSkillId, reasoningEffort: selectedProvider.reasoningEffort ?? reasoningEffort });
+       const runSource = isWorkflowRun ? "workflow" : actionId === "ppt_generate" ? "ppt" : mediaFeatureId ? "media" : conversationAgentId ? "agent" : "conversation";
+       await workbenchClient.runs.start({ id: runId, conversationId, prompt: userPrompt, model: selectedProvider.model || undefined, skillId: runSkillId, reasoningEffort: selectedProvider.reasoningEffort ?? reasoningEffort, source: runSource, assistantMessageId: conversationId ? `assistant-${runId}` : undefined });
        const workflowDefinitionSnapshot = isWorkflowRun
          ? sanitizeWorkflowDefinitionForStorage(launchWorkflowDefinition ?? currentWorkflowDefinition())
          : undefined;
@@ -6360,18 +6483,18 @@ export function App() {
     <div className="shell" style={workbenchThemeStyle}>
       {showTopTip ? <DesktopTopTip message={topTipMessage} locale={locale} onDismiss={() => setDismissedTopTip(topTipMessage)} /> : null}
       <DesktopMediaHistoryContext.Provider value={mediaHistory}>
-      <WorkbenchShell navItems={sidebarRoutes.map((item) => ({ ...item, icon: <RouteIcon name={item.iconKey} /> }))} activePath={activePath} onNavigate={workbenchClient.navigation.go} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((current) => !current)} locale={locale} onLocaleChange={(nextLocale) => { if (nextLocale !== locale) setLocalePreference(nextLocale); }} onLocaleToggle={toggleLocale} localLabel={copy.localWorkspace} status={<div className="wb-runtime-status" data-runtime-status={runtimeStatus} title={localizeRuntimeStatus(runtimeStatus, locale)}><span className="wb-runtime-status-icon"><WorkbenchRouteIcon name="runtime" size={15} /></span><span className="wb-runtime-status-copy"><span className="wb-runtime-status-label">{localizeRuntimeStatus(runtimeStatus, locale)}</span><span className="muted">{locale === "zh" ? "本地运行环境" : "Local runtime"}</span></span></div>} sessions={conversations.map((conversation) => ({ path: conversationRoute(conversation), title: conversation.title, updatedAt: formatDateTime(conversation.updated_at, locale), agentId: conversation.agent_id ?? undefined, status: runs.some((run) => run.conversation_id === conversation.id && run.status === "running") ? "running" as const : undefined }))} sessionsLabel={conversationScope === "entry:writer" ? (locale === "zh" ? "写作会话" : "Writing sessions") : conversationScope === "entry:image-assistant" ? (locale === "zh" ? "图片助手会话" : "Image assistant sessions") : locale === "zh" ? "最近会话" : "Recent chats"} activeSessionAgentId={conversationScope} activeSessionAgentLabel={activeAgentCard?.title ?? activeChatRoute.label} hideSessionScopes={["entry:image-assistant"]} newSessionLabel={locale === "zh" ? "新建会话" : "New chat"} onNewSession={() => void startNewConversation()}>
+      <WorkbenchShell title="Coworkany" brandMark={<img src="/brand/coworkany-icon-64.png" alt="Coworkany" width={40} height={40} />} navItems={sidebarRoutes.map((item) => ({ ...item, icon: <RouteIcon name={item.iconKey} /> }))} activePath={activePath} onNavigate={workbenchClient.navigation.go} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((current) => !current)} locale={locale} onLocaleChange={(nextLocale) => { if (nextLocale !== locale) setLocalePreference(nextLocale); }} onLocaleToggle={toggleLocale} localLabel={copy.localWorkspace} sessions={conversations.map((conversation) => ({ path: conversationRoute(conversation), title: conversation.title, updatedAt: formatDateTime(conversation.updated_at, locale), agentId: conversation.agent_id ?? undefined, status: runs.some((run) => run.conversation_id === conversation.id && run.status === "running") ? "running" as const : undefined }))} sessionsLabel={conversationScope === "entry:writer" ? (locale === "zh" ? "写作会话" : "Writing sessions") : conversationScope === "entry:image-assistant" ? (locale === "zh" ? "图片助手会话" : "Image assistant sessions") : locale === "zh" ? "最近会话" : "Recent chats"} activeSessionAgentId={conversationScope} activeSessionAgentLabel={activeAgentCard?.title ?? activeChatRoute.label} hideSessionScopes={["entry:image-assistant"]} newSessionLabel={locale === "zh" ? "新建会话" : "New chat"} onNewSession={() => void startNewConversation()}>
       <section ref={workspaceRef} className={`workspace ${selected.path === "/dashboard" ? "workspace-home" : ""} ${immersivePage ? "workspace-immersive" : ""}`.trim()}>
       {settingsOpen && <DesktopSettingsPanel config={config} locale={locale} localePreference={localePreference} copy={copy} onConfigChange={(nextConfig) => { void persistSettingsConfig(nextConfig); }} onDiscoverModels={discoverProviderModels} onImportProviders={importProvidersFromFile} onLocalePreferenceChange={updateSettingsLocalePreference} onClose={() => { void persistSettingsConfig({ ...configRef.current, locale: localePreference }, true); if (selected.path === "/dashboard/settings") workbenchClient.navigation.go("/dashboard"); setSettingsOpen(false); }} onSave={() => void saveSettings()} onRebuildVault={() => void rebuildVaultIndex()} onPickDirectory={(kind) => void pickDirectory(kind)} onRepairRuntime={() => { setRunStatus(locale === "zh" ? "正在导入离线运行时…" : "Importing offline runtime…"); void tauriBridge.invoke<RuntimeProbe>("repair_runtime", runtimeRepairOptions(config)).then((runtime) => { setRuntimeReady(runtime.ready); setRuntimePhase(runtime.ready ? "ready" : "error"); setRuntimeStatus(runtime.ready ? (locale === "zh" ? "运行环境就绪" : "Runtime ready") : (locale === "zh" ? "运行环境需要修复" : "Runtime needs repair")); setRunStatus(runtime.ready ? (locale === "zh" ? "已导入离线运行时并完成复检" : "Offline runtime imported and rechecked") : (locale === "zh" ? "运行时仍不完整" : "Runtime is still incomplete")); }).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "离线运行时导入失败" : "Offline runtime import failed"))); }} onExportDiagnostics={() => { setRunStatus(locale === "zh" ? "正在导出诊断包…" : "Exporting diagnostics…"); void tauriBridge.invoke<{ path: string }>("export_diagnostics").then((result) => setRunStatus(locale === "zh" ? `诊断包已导出：${result.path}` : `Diagnostics exported: ${result.path}`)).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "诊断包导出失败" : "Diagnostics export failed"))); }} status={runStatus} />}
            {isHomeRoute ? <>
-          <div className="home-shell"><div className="home-page-shell"><header className="home-topbar"><div className="home-topbar-status"><span className="public-signal" aria-hidden="true" /><span>{homeCopy.workspaceReady}</span></div><button type="button" className="home-credits-link" onClick={() => workbenchClient.navigation.go("/dashboard/tasks")}><span className="home-credits-icon"><WorkbenchRouteIcon name="sparkles" size={14} /></span><span>{homeCopy.viewUsage}</span><WorkbenchRouteIcon name="arrowUpRight" size={15} /></button></header><main className="home-main"><section className="home-welcome"><div className="home-welcome-kicker">COWORKANY WORKSPACE</div><h1>{homeCopy.welcomePrefix}{homeCopy.welcomeDefaultName}<span className="home-welcome-mark" aria-hidden="true">✦</span></h1><p>{homeCopy.welcomeSubtitle}</p></section>
-          <section className="home-chat-workspace"><div className="chat-composer"><WorkbenchPromptInput value={prompt} onValueChange={setPrompt} onSubmit={() => void runAgent()} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} models={activeModels.map((item) => ({ id: item, label: formatWorkbenchModelLabel(item, { zh: "本地模型", en: "Local model" }, locale), provider: locale === "zh" ? "已配置模型" : "Configured models" }))} model={activeModel} onModelChange={updateModel} placeholder={copy.homePlaceholder} status={activeRunId ? "streaming" : "ready"} onStop={() => void cancelActiveRun()} locale={locale}><span className="sr-only" aria-live="polite">{localizeDesktopStatus(runStatus, locale)}</span>{knowledgeContextEnabled ? <div className="composer-knowledge-control"><button type="button" className="composer-knowledge-button" onClick={() => setKnowledgeContextEnabled(false)}>{locale === "zh" ? "⌑ Obsidian 知识库" : "⌑ Obsidian context"}</button><button type="button" className="composer-knowledge-close" aria-label={locale === "zh" ? "关闭 Obsidian 知识库上下文" : "Disable Obsidian knowledge"} onClick={() => setKnowledgeContextEnabled(false)}>×</button></div> : <button type="button" className="composer-knowledge-button" onClick={() => setKnowledgeContextEnabled(true)}>{locale === "zh" ? "⌑ 添加 Obsidian 知识库" : "⌑ Add Obsidian context"}</button>}<ModelControls locale={locale} model={activeModel} models={activeModels} providerSource={formatWorkbenchModelLabel(activeModel, { zh: "本地模型", en: "Local model" }, locale)} reasoningEffort={reasoningEffort} skillId={skillId} showSkill={false} hideModel onModelChange={updateModel} onReasoningChange={updateReasoning} onSkillChange={setSkillId} /></WorkbenchPromptInput></div></section>
+          <div className="home-shell"><div className="home-page-shell"><header className="home-topbar"><div className="home-topbar-status"><span className="public-signal" aria-hidden="true" /><span>{homeCopy.workspaceReady}</span></div><button type="button" className="home-credits-link" onClick={() => workbenchClient.navigation.go("/dashboard/usage")}><span className="home-credits-icon"><WorkbenchRouteIcon name="sparkles" size={14} /></span><span>{homeCopy.viewUsage}</span><WorkbenchRouteIcon name="arrowUpRight" size={15} /></button></header><main className="home-main"><section className="home-welcome"><div className="home-welcome-kicker">COWORKANY WORKSPACE</div><h1>{homeCopy.welcomePrefix}{homeCopy.welcomeDefaultName}<span className="home-welcome-mark" aria-hidden="true">✦</span></h1><p>{homeCopy.welcomeSubtitle}</p></section>
+          <section className="home-chat-workspace"><div className="chat-composer"><WorkbenchPromptInput value={prompt} onValueChange={setPrompt} onSubmit={() => void runAgent()} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} models={activeModels.map((item) => ({ id: item, label: formatWorkbenchModelLabel(item, { zh: "本地模型", en: "Local model" }, locale), provider: locale === "zh" ? "已配置模型" : "Configured models" }))} model={activeModel} onModelChange={updateModel} reasoningEffort={reasoningEffort} onReasoningChange={updateReasoning} knowledgeBases={knowledgeBaseOptions} knowledgeEnabled={knowledgeContextEnabled} onKnowledgeToggle={() => setKnowledgeContextEnabled((current) => !current)} placeholder={copy.homePlaceholder} status={activeRunId ? "streaming" : "ready"} onStop={() => void cancelActiveRun()} locale={locale}><span className="sr-only" aria-live="polite">{localizeDesktopStatus(runStatus, locale)}</span></WorkbenchPromptInput></div></section>
           <HomeEntryGroups onNavigate={workbenchClient.navigation.go} locale={locale} /></main></div></div>
           <section className="recent-card"><div className="section-title"><span>{selected.path === "/dashboard/assets" ? (locale === "zh" ? "资产库" : "Asset library") : mode === "library" ? (locale === "zh" ? "本地工作流与会话" : "Local workflows and sessions") : (locale === "zh" ? "最近会话" : "Recent sessions")}</span><span className="muted">{selected.path === "/dashboard/assets" ? `${artifactRows.length} ${locale === "zh" ? "个产物" : "artifacts"}` : savedWorkflows.length ? `${savedWorkflows.length} ${locale === "zh" ? "个工作流" : "workflows"}` : ""}</span></div>{selected.path === "/dashboard/assets" ? (artifactRows.length ? <div className="conversation-list">{artifactRows.map((item) => <button key={item.id} className="conversation-row artifact-row" onClick={() => void workbenchClient.files.reveal(item.relative_path, item.mime_type)}><span>{item.relative_path}</span><small>{Math.ceil(item.byte_length / 1024)} KB · {item.mime_type}</small></button>)}</div> : <div className="empty-state"><strong>{locale === "zh" ? "还没有本地产物" : "No local artifacts yet"}</strong><p>{locale === "zh" ? "运行写作、PPT 或媒体任务后，文件会出现在这里。" : "Artifacts appear here after writing, PPT, or media runs."}</p></div>) : mode === "library" && savedWorkflows.length ? <div className="conversation-list">{savedWorkflows.map((item) => <div key={item.id} className="conversation-row"><span>{item.name}</span><small>{formatDateTime(item.updated_at, locale)}</small></div>)}</div> : homeMessages.length ? <div className="message-thread"><WorkbenchMessageSurface messages={homeMessages} locale={locale} pendingMessageId={activeRunId ? homeMessages.at(-1)?.id : undefined} onCopy={(message) => navigator.clipboard?.writeText(desktopUIMessageText(message))} onArtifactOpen={(artifact) => void workbenchClient.files.open(artifact.relativePath, artifact.mimeType)} onArtifactDownload={(artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (artifact) void workbenchClient.files.open(artifact.relative_path, artifact.mime_type); }} resolveMediaSource={resolveDesktopMediaSource} resolveArtifactSource={resolveDesktopArtifactSource} resolvePreviewSource={resolveDesktopPreviewSource} onPreviewDownload={(preview) => { const artifact = artifactRows.find((item) => item.id === preview.artifactId); if (artifact) return workbenchClient.files.open(artifact.relative_path, artifact.mime_type); if (preview.relativePath) return workbenchClient.files.open(preview.relativePath, preview.mimeType ?? "application/octet-stream"); }} onPreviewExport={(preview) => exportDesktopPreview(preview, (artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (!artifact) throw new Error("preview_export_artifact_missing"); return workbenchClient.files.open(artifact.relative_path, artifact.mime_type); })} onPreviewOpenExternal={openDesktopPreviewInBrowser} /></div> : conversations.length ? <div className="conversation-list">{conversations.map((item) => <button key={item.id} type="button" className="conversation-row" onClick={() => navigate(conversationRoute(item))}><span>{item.title}</span><small>{formatDateTime(item.updated_at, locale)}</small></button>)}</div> : <div className="empty-state"><div className="empty-icon">⌁</div><strong>{locale === "zh" ? "还没有本地会话" : "No local sessions yet"}</strong><p>{locale === "zh" ? "运行第一个任务后，文本、工具步骤和产物会显示在这里。" : "Text, tool steps, and artifacts will appear here after your first task."}</p></div>}</section>
            <section className="stats-card"><div className="section-title"><span>{locale === "zh" ? "本地状态" : "Local status"}</span><span className="muted">{locale === "zh" ? "只统计，不扣费" : "Stats only; no billing"}</span></div><div className="stats-grid"><div><strong>{taskCount}</strong><span>{locale === "zh" ? "本地任务" : "Local tasks"}</span></div><div><strong>{tokenCount}</strong><span>Token</span></div><div><strong>{artifactCount}</strong><span>{locale === "zh" ? "产物" : "Artifacts"}</span></div></div></section>
          </> : null}
 
-        {selected.path !== "/dashboard" && (selected.mode === "chat" || selected.mode === "writer") ? <DesktopConversationWorkspace route={activeChatRoute} prompt={prompt} onPromptChange={setPrompt} runStatus={runStatus} activeRunId={activeRunId} onRun={(value, displayedValue) => void runAgent(value, undefined, undefined, undefined, undefined, displayedValue)} onGenerateImages={(article) => { const articleText = desktopUIMessageText(article).trim(); if (!articleText) return; void runAgent(`${locale === "zh" ? "基于以下文章生成配图，并将图片产物写入当前项目目录。" : "Generate images for the following article and write the image artifacts into the current project directory."}\n\n${articleText}`, "image_generate", undefined, undefined, undefined, locale === "zh" ? "为所选文章生成配图" : "Generate images for the selected article", article.id); }} onCancel={() => void cancelActiveRun()} onNewConversation={startNewConversation} knowledgeEnabled={knowledgeContextEnabled} onKnowledgeToggle={() => setKnowledgeContextEnabled((current) => !current)} activePrompt={activePrompt} activePromptAt={activePromptAt} assistantText={assistantText} onAssistantTextChange={setAssistantText} onSaveDraft={saveWriterDraft} onExportDraft={exportWriterDraft} assistantAt={assistantAt} messages={conversationMessages} conversationId={conversationIdFromPath(activePath)} chatTransport={desktopChatTransport} chatReady={Boolean(conversationIdFromPath(activePath))} providerId={activeProvider.id} activeAssistantParts={activeRunId ? assistantPartsRef.current.get(activeRunId) : undefined} toolEvents={toolEvents} conversations={conversations} onNavigate={workbenchClient.navigation.go} artifacts={artifactRows} onArtifactOpen={(relativePath, mimeType) => workbenchClient.files.open(relativePath, mimeType)} onArtifactDownload={(artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (!artifact) throw new Error("preview_export_artifact_missing"); return workbenchClient.files.open(artifact.relative_path, artifact.mime_type); }} model={activeModel} models={activeModels} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} attachments={attachments} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} onModelChange={updateModel} onReasoningChange={updateReasoning} onSkillChange={setSkillId} onReachTop={(viewport) => { const id = conversationIdFromPath(activePath); if (id) loadOlderConversationMessages(id, viewport); }} conversationScrollTop={conversationScrollRestore} onConversationScroll={persistActiveConversationScroll} locale={locale} /> : selected.path === "/dashboard/workflows" ? (workflowBuilderOpen ? <DesktopWorkflowWorkspace workflowId={workflowCanvasKey ?? "draft:workflow"} workbenchClient={workbenchClient} createAgentChatTransport={createDesktopChatTransportWithOverrides} configuredProviders={configuredProviderEntries(config).map(([, provider]) => provider)} goldenTemplates={aiGoldenTemplates} textProvider={providerForCapability(config, "text")} onEnsureWorkflow={ensureCurrentWorkflowId} route={selected} onBack={() => setWorkflowBuilderOpen(false)} prompt={prompt} onPromptChange={setPrompt} runStatus={workflowRunStatus} activeRunId={currentWorkflowRunId} onRun={(definition) => void runAgent(undefined, undefined, undefined, definition)} onRerun={(definition) => void runAgent(undefined, undefined, undefined, definition)} onContinue={() => void continueWorkflowFromCanvas()} onCancel={() => void cancelActiveRun()} savedWorkflows={savedWorkflows} workflowAction={workflowAction} onWorkflowAction={setWorkflowAction} definition={workflowDefinition} onDefinitionChange={setWorkflowDefinition} workflowMetadata={workflowMetadata} onWorkflowMetaChange={(patch) => setWorkflowMetadata((current) => ({ ...current, ...patch }))} onSave={async (definition) => Boolean(await saveCurrentWorkflow("manual", definition))} onExport={(definition) => exportCurrentWorkflow(definition)} onImport={(file) => importWorkflow(file)} model={activeModel} models={activeModels} modelForNode={(nodeType, providerId) => providerForWorkflowNode(nodeType, providerId).model} modelsForNode={(nodeType, providerId) => modelOptionsForProvider(config, providerForWorkflowNode(nodeType, providerId)) ?? []} providersForNode={(nodeType) => Object.values(config.providers ?? {}).filter((provider) => supportsProviderCapability(provider, capabilityForWorkflowAction(nodeType)) || (nodeType === "agent_execute" && provider.source?.trim().toLowerCase() === "runninghub" && provider.workflows?.some((workflow) => workflow.capability === "audio_transcription")))} agentOptions={workflowAgentOptions} loadVoicesForProvider={loadDesktopVoices} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} providerConfiguredForNode={(nodeType) => isMediaProviderConfigured(providerForCapability(config, capabilityForWorkflowAction(nodeType))) || (nodeType === "agent_execute" && Object.values(config.providers ?? {}).some((provider) => provider.source?.trim().toLowerCase() === "runninghub" && provider.workflows?.some((workflow) => workflow.capability === "audio_transcription")))} onSelectWorkflowFiles={selectWorkflowFiles} nodeExecutionSnapshots={workflowNodeSnapshots} locale={locale} /> : <WorkbenchWorkflowDirectory locale={locale} workflows={workflowDirectoryWorkflows} templates={workflowDirectoryTemplates} recentRuns={workflowDirectoryRuns} actionAvailability={{ duplicate: true, delete: true }} onAction={(action) => void handleWorkflowDirectoryAction(action)} />) : (selected.path === "/dashboard/image-assistant" || selected.path === "/dashboard/video" || selected.path === "/dashboard/capabilities") ? <DesktopMediaWorkspace route={selected} prompt={prompt} onPromptChange={setPrompt} runStatus={runStatus} activeRunId={activeRunId} onRun={(override, featureId, mediaInputs) => void runAgent(override, featureId, mediaInputs)} onCancel={() => void cancelActiveRun()} workflowAction={workflowAction} onWorkflowAction={setWorkflowAction} artifactRows={artifactRows} providerConfigured={isMediaProviderConfigured(activeProvider)} onOpenSettings={() => { setSettingsOpen(true); workbenchClient.navigation.go("/dashboard/settings"); }} onOpenTasks={() => workbenchClient.navigation.go("/dashboard/tasks")} onArtifactReveal={(relativePath, mimeType) => void workbenchClient.files.reveal(relativePath, mimeType)} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} attachments={attachments} model={activeModel} models={activeModels} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={setSkillId} locale={locale} /> : selected.path === "/dashboard/agent-platform" ? <WorkbenchAgentDirectory locale={locale} title={selected.label} description={selected.description} groups={directoryGroups} onAction={(card, action) => { if (action.id.startsWith("menu:")) { toggleMenuAgent(card.id); return; } if (action.id.startsWith("start:")) { void startNewConversationForAgent(card.id === "general" ? null : card.id); return; } workbenchClient.navigation.go(card.id === "general" ? "/dashboard/ai" : `/dashboard/ai?agent=${encodeURIComponent(card.id)}`); }} /> : selected.path === "/dashboard/settings" ? null : selected.mode === "library" ? <DesktopLibraryWorkspace route={selected} artifactRows={artifactRows} savedWorkflows={savedWorkflows} conversations={conversations} runs={runs} taskCount={taskCount} tokenCount={tokenCount} artifactCount={artifactCount} providerCost={providerCost} estimatedCost={estimatedCost} onNavigate={workbenchClient.navigation.go} onRetryRun={(run) => void prepareRunRetry(run)} onInspectRun={(runId) => workbenchClient.runs.inspect(runId).then(toRunDetail)} onArtifactRemove={async (artifactId) => { await workbenchClient.artifacts.remove(artifactId); setArtifactRows((current) => current.filter((item) => item.id !== artifactId)); setArtifactCount((current) => Math.max(0, current - 1)); }} onArtifactReveal={(relativePath, mimeType) => void workbenchClient.files.reveal(relativePath, mimeType)} onKnowledgeOpen={(relativePath) => void workbenchClient.knowledge.open(relativePath)} knowledgeQuery={knowledgeQuery} knowledgeResults={knowledgeResults} knowledgeStatus={knowledgeStatus} onKnowledgeQueryChange={setKnowledgeQuery} onKnowledgeSearch={() => void searchKnowledge()} locale={locale} /> : null}
+        {selected.path !== "/dashboard" && (selected.mode === "chat" || selected.mode === "writer") ? <DesktopConversationWorkspace route={activeChatRoute} prompt={prompt} onPromptChange={setPrompt} runStatus={runStatus} activeRunId={activeRunId} onGenerateImages={(article) => { const articleText = desktopUIMessageText(article).trim(); if (!articleText) return; void runAgent(`${locale === "zh" ? "基于以下文章生成配图，并将图片产物写入当前项目目录。" : "Generate images for the following article and write the image artifacts into the current project directory."}\n\n${articleText}`, "image_generate", undefined, undefined, undefined, locale === "zh" ? "为所选文章生成配图" : "Generate images for the selected article", article.id); }} onCancel={() => void cancelActiveRun()} onNewConversation={startNewConversation} knowledgeBases={knowledgeBaseOptions} knowledgeEnabled={knowledgeContextEnabled} onKnowledgeToggle={() => setKnowledgeContextEnabled((current) => !current)} onPrepareExecutionPrompt={prepareChatExecutionPrompt} assistantText={assistantText} onAssistantTextChange={setAssistantText} onSaveDraft={saveWriterDraft} onExportDraft={exportWriterDraft} messages={conversationMessages} conversationId={conversationIdFromPath(activePath)} chatTransport={desktopChatTransport} chatReady={Boolean(conversationIdFromPath(activePath))} providerId={textProvider.id} conversations={conversations} onNavigate={workbenchClient.navigation.go} onArtifactOpen={(relativePath, mimeType) => workbenchClient.files.open(relativePath, mimeType)} onArtifactDownload={(artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (!artifact) throw new Error("preview_export_artifact_missing"); return workbenchClient.files.open(artifact.relative_path, artifact.mime_type); }} model={textProvider.model} models={modelOptionsForProvider(config, textProvider) ?? []} configuredModels={textModelOptions} modelSelection={configuredTextModelSelectionId(textProvider.id, textProvider.model)} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} attachments={attachments} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} onModelChange={updateChatTextModel} onReasoningChange={updateReasoning} onSkillChange={setSkillId} onReachTop={(viewport) => { const id = conversationIdFromPath(activePath); if (id) loadOlderConversationMessages(id, viewport); }} conversationScrollTop={conversationScrollRestore} onConversationScroll={persistActiveConversationScroll} onChatFinish={persistFinishedChatMessage} locale={locale} /> : selected.path === "/dashboard/workflows" ? (workflowBuilderOpen ? <DesktopWorkflowWorkspace workflowId={workflowCanvasKey ?? "draft:workflow"} workbenchClient={workbenchClient} createAgentChatTransport={createDesktopChatTransportWithOverrides} configuredProviders={configuredProviderEntries(config).map(([, provider]) => provider)} goldenTemplates={aiGoldenTemplates} textProvider={providerForCapability(config, "text")} onEnsureWorkflow={ensureCurrentWorkflowId} route={selected} onBack={() => setWorkflowBuilderOpen(false)} prompt={prompt} onPromptChange={setPrompt} runStatus={workflowRunStatus} activeRunId={currentWorkflowRunId} onRun={(definition) => void runAgent(undefined, undefined, undefined, definition)} onRerun={(definition) => void runAgent(undefined, undefined, undefined, definition)} onContinue={() => void continueWorkflowFromCanvas()} onCancel={() => void cancelActiveRun()} savedWorkflows={savedWorkflows} workflowAction={workflowAction} onWorkflowAction={setWorkflowAction} definition={workflowDefinition} onDefinitionChange={setWorkflowDefinition} workflowMetadata={workflowMetadata} onWorkflowMetaChange={(patch) => setWorkflowMetadata((current) => ({ ...current, ...patch }))} onSave={async (definition) => Boolean(await saveCurrentWorkflow("manual", definition))} onExport={(definition) => exportCurrentWorkflow(definition)} onImport={(file) => importWorkflow(file)} model={activeModel} models={activeModels} modelForNode={(nodeType, providerId) => providerForWorkflowNode(nodeType, providerId).model} modelsForNode={(nodeType, providerId) => modelOptionsForProvider(config, providerForWorkflowNode(nodeType, providerId)) ?? []} providersForNode={(nodeType) => Object.values(config.providers ?? {}).filter((provider) => supportsProviderCapability(provider, capabilityForWorkflowAction(nodeType)) || (nodeType === "agent_execute" && provider.source?.trim().toLowerCase() === "runninghub" && provider.workflows?.some((workflow) => workflow.capability === "audio_transcription")))} agentOptions={workflowAgentOptions} loadVoicesForProvider={loadDesktopVoices} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} providerConfiguredForNode={(nodeType) => isMediaProviderConfigured(providerForCapability(config, capabilityForWorkflowAction(nodeType))) || (nodeType === "agent_execute" && Object.values(config.providers ?? {}).some((provider) => provider.source?.trim().toLowerCase() === "runninghub" && provider.workflows?.some((workflow) => workflow.capability === "audio_transcription")))} onSelectWorkflowFiles={selectWorkflowFiles} nodeExecutionSnapshots={workflowNodeSnapshots} locale={locale} /> : <WorkbenchWorkflowDirectory locale={locale} workflows={workflowDirectoryWorkflows} templates={workflowDirectoryTemplates} recentRuns={workflowDirectoryRuns} actionAvailability={{ duplicate: true, delete: true }} onAction={(action) => void handleWorkflowDirectoryAction(action)} />) : (selected.path === "/dashboard/image-assistant" || selected.path === "/dashboard/video" || selected.path === "/dashboard/capabilities") ? <DesktopMediaWorkspace route={selected} prompt={prompt} onPromptChange={setPrompt} runStatus={runStatus} activeRunId={activeRunId} onRun={(override, featureId, mediaInputs) => void runAgent(override, featureId, mediaInputs)} onCancel={() => void cancelActiveRun()} workflowAction={workflowAction} onWorkflowAction={setWorkflowAction} artifactRows={artifactRows} providerConfigured={isMediaProviderConfigured(activeProvider)} onOpenSettings={() => { setSettingsOpen(true); workbenchClient.navigation.go("/dashboard/settings"); }} onOpenTasks={() => workbenchClient.navigation.go("/dashboard/tasks")} onArtifactReveal={(relativePath, mimeType) => void workbenchClient.files.reveal(relativePath, mimeType)} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} attachments={attachments} model={activeModel} models={activeModels} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={setSkillId} locale={locale} /> : selected.path === "/dashboard/agent-platform" ? <WorkbenchAgentDirectory locale={locale} title={selected.label} description={selected.description} groups={directoryGroups} onAction={(card, action) => { if (action.id.startsWith("menu:")) { toggleMenuAgent(card.id); return; } if (action.id.startsWith("start:")) { void startNewConversationForAgent(card.id === "general" ? null : card.id); return; } workbenchClient.navigation.go(card.id === "general" ? "/dashboard/ai" : `/dashboard/ai?agent=${encodeURIComponent(card.id)}`); }} /> : selected.path === "/dashboard/usage" ? <DesktopUsageDashboard client={workbenchClient} locale={locale} initialRunId={new URLSearchParams(activePath.split("?", 2)[1] ?? "").get("runId") ?? undefined} onNavigate={workbenchClient.navigation.go} /> : selected.path === "/dashboard/settings" ? null : selected.mode === "library" ? <DesktopLibraryWorkspace route={selected} artifactRows={artifactRows} savedWorkflows={savedWorkflows} conversations={conversations} runs={runs} taskCount={taskCount} tokenCount={tokenCount} artifactCount={artifactCount} providerCost={providerCost} estimatedCost={estimatedCost} onNavigate={workbenchClient.navigation.go} onRetryRun={(run) => void prepareRunRetry(run)} onInspectRun={(runId) => workbenchClient.runs.inspect(runId).then(toRunDetail)} onArtifactRemove={async (artifactId) => { await workbenchClient.artifacts.remove(artifactId); setArtifactRows((current) => current.filter((item) => item.id !== artifactId)); setArtifactCount((current) => Math.max(0, current - 1)); }} onArtifactReveal={(relativePath, mimeType) => void workbenchClient.files.reveal(relativePath, mimeType)} onKnowledgeOpen={(relativePath) => void workbenchClient.knowledge.open(relativePath)} knowledgeQuery={knowledgeQuery} knowledgeResults={knowledgeResults} knowledgeStatus={knowledgeStatus} onKnowledgeQueryChange={setKnowledgeQuery} onKnowledgeSearch={() => void searchKnowledge()} locale={locale} /> : null}
       </section>
       </WorkbenchShell>
       {runtimeReady && questionSessionId ? <NativeQuestions key={questionSessionId} client={workbenchClient.questions} sessionId={questionSessionId} locale={locale} /> : null}

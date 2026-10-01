@@ -29,13 +29,17 @@ function formatTimelineTime(value: string, locale: "zh" | "en") {
 }
 
 function orderedParts(message: WorkbenchMessage): readonly WorkbenchMessagePart[] {
-  if (message.parts?.length) {
-    return message.parts.map((part, index) => ({ part, index })).sort((left, right) => {
-      if (left.part.sequence === undefined || right.part.sequence === undefined) return left.index - right.index;
-      return left.part.sequence === right.part.sequence ? left.index - right.index : left.part.sequence - right.part.sequence;
-    }).map(({ part }) => part);
-  }
+  if (message.parts?.length) return message.parts;
   return message.content ? [{ id: `${message.id}:text`, type: "text", text: message.content }] : [];
+}
+
+function timelineActivityRevision(message: WorkbenchMessage | undefined) {
+  if (!message) return null;
+  const parts = orderedParts(message);
+  const lastPart = parts.at(-1);
+  const lastPartState = lastPart && "status" in lastPart ? lastPart.status : "";
+  const lastPartContent = lastPart?.type === "text" || lastPart?.type === "reasoning" ? lastPart.text.length : "";
+  return `${message.id}:${message.status ?? ""}:${parts.length}:${lastPart?.id ?? ""}:${lastPartState}:${lastPartContent}`;
 }
 
 function TimelinePart({ part, locale, user = false, onArtifactOpen, onToolApproval }: { part: WorkbenchMessagePart; locale: "zh" | "en"; user?: boolean; onArtifactOpen?: (artifact: WorkbenchArtifact) => void; onToolApproval?: (part: Extract<WorkbenchMessagePart, { type: "tool-call" }>, decision: "approve" | "reject") => void }) {
@@ -63,41 +67,20 @@ function TimelinePart({ part, locale, user = false, onArtifactOpen, onToolApprov
   return null;
 }
 
-function MessageProcess({ parts, locale, pending, onToolApproval }: { parts: readonly WorkbenchMessagePart[]; locale: "zh" | "en"; pending: boolean; onToolApproval?: (part: Extract<WorkbenchMessagePart, { type: "tool-call" }>, decision: "approve" | "reject") => void }) {
-  if (!parts.length) return null;
-  const completed = parts.filter((part) => (part.type === "tool" && part.status === "completed") || (part.type === "tool-call" && (part.status === "completed" || part.status === "succeeded")) || (part.type === "reasoning" && part.status === "completed") || (part.type === "plan" && (part.status === "completed" || part.status === "succeeded")) || (part.type === "task" && (part.status === "completed" || part.status === "succeeded")) || (part.type === "status" && part.status === "succeeded") || part.type === "warning" || part.type === "usage").length;
-  const hasFailure = parts.some((part) => (part.type === "tool" && part.status === "failed") || (part.type === "tool-call" && part.status === "failed") || (part.type === "reasoning" && part.status === "failed") || (part.type === "plan" && part.status === "failed") || (part.type === "task" && part.status === "failed") || (part.type === "status" && (part.status === "failed" || part.status === "cancelled")));
-  const label = locale === "zh" ? "执行过程" : "Process";
-  return <details className="wb-message-process" open={pending || hasFailure} data-status={hasFailure ? "failed" : pending ? "running" : "completed"}>
-    <summary><span className={`wb-event-dot wb-event-${hasFailure ? "failed" : pending ? "running" : "completed"}`} /><span>{label}</span><small>{completed}/{parts.length}</small></summary>
-    <div className="wb-message-process-list">{parts.map((part) => <TimelinePart key={part.id} part={part} locale={locale} onToolApproval={onToolApproval} />)}</div>
-  </details>;
-}
-
 function DefaultTimelineMessage({ message, locale, pending, copied, onCopy, onArtifactOpen, onToolApproval, labels }: { message: WorkbenchMessage; locale: "zh" | "en"; pending: boolean; copied: boolean; onCopy?: (message: WorkbenchMessage) => void | Promise<void>; onArtifactOpen?: (artifact: WorkbenchArtifact) => void; onToolApproval?: (part: Extract<WorkbenchMessagePart, { type: "tool-call" }>, decision: "approve" | "reject") => void; labels?: { readonly user?: string; readonly assistant?: string } }) {
   const user = message.role === "user";
   const label = user ? (labels?.user || (locale === "zh" ? "你的指令" : "Your Command")) : (labels?.assistant || "AI RESPONSE");
   const copyLabel = locale === "zh" ? "复制回复" : "Copy reply";
   const parts = orderedParts(message);
-  const processParts = parts.filter((part) => part.type === "tool" || part.type === "tool-call" || part.type === "reasoning" || part.type === "plan" || part.type === "task" || part.type === "warning" || part.type === "status" || part.type === "usage");
-  const textParts = parts.filter((part) => part.type === "text");
-  const artifactParts = parts.filter((part) => part.type === "artifact");
-  const reportParts = parts.filter((part) => part.type === "report");
-  const sourceParts = parts.filter((part) => part.type === "source");
-  const bodyParts = textParts;
-  const resultParts = [...artifactParts, ...reportParts];
-  const processLabel = locale === "zh" ? "生成产物" : "Generated artifacts";
-  const sourceLabel = locale === "zh" ? "参考来源" : "References";
   return <Message from={user ? "user" : "assistant"} className={`wb-cloud-message wb-cloud-message-${user ? "user" : "assistant"}`} data-cloud-surface="message" data-message-id={message.id} data-status={message.status}>
     {!user ? <div className="ai-avatar">AI</div> : null}
     <MessageContent className={user ? "message-card-user" : "message-card assistant-message"}>
       <div className={`message-header ${user ? "wb-chat-user-header" : "assistant-message-header"}`}>
         <div className="min-w-0 flex-1"><div className={`dashboard-kicker ${user ? "text-primary" : "text-foreground"}`}>{label}</div><div className="message-time"><time dateTime={message.createdAt} title={workbenchMessageTimestampLabel(locale)}>{formatWorkbenchMessageTimestamp(message.createdAt, locale)}</time></div></div>
       </div>
-      {!user ? <MessageProcess parts={processParts} locale={locale} pending={pending} onToolApproval={onToolApproval} /> : null}
-      {pending && !bodyParts.length ? <div className="wb-chat-pending"><span className="wb-chat-pending-dot" /><Shimmer>{locale === "zh" ? "正在生成…" : "Generating…"}</Shimmer></div> : bodyParts.map((part) => <TimelinePart key={part.id} part={part} locale={locale} user={user} onArtifactOpen={onArtifactOpen} onToolApproval={onToolApproval} />)}
-      {resultParts.length ? <section className="wb-message-results wb-artifact-section"><div className="wb-artifact-title">✦ {processLabel}</div><div className="wb-artifact-grid">{resultParts.map((part) => <TimelinePart key={part.id} part={part} locale={locale} onArtifactOpen={onArtifactOpen} />)}</div></section> : null}
-      {sourceParts.length ? <section className="wb-message-sources"><div className="wb-message-section-title">{sourceLabel}</div>{sourceParts.map((part) => <TimelinePart key={part.id} part={part} locale={locale} onArtifactOpen={onArtifactOpen} />)}</section> : null}
+      <div className="wb-message-ordered-parts" data-message-order="chronological">
+        {pending && !parts.length ? <div className="wb-chat-pending" role="status" aria-live="polite"><span className="wb-chat-pending-dot" /><Shimmer>{locale === "zh" ? "正在生成…" : "Generating…"}</Shimmer></div> : parts.map((part) => <TimelinePart key={part.id} part={part} locale={locale} user={user} onArtifactOpen={onArtifactOpen} onToolApproval={onToolApproval} />)}
+      </div>
     </MessageContent>
     {!user && message.content && onCopy ? <MessageToolbar><MessageActions className="message-actions message-feedback"><MessageAction label={copyLabel} title={copyLabel} onClick={() => void onCopy(message)} className="message-feedback-btn">{copied ? "✓" : "⧉"}</MessageAction></MessageActions></MessageToolbar> : null}
     {user ? <div className="ai-avatar wb-chat-user-avatar" aria-label={label}>U</div> : null}
@@ -112,5 +95,5 @@ export function WorkbenchMessageTimeline<TMessage extends WorkbenchMessage = Wor
     setCopiedMessageId(message.id);
     globalThis.setTimeout(() => setCopiedMessageId((current) => current === message.id ? null : current), 1400);
   };
-  return <Conversation className={`wb-message-timeline ${className}`.trim()} data-cloud-surface="message-timeline" scrollButtonLabel={locale === "zh" ? "滚动到最新消息" : "Scroll to latest"} scrollToBottomKey={messages.at(-1)?.id ?? null}><ConversationContent>{messages.length ? messages.map((message, index) => renderMessage ? <div className="wb-message-timeline-item" key={message.id}>{renderMessage(message, index)}</div> : <DefaultTimelineMessage key={message.id} message={message} locale={locale} pending={message.id === pendingMessageId} copied={copiedMessageId === message.id} onCopy={onCopy ? copyMessage as ((message: WorkbenchMessage) => void | Promise<void>) : undefined} onArtifactOpen={onArtifactOpen} onToolApproval={onToolApproval} labels={labels} />) : <ConversationEmptyState>{locale === "zh" ? "从第一条指令开始" : "Start with your first instruction"}</ConversationEmptyState>}</ConversationContent>{checkpoints.length ? <div className="ai-elements-checkpoints">{checkpoints.map((checkpoint) => <Checkpoint key={checkpoint.id} title={checkpoint.title} description={checkpoint.description} onRestore={() => onCheckpointRestore?.(checkpoint.id)} onBranch={() => onCheckpointBranch?.(checkpoint.id)} />)}</div> : null}</Conversation>;
+  return <Conversation className={`wb-message-timeline ${className}`.trim()} data-cloud-surface="message-timeline" scrollButtonLabel={locale === "zh" ? "滚动到最新消息" : "Scroll to latest"} scrollToBottomKey={timelineActivityRevision(messages.at(-1))}><ConversationContent>{messages.length ? messages.map((message, index) => renderMessage ? <div className="wb-message-timeline-item" key={message.id}>{renderMessage(message, index)}</div> : <DefaultTimelineMessage key={message.id} message={message} locale={locale} pending={message.id === pendingMessageId} copied={copiedMessageId === message.id} onCopy={onCopy ? copyMessage as ((message: WorkbenchMessage) => void | Promise<void>) : undefined} onArtifactOpen={onArtifactOpen} onToolApproval={onToolApproval} labels={labels} />) : <ConversationEmptyState>{locale === "zh" ? "从第一条指令开始" : "Start with your first instruction"}</ConversationEmptyState>}</ConversationContent>{checkpoints.length ? <div className="ai-elements-checkpoints">{checkpoints.map((checkpoint) => <Checkpoint key={checkpoint.id} title={checkpoint.title} description={checkpoint.description} onRestore={() => onCheckpointRestore?.(checkpoint.id)} onBranch={() => onCheckpointBranch?.(checkpoint.id)} />)}</div> : null}</Conversation>;
 }

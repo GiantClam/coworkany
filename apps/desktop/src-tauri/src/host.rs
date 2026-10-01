@@ -259,7 +259,16 @@ pub(crate) fn python_executable(app: &AppHandle) -> Result<Option<String>, Strin
     let configured = configured_runtime_path(app, "pythonPath")
         .filter(|path| is_app_managed_python_path(path, &data, &resource))
         .into_iter();
-    for path in crate::ordered_runtime_candidates(private, bundled, configured, std::iter::empty()) {
+    let managed = crate::ordered_runtime_candidates(private, bundled, configured, std::iter::empty());
+    #[cfg(target_os = "macos")]
+    let candidates = macos_python_candidates(
+        cfg!(debug_assertions),
+        managed,
+        system_executable(crate::platform::runtime_executable("python")),
+    );
+    #[cfg(not(target_os = "macos"))]
+    let candidates = managed;
+    for path in candidates {
         if !path.is_file() { continue; }
         match probe_python(&path) {
             Ok(()) => {
@@ -272,7 +281,11 @@ pub(crate) fn python_executable(app: &AppHandle) -> Result<Option<String>, Strin
     }
     #[cfg(target_os = "macos")]
     {
-        crate::logs::append(&data, "runtime-probe", "python_system_fallback_disabled platform=macos");
+        if cfg!(debug_assertions) {
+            crate::logs::append(&data, "runtime-probe", "python_development_system_unavailable platform=macos");
+        } else {
+            crate::logs::append(&data, "runtime-probe", "python_system_fallback_disabled platform=macos");
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -285,6 +298,10 @@ pub(crate) fn python_executable(app: &AppHandle) -> Result<Option<String>, Strin
         }
     }
     Ok(None)
+}
+
+fn macos_python_candidates(development: bool, managed: Vec<PathBuf>, system: Option<PathBuf>) -> Vec<PathBuf> {
+    if development { system.into_iter().collect() } else { managed }
 }
 
 fn is_app_managed_python_path(path: &std::path::Path, data: &std::path::Path, resource: &std::path::Path) -> bool {
@@ -697,6 +714,16 @@ mod tests {
         assert_eq!(std::fs::canonicalize(host).unwrap(), expected);
         let skills = development_runtime_directory_from_manifest().expect("source runtime directory missing").join("skills");
         assert_eq!(select_skills_directory([skills.clone()]), Some(skills));
+    }
+
+    #[test]
+    fn development_macos_uses_only_trusted_system_python_before_startup_probe() {
+        let managed = vec![PathBuf::from("resource/runtime/python/python3")];
+        let system = PathBuf::from("/Library/Frameworks/Python.framework/Versions/3.12/bin/python3");
+
+        assert_eq!(macos_python_candidates(true, managed.clone(), Some(system.clone())), vec![system]);
+        assert!(macos_python_candidates(true, managed.clone(), None).is_empty());
+        assert_eq!(macos_python_candidates(false, managed.clone(), None), managed);
     }
 
     #[test]

@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { createOpenCodeServeEventState, createOpenCodeServePromptPayload, createOpenCodeServeSessionPayload, normalizeOpenCodeServeEvent, openCodeServePermissionPath, openCodeServeSessionPath, openCodeServeSessionStatusPath, openCodeServeSessionsPath, readOpenCodeServeSessionId, type OpenCodeRuntimeEvent, type OpenCodeServeEventState, type OpenCodeQuestionRequest } from "@coworkany/runtime-contracts/opencode";
 
-type Provider = { readonly id?: string; readonly model?: string; readonly apiKey?: string; readonly reasoningEffort?: string };
+type Provider = { readonly id?: string; readonly source?: string; readonly model?: string; readonly apiKey?: string; readonly reasoningEffort?: string };
 type EventSink = (event: OpenCodeRuntimeEvent) => void;
 const DEFAULT_STALLED_RUN_TIMEOUT_MS = 300_000;
 const STALL_CHECK_INTERVAL_MS = 500;
@@ -73,6 +73,30 @@ function isRecoverablePromptSubmissionError(error: unknown) {
   return /fetch failed|econnreset|socket|connection (?:closed|reset|refused)/u.test(message);
 }
 function modelParts(model: string | undefined) { const separator = model?.indexOf("/") ?? -1; return separator > 0 ? { providerID: model!.slice(0, separator), modelID: model!.slice(separator + 1) } : undefined; }
+function normalizedProviderId(value: string) { return value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "") || "local"; }
+function selectedProviderModel(provider: Provider) {
+  const configuredModel = provider.model?.trim() ?? "";
+  if (!configuredModel) return undefined;
+  const qualified = modelParts(configuredModel);
+  const providerId = qualified?.providerID ?? provider.source?.trim() ?? provider.id?.trim();
+  const modelId = qualified?.modelID ?? configuredModel;
+  return providerId ? { providerID: normalizedProviderId(providerId), modelID: modelId } : undefined;
+}
+function sessionUsesProviderModel(session: unknown, provider: Provider, environment: Record<string, string | undefined>) {
+  let expected = selectedProviderModel(provider);
+  try {
+    const configuredModel = record(JSON.parse(environment.OPENCODE_CONFIG_CONTENT ?? ""))?.model;
+    const configured = typeof configuredModel === "string" ? modelParts(configuredModel) : undefined;
+    if (configured) expected = { providerID: normalizedProviderId(configured.providerID), modelID: configured.modelID };
+  } catch { /* fall back to the selected provider when no generated config is available */ }
+  if (!expected) return true;
+  const stored = record(record(session)?.model);
+  if (!stored) return true;
+  const storedId = stringValue(stored.modelID, stored.id);
+  const storedProviderId = stringValue(stored.providerID, stored.providerId);
+  if (!storedId || !storedProviderId) return true;
+  return normalizedProviderId(storedProviderId) === expected.providerID && storedId === expected.modelID;
+}
 function deepSeekVariant(model: string | undefined, reasoningEffort: string | undefined) {
   if (model !== "deepseek-v4-flash") return undefined;
   const normalized = reasoningEffort?.trim().toLowerCase();
@@ -230,11 +254,15 @@ export class OpenCodeServeClient {
     await previous;
     try {
       if (requestedId) {
-        const existing = await this.request(openCodeServeSessionPath(requestedId, workspacePath, "message")).catch((error) => {
+        const existing = await this.request(openCodeServeSessionPath(requestedId, workspacePath)).catch((error) => {
           throw new Error(`opencode_session_lookup_failed:${error instanceof Error ? error.message : String(error)}`);
         });
-        if (existing.ok) return { sessionId: requestedId, recovered: false };
-        if (existing.status !== 404) throw new Error(`opencode_session_lookup_failed:${existing.status}`);
+        if (existing.ok) {
+          const session = await existing.json().catch(() => null);
+          if (sessionUsesProviderModel(session, provider, environment)) return { sessionId: requestedId, recovered: false };
+        } else if (existing.status !== 404) {
+          throw new Error(`opencode_session_lookup_failed:${existing.status}`);
+        }
       }
       const model = modelParts(provider.model);
       const body = createOpenCodeServeSessionPayload({ title: "CoworkAny Desktop", ...(model ? { providerId: model.providerID, modelId: model.modelID } : {}) });
@@ -258,11 +286,13 @@ export class OpenCodeServeClient {
     this.sessionCreateQueue = new Promise((resolve) => { release = resolve; });
     await previous;
     try {
-      const response = await this.request(openCodeServeSessionPath(requestedId, workspacePath, "message")).catch((error) => {
+      const response = await this.request(openCodeServeSessionPath(requestedId, workspacePath)).catch((error) => {
         throw new Error(`opencode_session_attach_failed:${error instanceof Error ? error.message : String(error)}`);
       });
       if (response.status === 404) return undefined;
       if (!response.ok) throw new Error(`opencode_session_attach_failed:${response.status}`);
+      const session = await response.json().catch(() => null);
+      if (!sessionUsesProviderModel(session, _provider, environment)) return undefined;
       return { sessionId: requestedId };
     } finally {
       release?.();

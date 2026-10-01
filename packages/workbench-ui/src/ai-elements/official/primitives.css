@@ -1,0 +1,5 @@
+@layer utilities {
+  .ai-elements-official-shimmer { animation: ai-elements-official-shimmer 2s linear infinite; }
+  @keyframes ai-elements-official-shimmer { from { background-position: 100% center; } to { background-position: 0% center; } }
+  @media (prefers-reduced-motion: reduce) { .ai-elements-official-shimmer { animation: none; } }
+}

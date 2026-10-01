@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import Image from "next/image"
 
 import { useI18n } from "@/components/locale-provider"
 import { getPublicCopy } from "@/lib/i18n/public-copy"
@@ -15,7 +16,7 @@ export function PublicSiteFooter() {
       <div className="mx-auto grid max-w-7xl gap-8 px-6 py-12 lg:grid-cols-[1.1fr_0.9fr_0.8fr] lg:items-start">
         <div>
           <div className="public-kicker text-muted-foreground">{copy.footer.systemFooterLabel}</div>
-          <div className="mt-2 font-display text-2xl font-extrabold uppercase tracking-[0.04em] text-foreground">CoworkAny</div>
+          <Image src="/brand/coworkany-logo.png" alt="CoworkAny" width={1120} height={228} className="mt-2 h-9 w-auto object-contain object-left" />
           <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">{copy.footer.description}</p>
           <div className="mt-4 text-sm text-muted-foreground">
             {copy.footer.contact}:{" "}

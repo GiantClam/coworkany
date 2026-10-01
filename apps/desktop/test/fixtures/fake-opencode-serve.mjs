@@ -61,7 +61,12 @@ const server = createServer(async (request, response) => {
   if (request.headers.authorization !== expectedAuthorization) return json(response, 401, { message: "unauthorized" });
   const url = new URL(request.url || "/", `http://${hostname}:${port}`);
   if (request.method === "GET" && url.pathname === "/session/status") return json(response, 200, sessionStatuses);
+  if (request.method === "GET" && url.pathname === "/session/retained-session") return json(response, 200, { id: "retained-session", model: { id: "model", providerID: "configured" } });
+  if (request.method === "GET" && url.pathname === "/session/model-mismatch") return json(response, 200, { id: "model-mismatch", model: { id: "old-model", providerID: "old-provider" } });
+  if (request.method === "GET" && url.pathname === "/session/lost-session") return json(response, 404, { message: "missing" });
+  if (request.method === "GET" && url.pathname === "/session/lookup-error-session") return json(response, 503, { message: "temporarily unavailable" });
   if (request.method === "GET" && url.pathname === "/session/recovered-session/message") return json(response, 200, sessionMessages.get("recovered-session") ?? []);
+  if (request.method === "GET" && url.pathname === "/session/model-mismatch/message") return json(response, 200, []);
   if (request.method === "GET" && url.pathname === "/command") return json(response, 200, [{ name: "ppt-master", source: "skill" }, { name: "dashi-ppt", source: "skill" }, { name: "workflow-authoring", source: "skill" }]);
   if (request.method === "GET" && url.pathname === "/question") return json(response, 200, pendingQuestion ? [pendingQuestion] : []);
   if (request.method === "POST" && /^\/question\/question-1\/(reply|reject)$/.test(url.pathname)) {
@@ -125,8 +130,6 @@ const server = createServer(async (request, response) => {
     }
   }
   if (request.method === "GET" && url.pathname === "/session/retained-session/message") return json(response, 200, { id: "retained-session" });
-  if (request.method === "GET" && url.pathname === "/session/lost-session/message") return json(response, 404, { message: "missing" });
-  if (request.method === "GET" && url.pathname === "/session/lookup-error-session/message") return json(response, 503, { message: "temporarily unavailable" });
   if (request.method === "POST" && url.pathname === "/session") return json(response, 200, { id: "recovered-session" });
   if (request.method === "POST" && ["/session/recovered-session/message", "/session/recovered-session/prompt_async", "/session/recovered-session/command"].includes(url.pathname)) {
     let body = "";

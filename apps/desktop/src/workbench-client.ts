@@ -16,6 +16,10 @@ import type {
   WorkbenchConversationMessagesOptions,
   WorkflowAiCommand,
   WorkflowAiOperationGroup,
+  MetricsQueryFilters,
+  MetricsQueryResult,
+  RunMetrics,
+  RunMetricCount,
 } from "@coworkany/workbench-client";
 import { createDesktopRunTransport, createDesktopUIMessage, desktopUIMessageStorage, desktopUIMessageText, parseDesktopUIMessage } from "@coworkany/workbench-client";
 import type { DesktopUIMessage } from "@coworkany/workbench-client";
@@ -33,6 +37,25 @@ type DesktopRunRow = { id: string; conversation_id?: string | null; status: Work
 type DesktopRunDetail = { run: DesktopRunRow; nodes: Array<{ node_key: string; status: string; output_json?: string | null; updated_at: string }>; events: Array<{ sequence: number; event_type: string; payload_json: string; created_at: string }>; usage: Array<{ provider?: string | null; model: string; input_tokens?: number | null; output_tokens?: number | null; provider_cost?: number | null; estimated_cost?: number | null; created_at: string }> };
 type DesktopKnowledgeIndex = { generation: number; documents: number; chunks: number; indexPath: string; semantic: boolean; embeddingModel?: string; embeddingDimension?: number; watcher?: string };
 type DesktopKnowledgeResult = { chunkId: string; documentPath: string; heading?: string; excerpt: string; score?: number; lineStart?: number; lineEnd?: number };
+type DesktopMetricCount = { total: number; completed: number; failed: number; rejected: number; running?: number };
+type DesktopMetricNameCount = DesktopMetricCount & { name: string };
+type DesktopRunMetrics = {
+  runId: string;
+  provider?: string | null;
+  model?: string | null;
+  modelTools: DesktopMetricCount;
+  capabilities: DesktopMetricCount;
+  modelToolBreakdown?: DesktopMetricNameCount[];
+  capabilityBreakdown?: DesktopMetricNameCount[];
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  cachedInputTokens?: number | null;
+  reasoningTokens?: number | null;
+  providerCost?: number | null;
+  estimatedCost?: number | null;
+  completeness: RunMetrics["completeness"];
+};
+type DesktopMetricsQueryResult = Omit<MetricsQueryResult, "runs" | "nextCursor"> & { runs: Array<Omit<MetricsQueryResult["runs"][number], "metrics"> & { metrics: DesktopRunMetrics }>; nextCursor?: string | null };
 
 export type DesktopChatTransportOptions = {
   readonly resolveSessionId: (chatId: string) => Promise<string>;
@@ -148,6 +171,36 @@ function toWorkbenchKnowledgeResult(value: DesktopKnowledgeResult): WorkbenchKno
   return { chunkId: value.chunkId, documentPath: value.documentPath, heading: value.heading, excerpt: value.excerpt, score: typeof value.score === "number" ? value.score : 0, lineStart: value.lineStart, lineEnd: value.lineEnd };
 }
 
+function toMetricCount(count: DesktopMetricCount, byName: readonly DesktopMetricNameCount[] = []): RunMetricCount {
+  return {
+    total: count.total,
+    completed: count.completed,
+    failed: count.failed,
+    rejected: count.rejected,
+    running: count.running ?? Math.max(0, count.total - count.completed - count.failed - count.rejected),
+    byName: byName.map((item) => ({ ...item, running: item.running ?? Math.max(0, item.total - item.completed - item.failed - item.rejected) })),
+  };
+}
+
+function toRunMetrics(value: DesktopRunMetrics): RunMetrics {
+  return {
+    runId: value.runId,
+    ...(value.provider ? { provider: value.provider } : {}),
+    ...(value.model ? { model: value.model } : {}),
+    modelTools: toMetricCount(value.modelTools, value.modelToolBreakdown),
+    capabilities: toMetricCount(value.capabilities, value.capabilityBreakdown),
+    tokens: {
+      ...(value.inputTokens == null ? {} : { input: value.inputTokens }),
+      ...(value.outputTokens == null ? {} : { output: value.outputTokens }),
+      ...(value.cachedInputTokens == null ? {} : { cachedInput: value.cachedInputTokens }),
+      ...(value.reasoningTokens == null ? {} : { reasoning: value.reasoningTokens }),
+    },
+    ...(value.providerCost == null ? {} : { providerCost: value.providerCost }),
+    ...(value.estimatedCost == null ? {} : { estimatedCost: value.estimatedCost }),
+    completeness: value.completeness,
+  };
+}
+
 export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: WorkbenchClient["navigation"]): WorkbenchClient & { readonly questions: WorkbenchQuestionClient } {
   async function sendHostCommand(type: "knowledge.index" | "knowledge.search", payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     await bridge.invoke("host_start");
@@ -179,6 +232,17 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
     }
   }
 
+  const metrics = {
+    async getRun(runId: string): Promise<RunMetrics> {
+      return toRunMetrics(await bridge.invoke<DesktopRunMetrics>("get_run_metrics", { runId }));
+    },
+    async query(filters: MetricsQueryFilters): Promise<MetricsQueryResult> {
+      const result = await bridge.invoke<DesktopMetricsQueryResult>("query_metrics", { filters });
+      const { nextCursor, ...base } = result;
+      return { ...base, runs: result.runs.map((row) => ({ ...row, metrics: toRunMetrics(row.metrics) })), ...(nextCursor ? { nextCursor } : {}) };
+    },
+  };
+
   const conversations = {
     async list(): Promise<readonly WorkbenchConversation[]> {
       const rows = await bridge.invoke<DesktopConversationRow[]>("list_conversations");
@@ -197,7 +261,18 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
         input.beforeId = options.before.id;
       }
       const rows = await bridge.invoke<DesktopMessageRow[]>("list_messages", input);
-      return rows.map(readStoredUIMessage);
+      return Promise.all(rows.map(async (row) => {
+        const message = readStoredUIMessage(row);
+        const runId = message.metadata?.runId;
+        if (message.role !== "assistant" || !runId) return message;
+        try {
+          const runMetrics = await metrics.getRun(runId);
+          const parts = message.parts.filter((part) => part.type !== "data-runMetrics");
+          return { ...message, parts: [...parts, { type: "data-runMetrics", id: `run-metrics:${runId}`, data: runMetrics }] } as DesktopUIMessage;
+        } catch {
+          return message;
+        }
+      }));
     },
   };
 
@@ -236,7 +311,7 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
   const runs = {
     async start(request: WorkbenchRunRequest): Promise<WorkbenchRun> {
       const run = { id: request.id ?? makeId("run"), conversationId: request.conversationId ?? "", status: "queued" as const, startedAt: new Date().toISOString() };
-      await bridge.invoke("create_run", { runId: run.id, conversationId: request.conversationId || null, model: request.model ?? null });
+      await bridge.invoke("create_run", { runId: run.id, conversationId: request.conversationId || null, model: request.model ?? null, source: request.source ?? "conversation", assistantMessageId: request.assistantMessageId ?? null });
       return run;
     },
     async list(): Promise<readonly WorkbenchRun[]> {
@@ -254,6 +329,7 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
     },
     subscribe(runId: string, onEvent: (event: WorkbenchRunEvent) => void) {
       let dispose: (() => void) | undefined;
+      const activeToolCallIds = new Map<string, string>();
       void bridge.listen<{ raw: string }>("desktop://runtime-response", (payload) => {
         try {
           const separator = payload.raw.indexOf(":");
@@ -267,7 +343,7 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
           if (event.event === "text_delta") onEvent({ type: "text", delta: String(event.delta ?? ""), ...metadata });
           else if (event.event === "reasoning_delta") onEvent({ type: "reasoning", delta: String(event.delta ?? ""), ...metadata });
           else if (event.event === "runtime_warning") onEvent({ type: "warning", code: String(event.code ?? "runtime_warning"), message: String(event.message ?? "Runtime warning"), ...metadata });
-          else if (event.event === "usage") onEvent({ type: "usage", usage: { runId, provider: typeof event.provider === "string" ? event.provider : undefined, model: String(event.model ?? "unknown"), inputTokens: Number(event.inputTokens ?? 0), outputTokens: Number(event.outputTokens ?? 0), providerCost: typeof event.costUsd === "number" ? event.costUsd : undefined }, ...metadata });
+          else if (event.event === "usage") onEvent({ type: "usage", usage: { runId, usageId: typeof event.usageId === "string" ? event.usageId : undefined, provider: typeof event.provider === "string" ? event.provider : undefined, model: String(event.model ?? "unknown"), inputTokens: typeof event.inputTokens === "number" ? event.inputTokens : undefined, outputTokens: typeof event.outputTokens === "number" ? event.outputTokens : undefined, cachedInputTokens: typeof event.cachedInputTokens === "number" ? event.cachedInputTokens : undefined, reasoningTokens: typeof event.reasoningTokens === "number" ? event.reasoningTokens : undefined, providerCost: typeof event.costUsd === "number" ? event.costUsd : undefined, aggregation: event.aggregation === "snapshot" ? "snapshot" : "delta", scope: event.scope === "run" ? "run" : "step" }, ...metadata });
           else if (event.event === "artifact" && event.artifact && typeof event.artifact === "object") onEvent({ type: "artifact", artifact: event.artifact as WorkbenchArtifact, ...metadata });
           else if (event.event === "preview" && event.preview && typeof event.preview === "object") onEvent({ type: "preview", preview: event.preview as WorkbenchPreviewData, ...metadata });
           else if (event.event === "done") onEvent({ type: "status", status: "succeeded", ...metadata });
@@ -294,7 +370,28 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
           else if (event.event === "attachment" && event.attachment && typeof event.attachment === "object") onEvent({ type: "attachment", attachment: event.attachment as { id: string; name: string; mediaType: string; uri?: string; status?: "queued" | "uploading" | "ready" | "failed" }, ...metadata });
           else if (event.event === "tool_event") {
             const phase = event.phase === "completed" || event.phase === "failed" ? event.phase : "started";
-            onEvent({ type: "tool", tool: String(event.tool ?? "tool"), phase, message: typeof event.message === "string" ? event.message : undefined, ...metadata });
+            const toolName = String(event.tool ?? "tool");
+            const explicitCallId = typeof event.toolCallId === "string" ? event.toolCallId : typeof event.callId === "string" ? event.callId : undefined;
+            const toolCallId = explicitCallId ?? activeToolCallIds.get(toolName) ?? `${toolName}:${metadata.sequence ?? "active"}`;
+            if (phase === "started") activeToolCallIds.set(toolName, toolCallId);
+            else activeToolCallIds.delete(toolName);
+            let detail: Record<string, unknown> = {};
+            if (typeof event.message === "string") {
+              try {
+                const parsed: unknown = JSON.parse(event.message);
+                if (parsed && typeof parsed === "object") detail = parsed as Record<string, unknown>;
+              } catch { /* optional legacy tool detail */ }
+            }
+            onEvent({
+              type: "tool_call",
+              toolName,
+              toolCallId,
+              phase,
+              input: detail.args ?? detail.input,
+              output: detail.result ?? detail.output,
+              error: phase === "failed" && typeof event.message === "string" ? event.message : undefined,
+              ...metadata,
+            });
           }
         } catch { /* malformed frames remain in host diagnostics */ }
       }).then((unlisten) => { dispose = unlisten; }).catch(() => undefined);
@@ -346,6 +443,7 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
         return [{ runId: conversationId ?? "summary", model: "local", inputTokens: summary.input_tokens, outputTokens: summary.output_tokens, providerCost: summary.provider_cost, estimatedCost: summary.estimated_cost }];
       },
     },
+    metrics,
   };
 }
 
@@ -367,7 +465,7 @@ export function createDesktopChatTransport(bridge: TauriBridge, workbenchClient:
       const resolvedModelId = typeof provider.model === "string" ? provider.model : undefined;
       if (message.metadata?.providerId && resolvedProviderId && message.metadata.providerId !== resolvedProviderId) throw new Error("desktop_transport_provider_changed");
       if (message.metadata?.modelId && resolvedModelId && message.metadata.modelId !== resolvedModelId) throw new Error("desktop_transport_model_changed");
-      await bridge.invoke("create_run", { runId, conversationId: chatId, model: message.metadata?.modelId ?? null });
+      await bridge.invoke("create_run", { runId, conversationId: chatId, model: message.metadata?.modelId ?? null, source: message.metadata?.capability === "ppt" || message.metadata?.route?.includes("executive-ppt") ? "ppt" : message.metadata?.route?.includes("agent") ? "agent" : "conversation", assistantMessageId: `assistant-${runId}` });
       const stored = desktopUIMessageStorage(message);
       await bridge.invoke("append_message", { input: { id: message.id, conversation_id: chatId, role: "user", content: stored.content, parts_json: stored.parts_json, metadata_json: stored.metadata_json, created_at: message.metadata?.createdAt ?? new Date().toISOString() } });
       options.onRunStarted?.(runId, chatId, message);

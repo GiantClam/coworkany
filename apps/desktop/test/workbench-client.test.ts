@@ -6,6 +6,23 @@ import { createDesktopChatTransport, createDesktopWorkbenchClient } from "../src
 import { createDesktopUIMessage, desktopUIMessageText } from "@coworkany/workbench-client";
 import { resolveWorkflowAiTextProvider } from "../src/workflow-ai-controller";
 
+test("desktop WorkbenchClient maps persisted metrics into the shared contract", async () => {
+  const bridge = {
+    async invoke<T>(command: string) {
+      const count = { total: 1, completed: 1, failed: 0, rejected: 0 };
+      if (command === "get_run_metrics") return { runId: "r1", provider: "openai", model: "gpt", modelTools: count, capabilities: { ...count, total: 0, completed: 0 }, modelToolBreakdown: [{ name: "read", ...count }], capabilityBreakdown: [], inputTokens: 4, outputTokens: 2, cachedInputTokens: 1, reasoningTokens: null, providerCost: 0.01, estimatedCost: null, completeness: "complete" } as T;
+      if (command === "query_metrics") return { overview: { tokens: 6, modelTools: 1, capabilities: 0, providerCost: 0.01 }, series: [], models: [], tools: [], capabilities: [], runs: [], nextCursor: null } as T;
+      return undefined as T;
+    },
+    async listen() { return () => undefined; },
+  };
+  const client = createDesktopWorkbenchClient(bridge, { go: () => undefined, replace: () => undefined, current: () => "/dashboard/usage" });
+  const metrics = await client.metrics?.getRun("r1");
+  assert.equal(metrics?.modelTools.byName[0]?.name, "read");
+  assert.deepEqual(metrics?.tokens, { input: 4, output: 2, cachedInput: 1 });
+  assert.equal((await client.metrics?.query({ range: "30d" }))?.overview.tokens, 6);
+});
+
 test("desktop WorkbenchClient adapts conversations, workflows and file actions through Tauri", async () => {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
   const bridge = {
@@ -310,10 +327,10 @@ test("desktop WorkbenchClient streams text, tool, usage, cancellation and termin
   assert.deepEqual(events, [
     { type: "text", delta: "hello", sequence: 1, createdAt: "2026-08-12T00:00:01Z" },
     { type: "reasoning", delta: "planning", sequence: 2, createdAt: "2026-08-12T00:00:02Z" },
-    { type: "tool", tool: "writer", phase: "completed", message: "finished", sequence: 3, createdAt: "2026-08-12T00:00:03Z" },
+    { type: "tool_call", toolName: "writer", toolCallId: "writer:3", phase: "completed", input: undefined, output: undefined, error: undefined, sequence: 3, createdAt: "2026-08-12T00:00:03Z" },
     { type: "artifact", artifact: { id: "a1", relativePath: "artifacts/report.md", title: "报告", mimeType: "text/markdown", byteLength: 12, sha256: "hash-a" }, sequence: 4, createdAt: "2026-08-12T00:00:04Z" },
     { type: "preview", preview: { kind: "ppt", title: "Deck preview", url: "http://127.0.0.1:5200/", previewSessionId: "dashi-ppt:1", engine: "dashi-ppt", status: "ready" }, sequence: 5, createdAt: "2026-08-12T00:00:05Z" },
-    { type: "usage", usage: { runId: "run-stream", provider: "fixture", model: "fixture/model", inputTokens: 3, outputTokens: 5, providerCost: 0.02 }, sequence: 6, createdAt: "2026-08-12T00:00:06Z" },
+    { type: "usage", usage: { runId: "run-stream", usageId: undefined, provider: "fixture", model: "fixture/model", inputTokens: 3, outputTokens: 5, cachedInputTokens: undefined, reasoningTokens: undefined, providerCost: 0.02, aggregation: "delta", scope: "step" }, sequence: 6, createdAt: "2026-08-12T00:00:06Z" },
     { type: "status", status: "cancelled", sequence: 7, createdAt: "2026-08-12T00:00:07Z" },
     { type: "status", status: "succeeded", sequence: 8, createdAt: "2026-08-12T00:00:08Z" },
   ]);

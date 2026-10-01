@@ -83,6 +83,64 @@ type ProviderConfigContainer = {
   readonly defaults?: DesktopProviderDefaults;
 };
 
+export type ConfiguredTextModelOption = {
+  readonly id: string;
+  readonly label: string;
+  readonly provider: string;
+  readonly providerId: string;
+  readonly modelId: string;
+};
+
+/** Stable selector values must distinguish identical model IDs from different providers. */
+export function configuredTextModelSelectionId(providerId: string, modelId: string): string {
+  return JSON.stringify([providerId, modelId]);
+}
+
+/** Show every configured model from every provider that can serve text. */
+export function configuredTextModelOptions(config: ProviderConfigContainer): ConfiguredTextModelOption[] {
+  return configuredProviderEntries(config).flatMap(([providerId, provider]) => {
+    if (!supportsProviderCapability(provider, "text")) return [];
+    const models = provider.models !== undefined
+      ? configuredModelOptions(provider)
+      : (provider.model?.trim() ? [provider.model.trim()] : []);
+    return models.map((modelId) => ({
+      id: configuredTextModelSelectionId(providerId, modelId),
+      label: modelId,
+      provider: providerId,
+      providerId,
+      modelId,
+    }));
+  });
+}
+
+/** Apply a text-model selection to both its provider profile and text default. */
+export function selectConfiguredTextModel<T extends ProviderConfigContainer>(config: T, selectionId: string): T {
+  let selection: unknown;
+  try {
+    selection = JSON.parse(selectionId);
+  } catch {
+    return config;
+  }
+  if (!Array.isArray(selection) || typeof selection[0] !== "string" || typeof selection[1] !== "string") return config;
+  const [providerId, modelId] = selection;
+  if (!configuredTextModelOptions(config).some((option) => option.id === selectionId)) return config;
+  const profile = config.providers?.[providerId];
+  if (profile) {
+    return {
+      ...config,
+      defaults: { ...config.defaults, text: providerId },
+      providers: { ...config.providers, [providerId]: { ...profile, model: modelId } },
+    } as T;
+  }
+  const fallbackId = config.provider.id?.trim() || config.provider.source?.trim() || "default";
+  if (providerId !== fallbackId) return config;
+  return {
+    ...config,
+    defaults: { ...config.defaults, text: providerId },
+    provider: { ...config.provider, model: modelId },
+  } as T;
+}
+
 /** Include the legacy top-level provider in settings without duplicating profiles. */
 export function configuredProviderEntries(config: ProviderConfigContainer): Array<[string, DesktopProviderConfig]> {
   const entries = Object.entries(config.providers ?? {});

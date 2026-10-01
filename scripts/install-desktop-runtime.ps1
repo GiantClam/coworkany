@@ -319,7 +319,7 @@ function Get-OpenCodeVersion([string]$path) {
 
 function Install-OpenCodePackage([switch]$Offline) {
   Write-RuntimeProgress "opencode_check"
-  $requiredVersion = "1.18.30"
+  $requiredVersion = "1.18.31"
   $target = Join-Path $stageRoot "runtime/opencode/opencode.exe"
   if (Test-Path -LiteralPath $target -PathType Leaf) {
     $actualVersion = Get-OpenCodeVersion $target

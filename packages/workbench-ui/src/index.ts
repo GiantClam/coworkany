@@ -9,6 +9,7 @@ export * from "./message-timeline";
 export * from "./message-time";
 export * from "./workbench-message-surface";
 export * from "./workbench-preview";
+export * from "./run-metrics";
 export * from "./prompt-input";
 export * from "./process-parts";
 export * from "./ai-elements/index";

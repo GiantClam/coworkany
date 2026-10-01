@@ -72,14 +72,14 @@ function Stage-OpenCode([string[]]$candidates, [string]$target) {
   foreach ($candidate in @($candidates) + @($target)) {
     if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
     $foundExecutable = $true
-    if ((Get-OpenCodeVersion $candidate) -cne "1.18.30") { continue }
+    if ((Get-OpenCodeVersion $candidate) -cne "1.18.31") { continue }
     if ([IO.Path]::GetFullPath($candidate) -ne [IO.Path]::GetFullPath($target)) {
       Copy-Item -LiteralPath $candidate -Destination $target -Force
     }
     return $true
   }
   # Do not leave an old executable available for packaging under a new manifest.
-  if ($foundExecutable) { throw "opencode_version_required:1.18.30" }
+  if ($foundExecutable) { throw "opencode_version_required:1.18.31" }
   return $false
 }
 
@@ -100,7 +100,7 @@ $fontStaged = Copy-IfFile (Join-Path $env:WINDIR "Fonts/msyh.ttc") (Join-Path $d
   integrity = @{ hashAlgorithm = "sha256"; signatureAlgorithm = "ed25519"; signature = $null; required = $false; publicKey = "-----BEGIN PUBLIC KEY-----`nMCowBQYDK2VwAyEAHgKs3hyNJCHJsLN9sle73MWSPew6fOweDLoO1E935JA=`n-----END PUBLIC KEY-----`n" }
   stagedAt = [DateTime]::UtcNow.ToString("o")
   node = @{ staged = $nodeStaged; path = if ($nodeStaged) { "runtime/node/node.exe" } else { $null } }
-  opencode = @{ staged = $opencodeStaged; version = "1.18.30"; path = if ($opencodeStaged) { "runtime/opencode/opencode.exe" } else { $null } }
+  opencode = @{ staged = $opencodeStaged; version = "1.18.31"; path = if ($opencodeStaged) { "runtime/opencode/opencode.exe" } else { $null } }
   python = @{ staged = $false; distribution = "cpython-nuget"; version = "3.13.6"; path = "runtime/python/python.exe"; reason = "Official CPython NuGet tools are installed locally by the runtime installer." }
   fonts = @{ staged = $fontStaged; path = if ($fontStaged) { "runtime/fonts/msyh.ttc" } else { $null } }
   lancedb = @{ staged = Test-Path -LiteralPath (Join-Path $destination "lancedb/node_modules/@lancedb/lancedb/dist/index.js") -PathType Leaf; path = "runtime/lancedb/node_modules/@lancedb/lancedb/dist/index.js"; native = "runtime/lancedb/node_modules/@lancedb/lancedb-win32-x64-msvc/lancedb.win32-x64-msvc.node" }

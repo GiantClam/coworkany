@@ -148,6 +148,29 @@ test("rendered UI messages keep the user text when the live SDK view has an empt
   assert.equal(desktopUIMessageText(merged[0]), "用户输入内容");
 });
 
+test("message view merging patches stable parts without discarding displayed-only entities", () => {
+  const base = createDesktopUIMessage({ id: "assistant-1", role: "assistant", conversationId: "conversation-1", createdAt: "2026-08-21T15:00:00.000Z" });
+  const displayed = [{
+    ...base,
+    parts: [
+      { type: "text" as const, text: "工具前", state: "done" as const, providerMetadata: { coworkany: { partId: "text:1" } } },
+      { type: "data-artifact" as const, id: "artifact:report", data: { id: "report", title: "报告", relativePath: "report.md", mimeType: "text/markdown", byteLength: 10, sha256: "abc" } },
+    ],
+  }];
+  const live = [{
+    ...base,
+    parts: [
+      { type: "text" as const, text: "工具前（已完成）", state: "done" as const, providerMetadata: { coworkany: { partId: "text:1" } } },
+      { type: "dynamic-tool" as const, toolName: "search", toolCallId: "search-1", state: "output-available" as const, input: { query: "AI" }, output: { count: 1 } },
+    ],
+  }];
+
+  const merged = mergeDesktopUIMessageViews(displayed, live);
+
+  assert.deepEqual(merged[0]?.parts.map((part) => part.type), ["text", "data-artifact", "dynamic-tool"]);
+  assert.equal(desktopUIMessageText(merged[0]!), "工具前（已完成）");
+});
+
 test("rendered UI messages do not append an empty live user bubble", () => {
   const displayed = [createDesktopUIMessage({ id: "assistant-visible", role: "assistant", conversationId: "conversation-1", content: "助手回复", createdAt: "2026-08-21T15:00:01.000Z" })];
   const live = [{ id: "sdk-empty-user", role: "user" as const, parts: [], metadata: { conversationId: "conversation-1", createdAt: "2026-08-21T15:00:02.000Z", updatedAt: "2026-08-21T15:00:02.000Z" } }];

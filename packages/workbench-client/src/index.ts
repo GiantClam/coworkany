@@ -1,4 +1,5 @@
 import type { DesktopUIMessage } from "./uimessage";
+import type { MetricsQueryFilters, MetricsQueryResult, RunMetrics, RunMetricSource } from "./run-metrics";
 import type { WorkbenchQuestionClient, WorkbenchQuestionEvent } from "./questions";
 import type { WorkflowAiOperationGroup } from "./workflow-ai";
 import type { WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
@@ -123,12 +124,17 @@ export interface WorkbenchArtifact {
 
 export interface WorkbenchUsage {
   readonly runId: string;
+  readonly usageId?: string;
   readonly provider?: string;
   readonly model: string;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
   readonly providerCost?: number;
   readonly estimatedCost?: number;
+  readonly aggregation?: "delta" | "snapshot";
+  readonly scope?: "step" | "run";
 }
 
 export interface WorkbenchWorkflowDefinition {
@@ -180,6 +186,8 @@ export interface WorkbenchRunRequest {
   readonly model?: string;
   readonly skillId?: string;
   readonly reasoningEffort?: string;
+  readonly source?: RunMetricSource;
+  readonly assistantMessageId?: string;
 }
 
 export interface FileActionsAdapter {
@@ -255,9 +263,16 @@ export interface WorkbenchClient {
   readonly usage: {
     readonly list: (conversationId?: string) => Promise<readonly WorkbenchUsage[]>;
   };
+  readonly metrics?: {
+    readonly getRun: (runId: string) => Promise<RunMetrics>;
+    readonly query: (filters: MetricsQueryFilters) => Promise<MetricsQueryResult>;
+  };
 }
 
 export * from "./message-parts";
+export { advanceAssistantTurn, beginAssistantTurn } from "./assistant-turn";
+export type { AssistantTurnSeed, SequencedRunEvent } from "./assistant-turn";
 export * from "./questions";
+export * from "./run-metrics";
 export * from "./uimessage";
 export * from "./workflow-ai";

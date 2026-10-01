@@ -16,7 +16,6 @@ import type { AppLocale } from "@/lib/i18n/config"
 import { buildLocalizedPublicUrl, getLocalizedPublicAlternates, isLocalizedPublicPath, localizePublicPath } from "@/lib/i18n/routing"
 import { listPlatformCapabilityExecutionStates } from "@/lib/platform/execution"
 import { listPlatformRegistryEntryExecutionStates } from "@/lib/platform/registry-entry-execution"
-import { buildPlatformRegistryDefaultEntries } from "@/lib/platform/control-plane"
 import { getAiCostPageCopy, localizeSeoPage } from "@/lib/seo/i18n"
 import { metadataForSeoPage } from "@/lib/seo/metadata"
 import {
@@ -263,41 +262,40 @@ function renderLocalizedSeoPage(locale: AppLocale, group: LocalizedSeoGroup, slu
 }
 
 export function getHomeMetadata(locale: AppLocale): Metadata {
-  const copy = getPublicCopy(locale)
   const canonical = buildLocalizedPublicUrl("/", locale)
   const title =
     locale === "zh"
-      ? "一个工作台，接入多个 AI 模型 | AIMarketingSite"
-      : "Multi-Model AI Workspace for Marketing Teams | AIMarketingSite"
+      ? "Coworkany｜你的个人 AI 智能体工作台"
+      : "Coworkany | Your Personal AI Agent Workspace"
+  const description =
+    locale === "zh"
+      ? "Coworkany 是面向个人与团队的 AI 智能体工作台，整合 AI 对话、Agent、写作、图片、PPT、工作流与本地运行能力，让想法直接变成成果。"
+      : "Coworkany is a personal AI agent workspace for turning ideas into outcomes with AI chat, agents, writing, image generation, presentations, workflows, and local runtime support."
 
   return {
-    title,
-    description: copy.home.description,
+    title: { absolute: title },
+    description,
     alternates: {
       canonical,
       languages: getLocalizedPublicAlternates("/"),
     },
     openGraph: {
       title,
-      description: copy.home.description,
+      description,
       url: canonical,
-      siteName: "AIMarketingSite",
+      siteName: "Coworkany",
       type: "website",
     },
     twitter: {
       card: "summary_large_image",
       title,
-      description: copy.home.description,
+      description,
     },
   }
 }
 
 export async function renderHomePage(locale: AppLocale) {
-  const platformCapabilities = buildPlatformRegistryDefaultEntries(locale, "capability").filter((item) =>
-    ["ai-chat", "ai-ppt", "ai-image", "ai-video", "agent-platform"].includes(item.slug),
-  )
-
-  return <PublicHomePageContent platformCapabilities={platformCapabilities} />
+  return <PublicHomePageContent locale={locale} />
 }
 
 export function getPricingMetadata(locale: AppLocale): Metadata {

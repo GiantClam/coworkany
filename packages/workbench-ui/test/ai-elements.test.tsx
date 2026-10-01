@@ -18,20 +18,20 @@ test("prompt input exposes accessible text, attachments, model and submit contro
   assert.match(markup, /data-slot="prompt-input-tools"/);
   assert.match(markup, /wb-ai-prompt-model-select/);
   assert.match(markup, /data-dropzone="prompt-input"/);
-  assert.match(markup, /aria-label="Add attachment"/);
-  assert.doesNotMatch(markup, /aria-haspopup="menu"/);
+  assert.match(markup, /aria-label="Add content"/);
+  assert.match(markup, /aria-haspopup="menu"/);
 });
 
-test("prompt input keeps contextual hints in the header and actions in the footer tools", () => {
+test("prompt input keeps contextual hints above the compact input row", () => {
   const markup = renderToStaticMarkup(<WorkbenchPromptInput value="" onValueChange={() => undefined} onSubmit={() => undefined} locale="zh"><div className="composer-selected-agent">当前 Agent</div><button type="button" className="composer-knowledge-button">知识库</button></WorkbenchPromptInput>);
   const headerIndex = markup.indexOf('data-slot="prompt-input-header"');
   const bodyIndex = markup.indexOf('data-slot="prompt-input-body"');
   const footerIndex = markup.indexOf('data-slot="prompt-input-footer"');
   const agentIndex = markup.indexOf("当前 Agent");
   const knowledgeIndex = markup.indexOf("知识库");
-  assert.ok(headerIndex < agentIndex && agentIndex < bodyIndex);
-  assert.ok(bodyIndex < footerIndex && footerIndex < knowledgeIndex);
-  assert.match(markup, /data-slot="prompt-input-custom-tools"/);
+  assert.ok(headerIndex < agentIndex && agentIndex < knowledgeIndex);
+  assert.ok(knowledgeIndex < footerIndex && footerIndex < bodyIndex);
+  assert.match(markup, /wb-ai-prompt-compact-row/);
 });
 
 test("model selector groups models and renders an accessible listbox trigger", () => {
@@ -65,7 +65,7 @@ test("prompt action menus leave viewport collision placement to Radix", () => {
 
 test("process primitives preserve plan, task, tool and reasoning semantics", () => {
   const markup = renderToStaticMarkup(<div><WorkbenchMessage role="assistant" label="AI response" timestamp="12:00"><WorkbenchReasoning text="thinking" status="running" locale="en" /><WorkbenchPlan title="Plan" steps={[{ id: "step-1", title: "Research", status: "completed" }]} status="completed" locale="en" /><WorkbenchTask title="Task" status="waiting" locale="en" /><WorkbenchTool toolName="search" toolCallId="tool-1" input={{ query: "ai" }} status="failed" locale="en" /></WorkbenchMessage></div>);
-  assert.match(markup, /Reasoning/);
+  assert.match(markup, /data-slot="reasoning"/);
   assert.match(markup, /Plan/);
   assert.match(markup, /Task/);
   assert.match(markup, /search/);

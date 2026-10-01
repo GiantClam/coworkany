@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, type ReactNode } from "react";
+import React, { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Download } from "lucide-react";
 import { WorkbenchAttachments } from "./prompt-input";
 import {
@@ -18,15 +18,6 @@ import {
   ConfirmationActions,
   ConfirmationRequest,
   ConfirmationTitle,
-  Context,
-  ContextContent,
-  ContextContentBody,
-  ContextContentHeader,
-  ContextInputUsage,
-  ContextOutputUsage,
-  ContextReasoningUsage,
-  ContextCacheUsage,
-  ContextTrigger,
   Conversation,
   ConversationContent,
   ConversationEmptyState,
@@ -39,10 +30,6 @@ import {
   MessagePlainText,
   MessageResponse,
   MessageToolbar,
-  Reasoning,
-  ReasoningContent,
-  ReasoningTrigger,
-  Shimmer,
   Source,
   Sources,
   SourcesContent,
@@ -57,11 +44,14 @@ import {
   ToolInput,
   ToolOutput,
 } from "./ai-elements";
-import { createDesktopUIMessage, type DesktopArtifactData, type DesktopMediaData, type DesktopPreviewData, type DesktopRunStatus, type DesktopUIMessage, type DesktopUIMessagePart } from "@coworkany/workbench-client";
+import { applyRunMetricsEvent, createDesktopUIMessage, createRunMetricsAccumulator, toRunMetrics, type DesktopArtifactData, type DesktopMediaData, type DesktopPreviewData, type DesktopRunStatus, type DesktopUIMessage, type DesktopUIMessagePart } from "@coworkany/workbench-client";
 import { artifactDisplayName } from "./artifact-label";
 import { formatWorkbenchMessageTimestamp, workbenchMessageTimestampLabel } from "./message-time";
 import { WorkbenchPreview, type WorkbenchPreviewContext, type WorkbenchPreviewSource } from "./workbench-preview";
 import { OfficeArtifactPreview } from "./office-artifact-preview";
+import { WorkbenchRunMetrics } from "./run-metrics";
+import { groupProcessActivityParts, summarizeProcessActivity, summarizeToolActivity, type ProcessActivityEntry } from "./tool-activity";
+import { ToolActivityGroup, ToolActivityPortals, useToolActivityDisclosures } from "./tool-activity-group";
 
 export type WorkbenchMessageSurfaceProps = {
   readonly messages: readonly DesktopUIMessage[];
@@ -89,7 +79,7 @@ export type WorkbenchMessageSurfaceProps = {
   readonly onPreviewExport?: (preview: DesktopPreviewData) => void | Promise<void>;
   readonly onPreviewOpenExternal?: (preview: DesktopPreviewData) => void | Promise<void>;
   readonly onToolApproval?: (message: DesktopUIMessage, part: Extract<DesktopUIMessagePart, { type: "dynamic-tool" }>, decision: "approve" | "reject") => void | Promise<void>;
-  /** Workflow AI uses a concise disclosure contract; ordinary chats keep full tool details. */
+  /** Workflow AI keeps concise business summaries; ordinary tool traces use on-demand details. */
   readonly workflowAi?: boolean;
   readonly emptyState?: ReactNode;
 };
@@ -113,24 +103,13 @@ const HANDLED_DATA_PARTS = new Set([
   "data-status",
   "data-task",
   "data-usage",
+  "data-runMetrics",
   "data-warning",
   "data-workflow",
 ]);
 
 function status(value: DesktopRunStatus): "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled" {
   return value;
-}
-
-function textParts(message: DesktopUIMessage) {
-  return message.parts
-    .filter((part): part is Extract<DesktopUIMessagePart, { type: "text" }> => part.type === "text")
-    .map((part) => part);
-}
-
-function processParts(message: DesktopUIMessage) {
-  // Run status is surfaced by the composer and Task Center. It is transport
-  // metadata, not a conversational message, so keep it out of the transcript.
-  return message.parts.filter((part) => part.type === "reasoning" || part.type === "dynamic-tool" || part.type === "data-task");
 }
 
 function emitToolApproval(message: DesktopUIMessage, part: Extract<DesktopUIMessagePart, { type: "dynamic-tool" }>, decision: "approve" | "reject") {
@@ -144,6 +123,92 @@ function messageStatus(message: DesktopUIMessage, pending: boolean) {
   if (pending) return "running" as const;
   if (message.metadata?.runStatus) return message.metadata.runStatus;
   return "completed" as const;
+}
+
+type MessageActivityAnnouncement = { identity: string; label: string };
+type MessageActivityProjection = { activePart: DesktopUIMessagePart | undefined; activeIndex: number; groupedToolActivity: boolean; announcement?: MessageActivityAnnouncement };
+type ProcessActivityEntries = ReturnType<typeof groupProcessActivityParts>;
+
+function messageActivityProjection(message: DesktopUIMessage, locale: "zh" | "en", streaming: boolean, workflowAi: boolean, entries: ProcessActivityEntries = groupProcessActivityParts(message.parts, { active: streaming, workflowAi })): MessageActivityProjection {
+  const lastVisibleIndex = message.parts.reduce((last, part, index) => ["data-status", "data-usage", "data-runMetrics", "data-writerAsset"].includes(part.type) ? last : index, -1);
+  const activePart = lastVisibleIndex >= 0 ? message.parts[lastVisibleIndex] : undefined;
+  if (message.role !== "assistant" || !streaming) return { activePart, activeIndex: lastVisibleIndex, groupedToolActivity: false };
+  const reasoningActive = entries.some((entry) => entry.type === "process-group" && summarizeProcessActivity(entry.members.map((member) => member.part), locale, streaming).reasoningActive);
+  const activeTrace = reasoningActive || entries.some((entry) => entry.type === "tool-group" ? summarizeToolActivity(entry.parts, locale).active > 0 : entry.type === "process-group" && summarizeProcessActivity(entry.members.map((member) => member.part), locale, streaming).active > 0);
+  const interactivePhase = activePart?.type === "dynamic-tool" && entries.some((entry) => entry.type === "part" && entry.part === activePart);
+  const writingPhase = activePart?.type === "text" && activePart.state === "streaming";
+  const groupedToolActivity = activeTrace && !interactivePhase && !writingPhase && activePart?.type !== "data-task";
+  if (groupedToolActivity) {
+    return { activePart, activeIndex: lastVisibleIndex, groupedToolActivity, announcement: reasoningActive
+      ? { identity: `${message.id}:thinking`, label: locale === "zh" ? "正在思考" : "Thinking" }
+      : { identity: `${message.id}:tools`, label: locale === "zh" ? "正在执行工具操作" : "Running tools" } };
+  }
+  if (activePart?.type === "reasoning") return { activePart, activeIndex: lastVisibleIndex, groupedToolActivity, announcement: { identity: `${message.id}:thinking`, label: locale === "zh" ? "正在思考" : "Thinking" } };
+  if (activePart?.type === "text") return { activePart, activeIndex: lastVisibleIndex, groupedToolActivity, announcement: { identity: `${message.id}:writing`, label: locale === "zh" ? "正在撰写" : "Writing" } };
+  if (activePart?.type === "dynamic-tool") {
+    if (activePart.state === "approval-requested") {
+      return { activePart, activeIndex: lastVisibleIndex, groupedToolActivity, announcement: { identity: `${message.id}:approval:${activePart.toolCallId}`, label: locale === "zh" ? `等待批准 ${activePart.toolName}` : `Awaiting approval for ${activePart.toolName}` } };
+    }
+    if (summarizeToolActivity([activePart], locale).active > 0) {
+      return { activePart, activeIndex: lastVisibleIndex, groupedToolActivity, announcement: { identity: `${message.id}:tool:${activePart.toolCallId}`, label: locale === "zh" ? `正在运行 ${activePart.toolName}` : `Running ${activePart.toolName}` } };
+    }
+  }
+  if (activePart?.type === "data-task") return { activePart, activeIndex: lastVisibleIndex, groupedToolActivity, announcement: { identity: `${message.id}:task`, label: locale === "zh" ? `正在执行 ${activePart.data.title}` : `Running ${activePart.data.title}` } };
+  return { activePart, activeIndex: lastVisibleIndex, groupedToolActivity, announcement: { identity: `${message.id}:waiting`, label: locale === "zh" ? "正在等待模型响应" : "Waiting for the model response" } };
+}
+
+function MessageActivityAnnouncement({ message, locale, streaming, workflowAi }: { message: DesktopUIMessage | undefined; locale: "zh" | "en"; streaming: boolean; workflowAi: boolean }) {
+  const announcement = useMemo(() => message ? messageActivityProjection(message, locale, streaming, workflowAi).announcement : undefined, [message, locale, streaming, workflowAi]);
+  const [text, setText] = useState("");
+  useEffect(() => {
+    setText("");
+    if (!announcement) return;
+    const timer = globalThis.setTimeout(() => setText(announcement.label), 100);
+    return () => globalThis.clearTimeout(timer);
+  }, [announcement?.identity, announcement?.label]);
+  return <span className="sr-only" data-slot="phase-announcement" data-phase-announcement="true" role="status" aria-live="polite" aria-atomic="true">{text}</span>;
+}
+
+function MessageActivity({ part, locale }: { part: DesktopUIMessagePart | undefined; locale: "zh" | "en" }) {
+  const [elapsed, setElapsed] = useState(0);
+  const activityKey = part?.type === "dynamic-tool" ? `${part.toolCallId}:${part.state}` : part?.type ?? "waiting";
+  useEffect(() => {
+    setElapsed(0);
+    const timer = globalThis.setInterval(() => setElapsed((value) => value + 1), 1000);
+    return () => globalThis.clearInterval(timer);
+  }, [activityKey]);
+  let label = locale === "zh" ? "正在等待模型响应…" : "Waiting for the model response…";
+  if (part?.type === "reasoning") label = locale === "zh" ? "正在思考…" : "Thinking…";
+  else if (part?.type === "text") label = locale === "zh" ? "正在撰写…" : "Writing…";
+  else if (part?.type === "dynamic-tool") {
+    label = part.state === "approval-requested"
+      ? (locale === "zh" ? `等待批准 ${part.toolName}` : `Awaiting approval for ${part.toolName}`)
+      : summarizeToolActivity([part], locale).active > 0 ? (locale === "zh" ? `正在运行 ${part.toolName}` : `Running ${part.toolName}`) : label;
+  } else if (part?.type === "data-task") label = locale === "zh" ? `正在执行 ${part.data.title}` : `Running ${part.data.title}`;
+  return <div className="wb-ai-message-activity" data-output-kind="boundary">
+    <span className="wb-ai-process-spinner" aria-hidden="true" />
+    <span>{label}</span>
+    <span aria-hidden="true"> · {elapsed}s</span>
+  </div>;
+}
+
+export function workbenchMessageActivityRevision(message: DesktopUIMessage) {
+  const partRevision = message.parts.map((part, index) => {
+    if (part.type === "text" || part.type === "reasoning") {
+      const occurrenceId = part.providerMetadata?.coworkany?.partId ?? index;
+      return `${part.type}:${occurrenceId}:${part.state}:${part.text.length}`;
+    }
+    if (part.type === "dynamic-tool") return `tool:${part.toolCallId}:${part.state}`;
+    if (part.type === "source-url" || part.type === "source-document") return `${part.type}:${part.sourceId}`;
+    if (part.type === "file") return `file:${part.filename ?? index}:${part.url ?? ""}`;
+    if (part.type.startsWith("data-")) {
+      const id = "id" in part ? part.id ?? index : index;
+      const state = part.type === "data-task" ? `${part.data.status}:${part.data.steps?.map((step) => step.status).join(",") ?? ""}` : "";
+      return `${part.type}:${id}:${state}`;
+    }
+    return `${part.type}:${index}`;
+  }).join("|");
+  return `${message.id}:${message.metadata?.lastSequence ?? "legacy"}:${message.metadata?.runStatus ?? "unknown"}:${partRevision}`;
 }
 
 function createPendingAssistantMessage(id: string, messages: readonly DesktopUIMessage[]): DesktopUIMessage {
@@ -441,78 +506,51 @@ function workflowAiToolResult(output: unknown, locale: "zh" | "en") {
   return fallback;
 }
 
-function WorkflowAiToolDisclosure({ message, part, locale, onToolApproval }: { message: DesktopUIMessage; part: Extract<DesktopUIMessagePart, { type: "dynamic-tool" }>; locale: "zh" | "en"; onToolApproval?: WorkbenchMessageSurfaceProps["onToolApproval"] }) {
+function WorkflowAiToolSummary({ part, locale }: { part: Extract<DesktopUIMessagePart, { type: "dynamic-tool" }>; locale: "zh" | "en" }) {
   const toolLabel = workflowAiToolLabel(part.toolName, locale);
   const result = part.state === "output-available" ? workflowAiToolResult(part.output, locale) : part.state === "output-error" ? (part.errorText ?? (locale === "zh" ? "操作失败" : "Operation failed")) : undefined;
-  return <ToolContent>
-    <div className="wb-ai-workflow-tool-summary" data-workflow-ai-tool-summary="true">
+  return <div className="wb-ai-workflow-tool-summary" data-workflow-ai-tool-summary="true">
       <strong>{part.state === "approval-requested" ? (locale === "zh" ? `请求批准：${toolLabel}` : `Approval requested: ${toolLabel}`) : toolLabel}</strong>
       {result ? <span data-workflow-ai-tool-result="true">{result}</span> : null}
-    </div>
-    {part.state === "approval-requested" ? <Confirmation state="approval-requested" approval={{ id: part.approval?.id ?? part.toolCallId }}>
-      <ConfirmationTitle>{locale === "zh" ? (part.approval?.id ? `需要审批：${part.approval.id}` : "此操作需要审批") : (part.approval?.id ? `Approval required: ${part.approval.id}` : "This operation needs approval")}</ConfirmationTitle>
-      <ConfirmationRequest><ConfirmationActions><ConfirmationAction onClick={() => void (onToolApproval ? onToolApproval(message, part, "reject") : emitToolApproval(message, part, "reject"))}>{locale === "zh" ? "拒绝" : "Reject"}</ConfirmationAction><ConfirmationAction onClick={() => void (onToolApproval ? onToolApproval(message, part, "approve") : emitToolApproval(message, part, "approve"))}>{locale === "zh" ? "批准" : "Approve"}</ConfirmationAction></ConfirmationActions></ConfirmationRequest>
-    </Confirmation> : null}
-  </ToolContent>;
+    </div>;
 }
 
-function ExecutionParts({ message, locale, streaming, waiting = false, onToolApproval, workflowAi = false }: { message: DesktopUIMessage; locale: "zh" | "en"; streaming: boolean; waiting?: boolean; onToolApproval?: WorkbenchMessageSurfaceProps["onToolApproval"]; workflowAi?: boolean }) {
-    const process = processParts(message);
-    if (!process.length && !waiting) return null;
-    if (!process.length && waiting) {
-      return <section className="ai-elements-message-group wb-ai-message-execution" data-message-group="execution-process" data-slot="message-group" aria-label={locale === "zh" ? "执行过程" : "Execution process"}>
-        <Reasoning status="running" isStreaming locale={locale}>
-          <ReasoningTrigger />
-          <ReasoningContent><Shimmer>{locale === "zh" ? "正在等待模型响应…" : "Waiting for the model response…"}</Shimmer></ReasoningContent>
-        </Reasoning>
-      </section>;
-    }
-    const reasoningParts = process.filter((part): part is Extract<DesktopUIMessagePart, { type: "reasoning" }> => part.type === "reasoning");
-    const reasoningText = reasoningParts.map((part) => part.text.trim()).filter(Boolean).join("\n\n");
-    const lastPart = message.parts.at(-1);
-    const reasoningStreaming = streaming && lastPart?.type === "reasoning";
-    const reasoningStatus = reasoningStreaming ? "running" as const : "completed" as const;
-    let reasoningRendered = false;
-    return <section className="ai-elements-message-group wb-ai-message-execution" data-message-group="execution-process" data-slot="message-group" aria-label={locale === "zh" ? "执行过程" : "Execution process"}>
-      {process.map((part) => {
-        if (part.type === "reasoning") {
-          if (reasoningRendered) return null;
-          reasoningRendered = true;
-          return <Reasoning key={`reasoning:${message.id}`} status={reasoningStatus} isStreaming={reasoningStreaming} locale={locale}>
-            <ReasoningTrigger />
-            <ReasoningContent>{reasoningText}</ReasoningContent>
-          </Reasoning>;
-      }
-      if (part.type === "data-task") {
-        const taskStatus = status(part.data.status);
-        return <Task key={part.id} defaultOpen={taskStatus === "running" || taskStatus === "waiting"} status={taskStatus} data-status={taskStatus}>
-          <TaskTrigger title={part.data.title} status={taskStatus} locale={locale} />
-          <TaskContent>
-            {part.data.steps?.map((step) => <TaskItem key={step.id} data-status={step.status}>
-              <span aria-hidden="true">{step.status === "completed" ? "✓" : "·"}</span>
-              <span><strong>{step.title}</strong>{step.toolName ? <small>{step.toolName}</small> : null}</span>
-              <em>{status(step.status)}</em>
-            </TaskItem>)}
-          </TaskContent>
-        </Task>;
-      }
-      if (part.type === "dynamic-tool") {
-        const toolStatus = part.state === "approval-requested" ? "waiting" : part.state === "output-available" ? "completed" : part.state === "output-error" ? "failed" : part.state === "output-denied" ? "denied" : "running";
-        return <Tool key={`tool:${part.toolCallId}`} defaultOpen={workflowAi || part.state === "approval-requested"} status={toolStatus}>
-          <ToolHeader type="dynamic-tool" toolName={workflowAi && (part.toolName === "undo" || part.toolName === "redo") ? "workflow-change" : part.toolName} toolCallId={part.toolCallId} state={part.state} locale={locale} />
-          {workflowAi ? <WorkflowAiToolDisclosure message={message} part={part} locale={locale} onToolApproval={onToolApproval} /> : <ToolContent>
-            <ToolInput input={part.input} locale={locale} />
-            <ToolOutput output={part.state === "output-available" ? part.output : undefined} errorText={part.state === "output-error" ? part.errorText : undefined} locale={locale} />
-            {part.state === "approval-requested" ? <Confirmation state="approval-requested" approval={{ id: part.approval?.id ?? part.toolCallId }}>
-              <ConfirmationTitle>{locale === "zh" ? (part.approval?.id ? `需要审批：${part.approval.id}` : "此工具调用需要审批") : (part.approval?.id ? `Approval required: ${part.approval.id}` : "This tool call requires approval")}</ConfirmationTitle>
-              <ConfirmationRequest><ConfirmationActions><ConfirmationAction onClick={() => void (onToolApproval ? onToolApproval(message, part, "reject") : emitToolApproval(message, part, "reject"))}>{locale === "zh" ? "拒绝" : "Reject"}</ConfirmationAction><ConfirmationAction onClick={() => void (onToolApproval ? onToolApproval(message, part, "approve") : emitToolApproval(message, part, "approve"))}>{locale === "zh" ? "批准" : "Approve"}</ConfirmationAction></ConfirmationActions></ConfirmationRequest>
-            </Confirmation> : null}
-          </ToolContent>}
-        </Tool>;
-      }
-      return null;
-    })}
-  </section>;
+function ToolApproval({ message, part, locale, onToolApproval }: { message: DesktopUIMessage; part: Extract<DesktopUIMessagePart, { type: "dynamic-tool" }>; locale: "zh" | "en"; onToolApproval?: WorkbenchMessageSurfaceProps["onToolApproval"] }) {
+  return <Confirmation state="approval-requested" approval={{ id: part.approval?.id ?? part.toolCallId }}>
+    <ConfirmationTitle>{locale === "zh" ? (part.approval?.id ? `需要审批：${part.approval.id}` : "此工具调用需要审批") : (part.approval?.id ? `Approval required: ${part.approval.id}` : "This tool call requires approval")}</ConfirmationTitle>
+    <ConfirmationRequest><ConfirmationActions><ConfirmationAction onClick={() => void (onToolApproval ? onToolApproval(message, part, "reject") : emitToolApproval(message, part, "reject"))}>{locale === "zh" ? "拒绝" : "Reject"}</ConfirmationAction><ConfirmationAction onClick={() => void (onToolApproval ? onToolApproval(message, part, "approve") : emitToolApproval(message, part, "approve"))}>{locale === "zh" ? "批准" : "Approve"}</ConfirmationAction></ConfirmationActions></ConfirmationRequest>
+  </Confirmation>;
+}
+
+function OrderedTask({ part, locale }: { part: Extract<DesktopUIMessagePart, { type: "data-task" }>; locale: "zh" | "en" }) {
+  const taskStatus = status(part.data.status);
+  return <Task defaultOpen={taskStatus === "running" || taskStatus === "waiting"} status={taskStatus} data-status={taskStatus}>
+    <TaskTrigger title={part.data.title} status={taskStatus} locale={locale} />
+    <TaskContent>
+      {part.data.steps?.map((step) => <TaskItem key={step.id} data-status={step.status}>
+        <span aria-hidden="true">{step.status === "completed" ? "✓" : "·"}</span>
+        <span><strong>{step.title}</strong>{step.toolName ? <small>{step.toolName}</small> : null}</span>
+        <em>{status(step.status)}</em>
+      </TaskItem>)}
+    </TaskContent>
+  </Task>;
+}
+
+function OrderedTool({ message, part, locale, onToolApproval, workflowAi }: { message: DesktopUIMessage; part: Extract<DesktopUIMessagePart, { type: "dynamic-tool" }>; locale: "zh" | "en"; onToolApproval?: WorkbenchMessageSurfaceProps["onToolApproval"]; workflowAi: boolean }) {
+  const toolStatus = part.state === "approval-requested" ? "waiting" : part.state === "output-available" ? "completed" : part.state === "output-error" ? "failed" : part.state === "output-denied" ? "denied" : "running";
+  // Automatic expansion follows the part lifecycle. A user's explicit choice
+  // survives streaming updates; approval/error phases remain easy to inspect.
+  const [manualChoice, setManualChoice] = useState<{ open: boolean; state: typeof part.state }>();
+  const needsAttention = part.state === "approval-requested" || toolStatus === "failed";
+  const open = (needsAttention && manualChoice?.state !== part.state) || (manualChoice?.open ?? (workflowAi || toolStatus === "running"));
+  return <Tool open={open} onOpenChange={(next) => setManualChoice({ open: next, state: part.state })} status={toolStatus}>
+    <ToolHeader type="dynamic-tool" toolName={workflowAi && (part.toolName === "undo" || part.toolName === "redo") ? "workflow-change" : part.toolName} toolCallId={part.toolCallId} state={part.state} locale={locale} />
+    {workflowAi ? <ToolContent><WorkflowAiToolSummary part={part} locale={locale} /></ToolContent> : <ToolContent>
+      <ToolInput input={part.input} locale={locale} />
+      <ToolOutput output={part.state === "output-available" ? part.output : undefined} errorText={part.state === "output-error" ? part.errorText : undefined} locale={locale} />
+    </ToolContent>}
+    {part.state === "approval-requested" ? <ToolApproval message={message} part={part} locale={locale} onToolApproval={onToolApproval} /> : null}
+  </Tool>;
 }
 
 function WorkflowOutput({ part, locale, onArtifactDownload, onMediaOpen, resolveMediaSource }: {
@@ -534,52 +572,120 @@ function WorkflowOutput({ part, locale, onArtifactDownload, onMediaOpen, resolve
   </section>;
 }
 
-function MessageParts({ message, locale, streaming, workflowAi = false, onArtifactOpen, onArtifactDownload, onMediaOpen, resolveMediaSource, resolveArtifactSource, resolvePreviewSource, onPreviewRefresh, onPreviewDownload, onPreviewExport, onPreviewOpenExternal, onToolApproval }: Pick<WorkbenchMessageSurfaceProps, "onArtifactOpen" | "onArtifactDownload" | "onMediaOpen" | "resolveMediaSource" | "resolveArtifactSource" | "resolvePreviewSource" | "onPreviewRefresh" | "onPreviewDownload" | "onPreviewExport" | "onPreviewOpenExternal" | "onToolApproval" | "workflowAi"> & { message: DesktopUIMessage; locale: "zh" | "en"; streaming: boolean }) {
-  const sources = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "source-url" | "source-document" }> => part.type === "source-url" || part.type === "source-document");
-  const artifacts = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-artifact" }> => part.type === "data-artifact");
-  const media = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-media" }> => part.type === "data-media");
-  const previews = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-preview" }> => part.type === "data-preview");
-  const files = message.parts.flatMap((part, index) => {
-    if (part.type === "file") return [{ id: `file:${index}`, name: part.filename ?? "Attachment", mediaType: part.mediaType, uri: part.url, status: "ready" as const }];
-    if (part.type === "data-attachment") return [{ id: part.id ?? `attachment:${index}`, name: part.data.name, mediaType: part.data.mediaType, uri: part.data.uri, status: part.data.status }];
-    return [];
-  });
-  const reports = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-report" }> => part.type === "data-report");
-  const workflows = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-workflow" }> => part.type === "data-workflow");
-  const warnings = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-warning" }> => part.type === "data-warning");
-  const usages = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-usage" }> => part.type === "data-usage");
-  const text = textParts(message);
-  const waitingForAssistant = message.role === "assistant" && streaming && !text.length && !processParts(message).length;
-
-  return <>
-    {sources.length ? <Sources>
-      <SourcesTrigger count={sources.length}>{locale === "zh" ? `已使用 ${sources.length} 个来源` : `Used ${sources.length} sources`}</SourcesTrigger>
-      <SourcesContent>{sources.map((part) => { const title = part.type === "source-url" ? part.title ?? part.url : part.title; const href = part.type === "source-url" ? part.url : undefined; return <Source key={part.sourceId} title={title} href={href}><InlineCitation title={title} href={href}>{title}</InlineCitation></Source>; })}</SourcesContent>
-    </Sources> : null}
-    {message.role === "assistant" ? <ExecutionParts message={message} locale={locale} streaming={streaming} waiting={waitingForAssistant} onToolApproval={onToolApproval} workflowAi={workflowAi} /> : null}
-    {files.length ? <WorkbenchAttachments attachments={files} variant="grid" locale={locale} /> : null}
-    {media.length ? <div className="wb-ai-media-results" data-slot="media-results">{media.map((part) => <div key={part.id}>{renderMedia(part.data, locale, onMediaOpen, onArtifactDownload, resolveMediaSource)}</div>)}</div> : null}
-    <div className="wb-ai-message-output" data-slot="message-output">
-      {text.map((part, index) => message.role === "user"
-        ? <MessagePlainText key={`text:${index}`} content={part.text} />
-        : <MessageResponse key={`text:${index}`} content={part.text} streaming={streaming} data-streaming={streaming ? "true" : undefined} />)}
-      {!text.length && message.role === "assistant" && streaming && !waitingForAssistant ? <MessageResponse><Shimmer>{locale === "zh" ? "正在生成…" : "Generating…"}</Shimmer></MessageResponse> : null}
-      {reports.length ? <div className="wb-ai-report-results" data-slot="report-results">{reports.map((part) => <section key={part.id} className="wb-ai-report"><strong>{part.data.title}</strong>{part.data.body ? <><MessageResponse content={part.data.body} /><CodeBlock code={part.data.body} language="markdown" /></> : null}</section>)}</div> : null}
-      {workflows.map((part) => <WorkflowOutput key={part.id} part={part} locale={locale} onArtifactDownload={onArtifactDownload} onMediaOpen={onMediaOpen} resolveMediaSource={resolveMediaSource} />)}
-      {previews.length ? <div className="wb-ai-preview-results" data-slot="preview-results">{previews.map((part) => {
-        const previewArtifactCandidates = part.data.engine === "ppt-master" && !part.data.artifactId
-          ? artifacts.filter((artifact) => artifact.data.mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation" || artifact.data.relativePath.toLowerCase().endsWith(".pptx"))
-          : [];
-        const preview = previewArtifactCandidates.length === 1
-          ? { ...part.data, artifactId: previewArtifactCandidates[0]?.data.id, relativePath: previewArtifactCandidates[0]?.data.relativePath, mimeType: previewArtifactCandidates[0]?.data.mimeType }
-          : part.data;
-        return <WorkbenchPreview key={part.id} preview={preview} locale={locale} context={{ messageId: message.id, conversationId: message.metadata?.conversationId, runId: message.metadata?.runId }} resolveSource={resolvePreviewSource} onRefresh={onPreviewRefresh} onDownload={onPreviewDownload} onExport={onPreviewExport} onOpenExternal={onPreviewOpenExternal} />;
-      })}</div> : null}
-      {artifacts.length ? <div className="wb-ai-artifact-results" data-slot="artifact-results">{artifacts.map((part) => { const displayName = artifactDisplayName(part.data.title, part.data.relativePath); return <div key={part.id} className="wb-ai-artifact-item"><Artifact className="wb-ai-artifact-card"><ArtifactHeader><div className="ai-elements-artifact-heading"><ArtifactTitle>{displayName}</ArtifactTitle><ArtifactDescription>{part.data.mimeType}</ArtifactDescription></div><ArtifactActions><ArtifactAction label={locale === "zh" ? "下载产物" : "Download artifact"} tooltip={locale === "zh" ? "下载" : "Download"} icon={Download} onClick={() => onArtifactDownload?.(part.data.id)} /></ArtifactActions></ArtifactHeader><ArtifactContent onClick={() => onArtifactOpen?.(part.data)}>{renderArtifactMedia(part.data, locale, onArtifactOpen, onArtifactDownload, resolveMediaSource, resolveArtifactSource)}</ArtifactContent></Artifact></div>; })}</div> : null}
-      {usages.length ? <div className="wb-ai-usage-results" data-slot="usage-results">{usages.map((part) => { const usedTokens = (part.data.inputTokens ?? 0) + (part.data.outputTokens ?? 0); return <Context key={part.id} usedTokens={usedTokens} maxTokens={Math.max(usedTokens, 1)} usage={part.data} modelId={message.metadata?.modelId}><ContextTrigger aria-label="Model context usage" /><ContextContent><ContextContentHeader /><ContextContentBody><ContextInputUsage /><ContextOutputUsage /><ContextReasoningUsage /><ContextCacheUsage /></ContextContentBody></ContextContent></Context>; })}</div> : null}
-      {warnings.length ? <div className="wb-ai-warning-results" data-slot="warning-results" role="status">{warnings.map((part) => <div key={part.id}><strong>{part.data.code}</strong><span>{part.data.message}</span></div>)}</div> : null}
-      {message.parts.some((part) => part.type.startsWith("data-") && !HANDLED_DATA_PARTS.has(part.type)) ? <div className="wb-ai-unavailable-part" role="status">{locale === "zh" ? "部分内容暂不可用" : "Some content is unavailable"}</div> : null}
+function MessageUsage({ message, usages, locale }: { message: DesktopUIMessage; usages: readonly Extract<DesktopUIMessagePart, { type: "data-usage" }>[]; locale: "zh" | "en" }) {
+  const runId = usages[0]?.data.runId ?? message.metadata?.runId ?? message.id;
+  const metrics = toRunMetrics(usages.reduce((state, part, index) => applyRunMetricsEvent(state, {
+    ...part.data,
+    kind: "usage",
+    usageId: part.data.usageId ?? part.id ?? `${message.id}:usage:${index}`,
+    aggregation: part.data.aggregation ?? "delta",
+    scope: part.data.scope ?? "step",
+    // Parts are chronological; retain their order when selecting the latest snapshot.
+    createdAt: String(index).padStart(16, "0"),
+  }), createRunMetricsAccumulator(runId)));
+  const total = metrics.tokens.input === undefined && metrics.tokens.output === undefined
+    ? undefined
+    : (metrics.tokens.input ?? 0) + (metrics.tokens.output ?? 0);
+  const unavailable = locale === "zh" ? "未提供" : "Not provided";
+  const format = (value: number | undefined) => value === undefined ? unavailable : value.toLocaleString(locale === "zh" ? "zh-CN" : "en-US");
+  const rows = [
+    [locale === "zh" ? "输入" : "Input", metrics.tokens.input],
+    [locale === "zh" ? "输出" : "Output", metrics.tokens.output],
+    [locale === "zh" ? "推理" : "Reasoning", metrics.tokens.reasoning],
+    [locale === "zh" ? "缓存输入" : "Cached input", metrics.tokens.cachedInput],
+  ] as const;
+  return <details className="wb-run-metrics" data-slot="usage-summary" data-completeness={metrics.completeness}>
+    <summary aria-label={locale === "zh" ? "本轮 Token 用量" : "Turn token usage"}>
+      <span>{total === undefined ? (locale === "zh" ? "Token 未提供" : "Token unavailable") : `${format(total)} Token`}</span>
+      <span className="wb-run-metrics-chevron" aria-hidden="true">⌄</span>
+    </summary>
+    <div className="wb-run-metrics-detail">
+      {metrics.model ? <span className="wb-run-metrics-model">{metrics.model}</span> : null}
+      <div className="wb-run-metrics-grid">{rows.map(([label, value]) => <div key={label} className="wb-run-metrics-row"><span>{label}</span><strong>{format(value)}</strong></div>)}</div>
     </div>
+  </details>;
+}
+
+function MessageParts({ message, locale, streaming, completed, workflowAi = false, onArtifactOpen, onArtifactDownload, onMediaOpen, resolveMediaSource, resolveArtifactSource, resolvePreviewSource, onPreviewRefresh, onPreviewDownload, onPreviewExport, onPreviewOpenExternal, onToolApproval }: Pick<WorkbenchMessageSurfaceProps, "onArtifactOpen" | "onArtifactDownload" | "onMediaOpen" | "resolveMediaSource" | "resolveArtifactSource" | "resolvePreviewSource" | "onPreviewRefresh" | "onPreviewDownload" | "onPreviewExport" | "onPreviewOpenExternal" | "onToolApproval" | "workflowAi"> & { message: DesktopUIMessage; locale: "zh" | "en"; streaming: boolean; completed: boolean }) {
+  const entries = useMemo(() => groupProcessActivityParts(message.parts, { active: streaming, workflowAi }), [message.parts, streaming, workflowAi]);
+  const activity = useMemo(() => messageActivityProjection(message, locale, streaming, workflowAi, entries), [message, locale, streaming, workflowAi, entries]);
+  const disclosures = useToolActivityDisclosures(entries);
+  const artifacts = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-artifact" }> => part.type === "data-artifact");
+  const usages = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-usage" }> => part.type === "data-usage");
+  const runMetrics = message.parts.filter((part): part is Extract<DesktopUIMessagePart, { type: "data-runMetrics" }> => part.type === "data-runMetrics").at(-1);
+  const activePart = activity.activePart;
+  const renderToolDetails = (part: Extract<DesktopUIMessagePart, { type: "dynamic-tool" }>) => <Tool open status={part.state === "output-error" ? "failed" : part.state === "output-available" ? "completed" : part.state === "output-denied" ? "denied" : "running"}>
+    {workflowAi ? <ToolContent><WorkflowAiToolSummary part={part} locale={locale} /></ToolContent> : <ToolContent><ToolInput input={part.input} locale={locale} /><ToolOutput output={part.state === "output-available" ? part.output : undefined} errorText={part.state === "output-error" ? part.errorText : undefined} locale={locale} /></ToolContent>}
+  </Tool>;
+  const partKey = (part: DesktopUIMessagePart, index: number) => {
+    if (part.type === "text" || part.type === "reasoning") return String(part.providerMetadata?.coworkany?.partId ?? `${part.type}:${index}`);
+    if (part.type === "dynamic-tool") return `tool:${part.toolCallId}`;
+    if (part.type === "source-url" || part.type === "source-document") return `source:${part.sourceId}`;
+    if (part.type === "file") return `file:${part.filename ?? index}`;
+    if (part.type.startsWith("data-") && "id" in part) return String(part.id ?? `${part.type}:${index}`);
+    return `${part.type}:${index}`;
+  };
+
+  const workflowSummaries = (entry: Extract<ProcessActivityEntry, { type: "tool-group" }>) => workflowAi
+    ? entry.parts.filter((part, index) => (part.state === "output-available" || part.state === "output-error") && !(disclosures.groupOpen(entry.parts, entry.memberIds) && disclosures.callOpen(entry.memberIds?.[index] ?? `tool:${part.toolCallId}`)))
+    : [];
+  const renderEntry = (entry: ProcessActivityEntry) => {
+        if (entry.type === "process-group") return <ToolActivityGroup key={`process-group:${entry.id}:${entry.members[0]?.index}`} members={entry.members} parts={entry.members.flatMap((member) => member.part.type === "dynamic-tool" ? [member.part] : [])} active={streaming} locale={locale} disclosures={disclosures} />;
+        if (entry.type === "tool-group") return <ToolActivityGroup key={`tool-group:${entry.id}`} parts={entry.parts} memberIds={entry.memberIds} locale={locale} disclosures={disclosures}>
+          {workflowSummaries(entry).map((part) => <WorkflowAiToolSummary key={part.toolCallId} part={part} locale={locale} />)}
+        </ToolActivityGroup>;
+        const { part, index } = entry;
+        const key = partKey(part, index);
+        const active = streaming && index === activity.activeIndex;
+        if (part.type === "text" && message.role === "assistant" && !part.text.trim()) return null;
+        if (part.type === "text") return message.role === "user"
+          ? <MessagePlainText key={key} content={part.text} />
+          : <MessageResponse key={key} content={part.text} streaming={active} data-streaming={active ? "true" : undefined} />;
+        if (part.type === "reasoning") return null;
+        if (part.type === "dynamic-tool") return <OrderedTool key={key} message={message} part={part} locale={locale} onToolApproval={onToolApproval} workflowAi={workflowAi} />;
+        if (part.type === "data-task") return <OrderedTask key={key} part={part} locale={locale} />;
+        if (part.type === "source-url" || part.type === "source-document") {
+          const title = part.type === "source-url" ? part.title ?? part.url : part.title;
+          const href = part.type === "source-url" ? part.url : undefined;
+          return <Sources key={key}><SourcesTrigger count={1}>{locale === "zh" ? "已使用 1 个来源" : "Used 1 sources"}</SourcesTrigger><SourcesContent><Source title={title} href={href}><InlineCitation title={title} href={href}>{title}</InlineCitation></Source></SourcesContent></Sources>;
+        }
+        if (part.type === "file") return <WorkbenchAttachments key={key} attachments={[{ id: key, name: part.filename ?? "Attachment", mediaType: part.mediaType, uri: part.url, status: "ready" }]} variant="grid" locale={locale} />;
+        if (part.type === "data-attachment") return <WorkbenchAttachments key={key} attachments={[{ id: part.id ?? key, name: part.data.name, mediaType: part.data.mediaType, uri: part.data.uri, status: part.data.status }]} variant="grid" locale={locale} />;
+        if (part.type === "data-media") return <div key={key} className="wb-ai-media-results" data-slot="media-results">{renderMedia(part.data, locale, onMediaOpen, onArtifactDownload, resolveMediaSource)}</div>;
+        if (part.type === "data-report") return <section key={key} className="wb-ai-report" data-slot="report-results"><strong>{part.data.title}</strong>{part.data.body ? <><MessageResponse content={part.data.body} /><CodeBlock code={part.data.body} language="markdown" /></> : null}</section>;
+        if (part.type === "data-workflow") return <WorkflowOutput key={key} part={part} locale={locale} onArtifactDownload={onArtifactDownload} onMediaOpen={onMediaOpen} resolveMediaSource={resolveMediaSource} />;
+        if (part.type === "data-preview") {
+          const previewArtifactCandidates = part.data.engine === "ppt-master" && !part.data.artifactId
+            ? artifacts.filter((artifact) => artifact.data.mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation" || artifact.data.relativePath.toLowerCase().endsWith(".pptx"))
+            : [];
+          const preview = previewArtifactCandidates.length === 1
+            ? { ...part.data, artifactId: previewArtifactCandidates[0]?.data.id, relativePath: previewArtifactCandidates[0]?.data.relativePath, mimeType: previewArtifactCandidates[0]?.data.mimeType }
+            : part.data;
+          return <div key={key} className="wb-ai-preview-results" data-slot="preview-results"><WorkbenchPreview preview={preview} locale={locale} context={{ messageId: message.id, conversationId: message.metadata?.conversationId, runId: message.metadata?.runId }} resolveSource={resolvePreviewSource} onRefresh={onPreviewRefresh} onDownload={onPreviewDownload} onExport={onPreviewExport} onOpenExternal={onPreviewOpenExternal} /></div>;
+        }
+        if (part.type === "data-artifact") {
+          const displayName = artifactDisplayName(part.data.title, part.data.relativePath);
+          return <div key={key} className="wb-ai-artifact-results" data-slot="artifact-results"><div className="wb-ai-artifact-item"><Artifact className="wb-ai-artifact-card"><ArtifactHeader><div className="ai-elements-artifact-heading"><ArtifactTitle>{displayName}</ArtifactTitle><ArtifactDescription>{part.data.mimeType}</ArtifactDescription></div><ArtifactActions><ArtifactAction label={locale === "zh" ? "下载产物" : "Download artifact"} tooltip={locale === "zh" ? "下载" : "Download"} icon={Download} onClick={() => onArtifactDownload?.(part.data.id)} /></ArtifactActions></ArtifactHeader><ArtifactContent onClick={() => onArtifactOpen?.(part.data)}>{renderArtifactMedia(part.data, locale, onArtifactOpen, onArtifactDownload, resolveMediaSource, resolveArtifactSource)}</ArtifactContent></Artifact></div></div>;
+        }
+        if (part.type === "data-warning") return <div key={key} className="wb-ai-warning-results" data-slot="warning-results"><strong>{part.data.code}</strong><span>{part.data.message}</span></div>;
+        if (part.type === "data-status" || part.type === "data-writerAsset" || part.type === "data-usage" || part.type === "data-runMetrics") return null;
+        if (part.type.startsWith("data-") && !HANDLED_DATA_PARTS.has(part.type)) return <div key={key} className="wb-ai-unavailable-part">{locale === "zh" ? "部分内容暂不可用" : "Some content is unavailable"}</div>;
+        return null;
+  };
+  return <>
+    <div className="wb-ai-message-output" data-slot="message-output" data-message-order="chronological">
+      {entries.map((entry) => {
+        const content = renderEntry(entry);
+        if (!content || message.role === "user") return content;
+        const kind = entry.type === "process-group" ? "process"
+          : entry.type === "tool-group" ? (workflowAi && entry.parts.some((part) => part.state === "output-available" || part.state === "output-error") ? "primary" : "process")
+          : ["text", "file", "data-attachment", "data-media", "data-report", "data-workflow", "data-preview", "data-artifact"].includes(entry.part.type) ? "primary" : "boundary";
+        return <div className="wb-ai-output-block" data-output-kind={kind} key={content.key}>{content}</div>;
+      })}
+      {message.role === "assistant" && streaming && !activity.groupedToolActivity ? <MessageActivity part={activePart} locale={locale} /> : null}
+    </div>
+    <ToolActivityPortals entries={entries} locale={locale} disclosures={disclosures} renderDetails={renderToolDetails} copyDetails={!workflowAi} callLabel={workflowAi ? (part) => workflowAiToolLabel(part.toolName, locale) : undefined} />
+    {completed && runMetrics ? <div className="wb-ai-usage-results" data-slot="run-metrics-results"><WorkbenchRunMetrics metrics={runMetrics.data} locale={locale} /></div> : completed && usages.length ? <div className="wb-ai-usage-results" data-slot="usage-results"><MessageUsage message={message} usages={usages} locale={locale} /></div> : null}
   </>;
 }
 
@@ -600,6 +706,8 @@ export function WorkbenchMessageSurface({ messages, locale = "zh", pendingMessag
     : messages;
   const orderedMessages = shouldCreatePendingAssistant ? orderMessagesForTimeline(timelineMessages) : orderedBaseMessages;
   const turns = groupMessagesIntoTurns(orderedMessages);
+  const activeAssistant = [...orderedMessages].reverse().find((message) => message.role === "assistant" && (effectivePendingMessageId === message.id || message.metadata?.runStatus === "running"));
+  const activeAssistantStreaming = Boolean(activeAssistant && (effectivePendingMessageId === activeAssistant.id || activeAssistant.metadata?.runStatus === "running"));
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const copyMessage = async (message: DesktopUIMessage) => {
     if (!onCopy) return;
@@ -618,32 +726,34 @@ export function WorkbenchMessageSurface({ messages, locale = "zh", pendingMessag
     const copyLabel = copiedMessageId === message.id
       ? (locale === "zh" ? "已复制" : "Copied")
       : (locale === "zh" ? "复制消息" : "Copy message");
-    const hasActions = Boolean(onCopy || (onRetry && message.role === "assistant") || featureActions || streaming);
+    const hasActions = Boolean(onCopy || (onRetry && message.role === "assistant") || featureActions);
     return <div className={`wb-ai-message-row wb-ai-message-row-${message.role}`} data-message-id={message.id} key={message.id}>
       {message.role === "assistant" ? <RoleAvatar role="assistant" locale={locale} /> : null}
-      <Message from={message.role === "user" ? "user" : "assistant"} data-model-id={message.metadata?.modelId} data-message-status={currentStatus} data-streaming={streaming ? "true" : "false"}>
+      <Message from={message.role === "user" ? "user" : "assistant"} data-model-id={message.metadata?.modelId} data-message-status={currentStatus} data-streaming={streaming ? "true" : "false"} aria-busy={streaming || undefined}>
         <MessageContent className={streaming ? "wb-ai-message-content-streaming" : undefined}>
           <MessageTimestamp message={message} locale={locale} />
-          <MessageParts message={message} locale={locale} streaming={streaming} workflowAi={workflowAi} onArtifactOpen={onArtifactOpen} onArtifactDownload={onArtifactDownload} onMediaOpen={onMediaOpen} resolveMediaSource={resolveMediaSource} resolveArtifactSource={resolveArtifactSource} resolvePreviewSource={resolvePreviewSource} onPreviewRefresh={onPreviewRefresh} onPreviewDownload={onPreviewDownload} onPreviewExport={onPreviewExport} onPreviewOpenExternal={onPreviewOpenExternal} onToolApproval={onToolApproval} />
+          <MessageParts message={message} locale={locale} streaming={streaming} completed={currentStatus === "completed"} workflowAi={workflowAi} onArtifactOpen={onArtifactOpen} onArtifactDownload={onArtifactDownload} onMediaOpen={onMediaOpen} resolveMediaSource={resolveMediaSource} resolveArtifactSource={resolveArtifactSource} resolvePreviewSource={resolvePreviewSource} onPreviewRefresh={onPreviewRefresh} onPreviewDownload={onPreviewDownload} onPreviewExport={onPreviewExport} onPreviewOpenExternal={onPreviewOpenExternal} onToolApproval={onToolApproval} />
         </MessageContent>
         {hasActions ? <MessageToolbar>
           <MessageActions>
             {onCopy ? <MessageAction label={copyLabel} title={copyLabel} onClick={() => void copyMessage(message)}>{copiedMessageId === message.id ? "✓" : undefined}</MessageAction> : null}
             {onRetry && message.role === "assistant" ? <MessageAction label={locale === "zh" ? "重试" : "Retry"} onClick={() => void onRetry(message)} disabled={streaming}>↻</MessageAction> : null}
             {featureActions}
-            {streaming ? <span className="wb-ai-streaming-indicator" aria-live="polite"><Shimmer>{locale === "zh" ? "生成中…" : "Streaming…"}</Shimmer></span> : null}
           </MessageActions>
         </MessageToolbar> : null}
       </Message>
       {message.role === "user" ? <RoleAvatar role="user" locale={locale} /> : null}
     </div>;
   };
-  return <Conversation className={`wb-ai-message-surface ${className}`.trim()} data-uimessage-surface="true" autoScroll={restoreScrollTop === undefined} scrollButtonLabel={locale === "zh" ? "滚动到最新消息" : "Scroll to latest"} scrollToBottomKey={orderedMessages.at(-1)?.id ?? null} onReachTop={onReachTop} onViewportScroll={onViewportScroll} restoreScrollTop={restoreScrollTop} scrollStateKey={scrollStateKey}>
-    <ConversationContent>
-      {!turns.length ? <ConversationEmptyState>{emptyState ?? (locale === "zh" ? "开始一段新的对话" : "Start a new conversation")}</ConversationEmptyState> : turns.map((turn, index) => <section className="ai-elements-message-turn wb-ai-message-turn" data-message-turn-id={turn.id} data-turn-index={index} key={turn.id}>
-        {turn.user ? renderMessage(turn.user) : null}
-        {turn.assistants.map(renderMessage)}
-      </section>)}
-    </ConversationContent>
-  </Conversation>;
+  return <>
+    <MessageActivityAnnouncement message={activeAssistant} locale={locale} streaming={activeAssistantStreaming} workflowAi={workflowAi} />
+    <Conversation className={`wb-ai-message-surface ${className}`.trim()} data-uimessage-surface="true" autoScroll={restoreScrollTop === undefined} scrollButtonLabel={locale === "zh" ? "滚动到最新消息" : "Scroll to latest"} scrollToBottomKey={orderedMessages.at(-1) ? workbenchMessageActivityRevision(orderedMessages.at(-1)!) : null} onReachTop={onReachTop} onViewportScroll={onViewportScroll} restoreScrollTop={restoreScrollTop} scrollStateKey={scrollStateKey}>
+      <ConversationContent>
+        {!turns.length ? <ConversationEmptyState>{emptyState ?? (locale === "zh" ? "开始一段新的对话" : "Start a new conversation")}</ConversationEmptyState> : turns.map((turn, index) => <section className="ai-elements-message-turn wb-ai-message-turn" data-message-turn-id={turn.id} data-turn-index={index} key={turn.id}>
+          {turn.user ? renderMessage(turn.user) : null}
+          {turn.assistants.map(renderMessage)}
+        </section>)}
+      </ConversationContent>
+    </Conversation>
+  </>;
 }

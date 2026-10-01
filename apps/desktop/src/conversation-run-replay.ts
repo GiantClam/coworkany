@@ -1,4 +1,4 @@
-import { applyDesktopUIMessageRunEventToParts, createDesktopUIMessage, desktopUIMessageText, type DesktopUIMessagePart, type WorkbenchRunEvent } from "@coworkany/workbench-client";
+import { advanceAssistantTurn, beginAssistantTurn, desktopUIMessageText, type DesktopUIMessagePart, type WorkbenchRunEvent } from "@coworkany/workbench-client";
 import { isWorkbenchQuestionToolEvent } from "@coworkany/workbench-client";
 
 type PersistedRun = {
@@ -120,25 +120,29 @@ export function replayPersistedRunToConversationMessage(
   // it after the persisted user message instead of being parsed as local time
   // and appearing before the user turn in the browser.
   const createdAt = normalizePersistedTimestamp(run.finished_at || run.started_at || new Date(0).toISOString());
-  const seed = createDesktopUIMessage({ id: `assistant-${run.id}`, role: "assistant", conversationId, createdAt });
-  let parts = [...seed.parts];
-  for (const event of [...events].sort((left, right) => left.sequence - right.sequence)) {
+  let message = beginAssistantTurn({ kind: "new", id: `assistant-${run.id}`, conversationId, runId: run.id, createdAt });
+  const orderedEvents = [...events].sort((left, right) => left.sequence - right.sequence);
+  for (const event of orderedEvents) {
     const workbenchEvent = persistedEventToWorkbenchEvent(event);
-    if (workbenchEvent) parts = applyDesktopUIMessageRunEventToParts(parts, workbenchEvent);
+    if (workbenchEvent) message = advanceAssistantTurn(message, workbenchEvent);
   }
-  const hasText = desktopUIMessageText({ ...seed, parts }).trim().length > 0;
-  const hasArtifact = parts.some((part) => part.type === "data-artifact");
-  const hasPreview = parts.some((part) => part.type === "data-preview");
+  const terminalStatus = run.status === "succeeded" ? "succeeded" as const : run.status === "cancelled" ? "cancelled" as const : run.status === "interrupted" ? "interrupted" as const : "failed" as const;
+  message = advanceAssistantTurn(message, {
+    type: "status",
+    status: terminalStatus,
+    sequence: (orderedEvents.at(-1)?.sequence ?? 0) + 1,
+    createdAt,
+  });
+  const hasText = desktopUIMessageText(message).trim().length > 0;
+  const hasArtifact = message.parts.some((part) => part.type === "data-artifact");
+  const hasPreview = message.parts.some((part) => part.type === "data-preview");
   if (!hasText && !hasArtifact && !hasPreview) return null;
-  const finalParts: DesktopUIMessagePart[] = [
-    ...parts.map((part) => part.type === "reasoning" ? { ...part, state: "done" as const } : part),
-    { type: "data-status", id: `${run.id}:status:replayed`, data: { status: run.status === "succeeded" ? "completed" as const : run.status === "cancelled" ? "cancelled" as const : "failed" as const } },
-  ];
+  const finalParts = message.parts as readonly DesktopUIMessagePart[];
   return {
     id: `assistant-${run.id}`,
     conversationId,
     role: "assistant",
-    content: desktopUIMessageText({ ...seed, parts: finalParts }),
+    content: desktopUIMessageText(message),
     createdAt,
     status: run.status as ReplayConversationMessage["status"],
     parts: finalParts,

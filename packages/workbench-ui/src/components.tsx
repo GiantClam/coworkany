@@ -285,6 +285,7 @@ export function WorkbenchShell({
   onLocaleToggle,
   children,
   title = "MARKETING",
+  brandMark,
   localLabel = "本地工作区 · Full Access",
   status = "",
   sessions = [],
@@ -306,6 +307,7 @@ export function WorkbenchShell({
   onLocaleToggle?: () => void;
   children: ReactNode;
   title?: string;
+  brandMark?: ReactNode;
   localLabel?: string;
   status?: ReactNode;
   sessions?: WorkbenchShellSessionItem[];
@@ -357,7 +359,7 @@ export function WorkbenchShell({
     <WorkbenchShellFrame className={`wb-shell ${collapsed ? "wb-shell-collapsed" : ""}`.trim()}>
       <aside className="wb-sidebar">
         <div className="wb-sidebar-head">
-          <div className="wb-sidebar-brand"><span className="wb-brand-mark">AI</span>{!collapsed ? <span className="wb-brand-title">{title}</span> : null}</div>
+          <div className="wb-sidebar-brand"><span className="wb-brand-mark">{brandMark ?? "AI"}</span>{!collapsed ? <span className="wb-brand-title">{title}</span> : null}</div>
           <div className={`wb-sidebar-toolbar ${collapsed ? "wb-sidebar-toolbar-collapsed" : ""}`.trim()}>
             {(onLocaleChange || onLocaleToggle) ? <div className="wb-locale-switcher" role="group" aria-label={locale === "zh" ? "界面语言" : "Interface language"}>{!collapsed ? <span className="wb-locale-globe" aria-hidden="true">◉</span> : null}<button type="button" className={`wb-locale-option ${locale === "zh" ? "is-active" : ""}`.trim()} onClick={() => onLocaleChange ? onLocaleChange("zh") : (locale === "zh" ? undefined : onLocaleToggle?.())} aria-pressed={locale === "zh"} aria-label={locale === "zh" ? "切换到中文" : "Switch to Chinese"} title={locale === "zh" ? "切换到中文" : "Switch to Chinese"}>{collapsed ? "中" : "中文"}</button><button type="button" className={`wb-locale-option ${locale === "en" ? "is-active" : ""}`.trim()} onClick={() => onLocaleChange ? onLocaleChange("en") : (locale === "en" ? undefined : onLocaleToggle?.())} aria-pressed={locale === "en"} aria-label={locale === "en" ? "Switch to English" : "切换到英文"} title={locale === "en" ? "Switch to English" : "切换到英文"}>EN</button></div> : null}
             <button type="button" className="wb-sidebar-toggle" aria-label={collapsed ? toggleCopy.expand : toggleCopy.collapse} title={collapsed ? toggleCopy.expand : toggleCopy.collapse} onClick={onToggleCollapsed}><span className="wb-sidebar-toggle-icon" aria-hidden="true">{collapsed ? "›" : "‹"}</span></button>

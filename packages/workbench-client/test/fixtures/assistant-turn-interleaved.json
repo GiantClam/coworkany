@@ -1,0 +1,9 @@
+[
+  { "type": "reasoning", "delta": "inspect the request", "sequence": 1, "createdAt": "2026-09-29T00:00:01.000Z" },
+  { "type": "text", "delta": "I will check the current implementation.", "sequence": 2, "createdAt": "2026-09-29T00:00:02.000Z" },
+  { "type": "tool_call", "toolName": "search", "toolCallId": "tool-search-1", "phase": "started", "input": { "query": "assistant stream order" }, "sequence": 3, "createdAt": "2026-09-29T00:00:03.000Z" },
+  { "type": "tool_call", "toolName": "search", "toolCallId": "tool-search-1", "phase": "completed", "output": { "matches": 1 }, "sequence": 4, "createdAt": "2026-09-29T00:00:04.000Z" },
+  { "type": "text", "delta": "The tool result confirms the ordering bug.", "sequence": 5, "createdAt": "2026-09-29T00:00:05.000Z" },
+  { "type": "artifact", "artifact": { "id": "artifact-order-report", "relativePath": "artifacts/order-report.md", "title": "order-report.md", "mimeType": "text/markdown", "byteLength": 42, "sha256": "fixture-sha256" }, "sequence": 6, "createdAt": "2026-09-29T00:00:06.000Z" },
+  { "type": "status", "status": "succeeded", "sequence": 7, "createdAt": "2026-09-29T00:00:07.000Z" }
+]
