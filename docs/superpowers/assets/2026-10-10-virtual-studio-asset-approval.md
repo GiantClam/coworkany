@@ -32,7 +32,7 @@ All rows begin at `not-started`. Replace the placeholders only when an inspectab
 | Desk source art + state variants (available, active, offline) | `not-started` | — | — | — | — | — | Must remain outside `public/virtual-office/v1` until approved. |
 | Display source art (main, side, stands, status effects) | `not-started` | — | — | — | — | — | Must remain outside `public/virtual-office/v1` until approved. |
 | Rig preview + animation data (bones, slots, texture regions, clips) | `not-started` | — | — | — | — | — | Must remain outside `public/virtual-office/v1` until approved. |
-| Composite preview (background + characters + desks + displays) | `not-started` | — | — | — | — | — | Must remain outside `public/virtual-office/v1` until approved. |
+| Composite preview (background + characters + desks + displays) | `approved` | `docs/superpowers/assets/drafts/2026-10-10-virtual-studio/complete-studio-ui-v1.png` | 2172 × 724, RGBA | `imagegen-composite-ui-v1` | Seven independent stations are visible on a transparent canvas; cartoon UI direction, short back-facing workers, desk + dual-screen silhouette, and light UI treatment approved by the user. | 2026-10-10 (Asia/Shanghai) | Keep as an approved reference; do not mark integrated until asset integrity and layer-source checks pass. |
 
 ## Review checklist
 
@@ -60,4 +60,4 @@ For the rig row, additionally verify the exact bones `root`, `torso`, `head`, `a
 
 ## Audit notes
 
-This ledger is intentionally documentation-only. No image is generated, and no file under `apps/desktop/public/virtual-office/v1/` may be added or replaced by this gate setup. Future asset-generation work must update this ledger in the same change that records the corresponding user decision.
+This ledger is intentionally separate from production integration. The first composite UI draft is recorded above for individual review; no file under `apps/desktop/public/virtual-office/v1/` has been added or replaced. Future asset-generation work must update this ledger in the same change that records the corresponding user decision.
