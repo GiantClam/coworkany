@@ -4,6 +4,60 @@ import type { DesktopTaskMetadata } from "../desktop-task-metadata";
 export type OfficeRoleId = "ai-chat" | "agent-center" | "ppt-expert" | "workflow-operator" | "writer" | "image-creator" | "video-producer";
 export type OfficeStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled" | "unknown";
 export type OfficeRoleStatus = "idle" | "offline" | OfficeStatus;
+/**
+ * Visual states are intentionally narrower than persisted office statuses.  They
+ * are renderer-facing facts, not a second source of work state.
+ */
+export type OfficeVisualState = "idle" | "walk" | "work" | "thinking" | "waiting" | "completed" | "error" | "offline";
+
+/** Normalized character rig contract shared by renderer adapters. */
+export interface OfficeRigBone {
+  readonly name: string;
+  readonly parent: string | null;
+  readonly length: number;
+  readonly x: number;
+  readonly y: number;
+  readonly rotation: number;
+}
+
+export interface OfficeRigSlot {
+  readonly name: string;
+  readonly bone: string;
+  readonly zIndex: number;
+  readonly blend: "normal" | "additive";
+}
+
+export interface OfficeRigKeyframe {
+  /** Normalized clip time in the inclusive range [0, 1]. */
+  readonly t: number;
+  readonly x?: number;
+  readonly y?: number;
+  readonly rotation?: number;
+  readonly opacity?: number;
+}
+
+export interface OfficeRigClip {
+  readonly durationMs: number;
+  readonly loop: boolean;
+  readonly tracks: Readonly<Record<string, readonly OfficeRigKeyframe[]>>;
+}
+
+export interface OfficeRigManifest {
+  readonly schemaVersion: number;
+  readonly assetId?: string;
+  readonly sourcePreview?: string;
+  readonly coordinateSystem?: Readonly<Record<string, string>>;
+  readonly bones: readonly OfficeRigBone[];
+  readonly slots: readonly OfficeRigSlot[];
+  readonly textureRegions: Readonly<Record<string, string>>;
+  readonly clips: Readonly<Record<string, OfficeRigClip>>;
+  readonly reducedMotion: {
+    readonly enabledByDefaultWhen?: string;
+    readonly staticPoseByClip: Readonly<Record<string, string>>;
+    readonly disableStatusFx: boolean;
+  };
+}
+
 export type OfficeAttention = "user" | "external";
 export type OfficeSourceId = "conversations" | "runs" | "run-details" | "attempts" | "agent-directory" | `provider:${string}`;
 export type OfficeWorkItemKey = { readonly sourceAdapterId: string; readonly workItemId: string };

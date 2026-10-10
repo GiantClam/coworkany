@@ -1,28 +1,143 @@
 {
   "schemaVersion": 1,
+  "sourceVersion": "2026-10-10-virtual-studio",
+  "roles": [
+    "ai-chat",
+    "agent-center",
+    "ppt-expert",
+    "workflow-operator",
+    "writer",
+    "image-creator",
+    "video-producer"
+  ],
+  "roleIds": [
+    "ai-chat",
+    "agent-center",
+    "ppt-expert",
+    "workflow-operator",
+    "writer",
+    "image-creator",
+    "video-producer"
+  ],
+  "clips": [
+    "idle",
+    "walk",
+    "work",
+    "thinking",
+    "waiting",
+    "completed",
+    "error"
+  ],
+  "states": [
+    "available",
+    "active",
+    "offline"
+  ],
+  "sourceInputs": [
+    {
+      "path": "complete-studio-background-v1.png",
+      "width": 2172,
+      "height": 724,
+      "sha256": "3d92aecc0d65be9e091c1f1b3d9ef0bbf51dbbda2dd1a91dcc0dfb06d2cd0053"
+    },
+    {
+      "path": "characters-v1.png",
+      "width": 2203,
+      "height": 714,
+      "sha256": "31e053a31ca24dc41ce4968a2224216f6af93befe53bf249fea5c28873faa44e"
+    },
+    {
+      "path": "desk-state-variants-v1.png",
+      "width": 2172,
+      "height": 724,
+      "sha256": "4624b152bd11c8dc270668c072b2398a2ca7678ddb9269690023360e480ee437"
+    },
+    {
+      "path": "display-source-art-v1.png",
+      "width": 1536,
+      "height": 1024,
+      "sha256": "a3c57e5651bb5d0e86892d527619557a646788b6d4a6802685d71a6a38f70707"
+    },
+    {
+      "path": "character-ai-chat-turnaround-v1.png",
+      "width": 1536,
+      "height": 1024,
+      "sha256": "1869b9e6c648db91bfec0873e3296ddc73b4fc55490fdc84a09af3cba9e18d80"
+    },
+    {
+      "path": "character-agent-center-turnaround-v1.png",
+      "width": 1536,
+      "height": 1024,
+      "sha256": "e922d8e368b10168293ae2cacf8b40d0e5ac2f257b068407009d12ae2a66dc3e"
+    },
+    {
+      "path": "character-ppt-expert-turnaround-v1.png",
+      "width": 1536,
+      "height": 1024,
+      "sha256": "cda98fd09e592fc8365d9fc8a11bf1b847e43e2731cfa15798b9829c85a87d5f"
+    },
+    {
+      "path": "character-workflow-operator-turnaround-v1.png",
+      "width": 1536,
+      "height": 1024,
+      "sha256": "1848134749f0481697c7ef44394b89a6edc58a732f3d44136fbb945671622f0b"
+    },
+    {
+      "path": "character-writer-turnaround-v1.png",
+      "width": 1536,
+      "height": 1024,
+      "sha256": "7c1ef15bf1179e7d84e69077cef1e2b7435f97b77a38c9763e760c7be5fc6c56"
+    },
+    {
+      "path": "character-image-creator-turnaround-v1.png",
+      "width": 1536,
+      "height": 1024,
+      "sha256": "8c84f940ae5afbd275cdfcfd935018c82c827c94e1d464d907cf6b5d5bbc52f5"
+    },
+    {
+      "path": "character-video-producer-turnaround-v1.png",
+      "width": 1536,
+      "height": 1024,
+      "sha256": "10f545eb409c843a62e74c93917d16eb6852647c934ea3e2186fb5b42db9b884"
+    },
+    {
+      "path": "rig-animation-data-v1.json",
+      "sha256": "268d2b02916cce074cf495320e46a038512ba7d4e17f04fcfe23d95f222026d0"
+    }
+  ],
   "assets": [
     {
       "id": "office",
       "path": "office.webp",
       "purpose": "background",
-      "width": 256,
-      "height": 144,
+      "format": "webp",
+      "width": 2172,
+      "height": 724,
+      "hasAlpha": true,
       "frames": [
         "background"
       ],
-      "sha256": "ddb373e2b18d0be1ba4f8c4e9a4b710c240e8a92e23217d14f87d5744634091f"
+      "regions": [
+        {
+          "id": "background",
+          "x": 0,
+          "y": 0,
+          "width": 2172,
+          "height": 724
+        }
+      ],
+      "sha256": "80a853a08c1f9b2386d95ed9f352c6dc2daca9a1f6ba091909c71a8943c4bd3e"
     },
     {
       "id": "characters",
       "path": "characters.webp",
-      "purpose": "character atlas",
+      "purpose": "back-facing character skin atlas",
+      "format": "webp",
       "width": 896,
-      "height": 256,
+      "height": 128,
+      "hasAlpha": true,
       "frames": [
-        "idle",
-        "working",
-        "waiting",
-        "error"
+        "back"
       ],
       "roleIds": [
         "ai-chat",
@@ -33,15 +148,77 @@
         "image-creator",
         "video-producer"
       ],
-      "sha256": "42f3f9dfb08af0c2bc4154c16dc6acb4b484350e9773bebe61a4d6e84874d7dd"
+      "cell": {
+        "width": 128,
+        "height": 128
+      },
+      "regions": [
+        {
+          "roleId": "ai-chat",
+          "x": 0,
+          "y": 0,
+          "width": 128,
+          "height": 128
+        },
+        {
+          "roleId": "agent-center",
+          "x": 128,
+          "y": 0,
+          "width": 128,
+          "height": 128
+        },
+        {
+          "roleId": "ppt-expert",
+          "x": 256,
+          "y": 0,
+          "width": 128,
+          "height": 128
+        },
+        {
+          "roleId": "workflow-operator",
+          "x": 384,
+          "y": 0,
+          "width": 128,
+          "height": 128
+        },
+        {
+          "roleId": "writer",
+          "x": 512,
+          "y": 0,
+          "width": 128,
+          "height": 128
+        },
+        {
+          "roleId": "image-creator",
+          "x": 640,
+          "y": 0,
+          "width": 128,
+          "height": 128
+        },
+        {
+          "roleId": "video-producer",
+          "x": 768,
+          "y": 0,
+          "width": 128,
+          "height": 128
+        }
+      ],
+      "sha256": "8eca06b598b9fb142f0d8e1280cc75b65919921057447622e7636469d28d9826"
     },
     {
       "id": "workstations",
       "path": "workstations.webp",
-      "purpose": "workstation atlas",
+      "purpose": "workstation shell atlas",
+      "format": "webp",
       "width": 896,
-      "height": 192,
+      "height": 288,
+      "hasAlpha": true,
       "frames": [
+        "available",
+        "active",
+        "offline"
+      ],
+      "states": [
         "available",
         "active",
         "offline"
@@ -55,7 +232,496 @@
         "image-creator",
         "video-producer"
       ],
-      "sha256": "7340ea141bb5a08bd21338071af2bf4428a047050c209167aa74539bc48d79db"
+      "cell": {
+        "width": 128,
+        "height": 96
+      },
+      "regions": [
+        {
+          "roleId": "ai-chat",
+          "state": "available",
+          "x": 0,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "agent-center",
+          "state": "available",
+          "x": 128,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "ppt-expert",
+          "state": "available",
+          "x": 256,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "workflow-operator",
+          "state": "available",
+          "x": 384,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "writer",
+          "state": "available",
+          "x": 512,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "image-creator",
+          "state": "available",
+          "x": 640,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "video-producer",
+          "state": "available",
+          "x": 768,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "ai-chat",
+          "state": "active",
+          "x": 0,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "agent-center",
+          "state": "active",
+          "x": 128,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "ppt-expert",
+          "state": "active",
+          "x": 256,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "workflow-operator",
+          "state": "active",
+          "x": 384,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "writer",
+          "state": "active",
+          "x": 512,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "image-creator",
+          "state": "active",
+          "x": 640,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "video-producer",
+          "state": "active",
+          "x": 768,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "ai-chat",
+          "state": "offline",
+          "x": 0,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "agent-center",
+          "state": "offline",
+          "x": 128,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "ppt-expert",
+          "state": "offline",
+          "x": 256,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "workflow-operator",
+          "state": "offline",
+          "x": 384,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "writer",
+          "state": "offline",
+          "x": 512,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "image-creator",
+          "state": "offline",
+          "x": 640,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "video-producer",
+          "state": "offline",
+          "x": 768,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        }
+      ],
+      "sha256": "65a54d1ea2ec11dcd7fa7044f8c876d5b2b339a6d54868311a0aad123c316b78"
+    },
+    {
+      "id": "workstations-front",
+      "path": "workstations-front.webp",
+      "purpose": "workstation front-edge atlas",
+      "format": "webp",
+      "width": 896,
+      "height": 288,
+      "hasAlpha": true,
+      "frames": [
+        "available",
+        "active",
+        "offline"
+      ],
+      "states": [
+        "available",
+        "active",
+        "offline"
+      ],
+      "roleIds": [
+        "ai-chat",
+        "agent-center",
+        "ppt-expert",
+        "workflow-operator",
+        "writer",
+        "image-creator",
+        "video-producer"
+      ],
+      "cell": {
+        "width": 128,
+        "height": 96
+      },
+      "regions": [
+        {
+          "roleId": "ai-chat",
+          "state": "available",
+          "x": 0,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "agent-center",
+          "state": "available",
+          "x": 128,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "ppt-expert",
+          "state": "available",
+          "x": 256,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "workflow-operator",
+          "state": "available",
+          "x": 384,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "writer",
+          "state": "available",
+          "x": 512,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "image-creator",
+          "state": "available",
+          "x": 640,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "video-producer",
+          "state": "available",
+          "x": 768,
+          "y": 0,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "ai-chat",
+          "state": "active",
+          "x": 0,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "agent-center",
+          "state": "active",
+          "x": 128,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "ppt-expert",
+          "state": "active",
+          "x": 256,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "workflow-operator",
+          "state": "active",
+          "x": 384,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "writer",
+          "state": "active",
+          "x": 512,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "image-creator",
+          "state": "active",
+          "x": 640,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "video-producer",
+          "state": "active",
+          "x": 768,
+          "y": 96,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "ai-chat",
+          "state": "offline",
+          "x": 0,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "agent-center",
+          "state": "offline",
+          "x": 128,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "ppt-expert",
+          "state": "offline",
+          "x": 256,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "workflow-operator",
+          "state": "offline",
+          "x": 384,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "writer",
+          "state": "offline",
+          "x": 512,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "image-creator",
+          "state": "offline",
+          "x": 640,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        },
+        {
+          "roleId": "video-producer",
+          "state": "offline",
+          "x": 768,
+          "y": 192,
+          "width": 128,
+          "height": 96
+        }
+      ],
+      "sha256": "1dde1c62e14240fceefd6eb0458fd590cfe94035da5c53d1f8745e385f75baf1"
+    },
+    {
+      "id": "displays",
+      "path": "displays.webp",
+      "purpose": "independent display and status-light source atlas",
+      "format": "webp",
+      "width": 1536,
+      "height": 1024,
+      "hasAlpha": true,
+      "frames": [
+        "main-front",
+        "side-angle",
+        "stand-front",
+        "stand-side",
+        "status-available",
+        "status-active",
+        "status-offline"
+      ],
+      "regions": [
+        {
+          "id": "main-front",
+          "x": 0,
+          "y": 0,
+          "width": 768,
+          "height": 512
+        },
+        {
+          "id": "side-angle",
+          "x": 768,
+          "y": 0,
+          "width": 768,
+          "height": 512
+        },
+        {
+          "id": "stand-front",
+          "x": 0,
+          "y": 512,
+          "width": 384,
+          "height": 512
+        },
+        {
+          "id": "stand-side",
+          "x": 384,
+          "y": 512,
+          "width": 384,
+          "height": 512
+        },
+        {
+          "id": "status-available",
+          "x": 768,
+          "y": 512,
+          "width": 256,
+          "height": 512
+        },
+        {
+          "id": "status-active",
+          "x": 1024,
+          "y": 512,
+          "width": 256,
+          "height": 512
+        },
+        {
+          "id": "status-offline",
+          "x": 1280,
+          "y": 512,
+          "width": 256,
+          "height": 512
+        }
+      ],
+      "sha256": "f3c65edf6320312fd0c0058cf5cf4c69c63000af05c905a1bc98038c195de7cf"
+    },
+    {
+      "id": "rig",
+      "path": "rig-animation-data.json",
+      "purpose": "normalized character skeleton and animation clips",
+      "format": "json",
+      "hasAlpha": false,
+      "frames": [
+        "idle",
+        "walk",
+        "work",
+        "thinking",
+        "waiting",
+        "completed",
+        "error"
+      ],
+      "clips": [
+        "idle",
+        "walk",
+        "work",
+        "thinking",
+        "waiting",
+        "completed",
+        "error"
+      ],
+      "bones": [
+        "root",
+        "torso",
+        "head",
+        "arm.l",
+        "arm.r",
+        "hand.l",
+        "hand.r",
+        "prop"
+      ],
+      "slots": [
+        "body",
+        "head",
+        "prop",
+        "statusFx"
+      ],
+      "sha256": "268d2b02916cce074cf495320e46a038512ba7d4e17f04fcfe23d95f222026d0"
     }
   ]
 }

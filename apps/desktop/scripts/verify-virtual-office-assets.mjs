@@ -40,6 +40,10 @@ function webpDimensions(buffer) {
   return null;
 }
 
+function isJsonAsset(asset) {
+  return asset?.format === "json" || (typeof asset?.path === "string" && asset.path.toLowerCase().endsWith(".json"));
+}
+
 export async function validateManifest({ rootDir, manifestPath = resolve(rootDir, "manifest.json") }) {
   let manifest;
   try {
@@ -93,9 +97,19 @@ export async function validateManifest({ rootDir, manifestPath = resolve(rootDir
       errors.push(error(ASSET_ERROR_CODES.missing, `asset file missing: ${asset.path}`));
       continue;
     }
-    const dimensions = webpDimensions(bytes);
+    const dimensions = isJsonAsset(asset) ? null : webpDimensions(bytes);
     const hash = createHash("sha256").update(bytes).digest("hex");
-    if (hash !== asset.sha256 || !dimensions || dimensions.width !== asset.width || dimensions.height !== asset.height) errors.push(error(ASSET_ERROR_CODES.hashMismatch, `asset integrity mismatch: ${asset.path}`));
+    let contentInvalid = false;
+    if (isJsonAsset(asset)) {
+      try {
+        JSON.parse(bytes.toString("utf8"));
+      } catch {
+        contentInvalid = true;
+      }
+    } else {
+      contentInvalid = !dimensions || dimensions.width !== asset.width || dimensions.height !== asset.height;
+    }
+    if (hash !== asset.sha256 || contentInvalid) errors.push(error(ASSET_ERROR_CODES.hashMismatch, `asset integrity mismatch: ${asset.path}`));
     gzipBytes += gzipSync(bytes).byteLength;
   }
   if (gzipBytes > OFFICE_ASSET_GZIP_BUDGET_BYTES) errors.push(error(ASSET_ERROR_CODES.budgetExceeded, `gzip budget exceeded: ${gzipBytes} > ${OFFICE_ASSET_GZIP_BUDGET_BYTES}`));

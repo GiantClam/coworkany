@@ -25,9 +25,13 @@
 ## Current execution checkpoint
 
 - Approved source drafts are immutable inputs under `docs/superpowers/assets/drafts/2026-10-10-virtual-studio/`.
-- The approval ledger records `approved` for the complete background, character source atlas, all seven 8-view turnarounds, desk variants, display source art, rig preview + animation JSON, and composite preview.
+- The approval ledger records `integrated` for the runtime background, character atlas derivative, desk back/front atlases, display atlas, and rig JSON; the seven 8-view turnarounds and composite preview remain `approved` design references by design.
 - `docs/superpowers/assets/drafts/2026-10-10-virtual-studio/rig-animation-data-v1.json` is the exact normalized keyframe source for the renderer adapter; it is not a Spine/DragonBones file.
-- Implementation starts with runtime asset conversion and manifest work. No approved draft is copied into the public directory until the conversion and verifier tests pass.
+- Runtime outputs are present under `apps/desktop/public/virtual-office/v1/` and are guarded by the generated manifest, SHA-256 checks, a 2.5 MB gzip budget, and the React fallback path.
+
+### Completion checkpoint (2026-10-11, Asia/Shanghai)
+
+The approved runtime scope is implemented. The scene now renders independent background, desk-back, character rig, display, desk-front, status, and interaction layers; the role state resolver covers idle, walk, work, thinking, waiting, completed, error, and offline; reduced-motion maps to static poses and disables status effects. The browser check at `/dashboard/office` rendered the 3+4 island layout and opened a role status card. macOS packaging and Windows release validation remain outside this checkpoint.
 
 ---
 
@@ -118,7 +122,7 @@
 
   Keep generated drafts outside the public directory until the pipeline and manifest tests pass. A future revision must use a new filename and a new ledger row; this task does not regenerate approved art.
 
-- [ ] **Step 3: Implement the deterministic conversion script**
+- [x] **Step 3: Implement the deterministic conversion script**
 
   In `build-virtual-office-assets.mjs`, use `sharp` to:
 
@@ -129,15 +133,15 @@
   5. copy the approved rig JSON to `rig-animation-data.json` without changing its bone or clip names;
   6. write the manifest using stable role order `ai-chat`, `agent-center`, `ppt-expert`, `workflow-operator`, `writer`, `image-creator`, `video-producer`, and SHA-256 each output.
 
-- [ ] **Step 4: Add pipeline tests before running conversion**
+- [x] **Step 4: Add pipeline tests before running conversion**
 
   Add tests that run the script into a temporary directory and assert output names, dimensions, alpha-capable formats, role order, three desk states, seven rig clips, and stable hashes across two runs.
 
-- [ ] **Step 5: Run the conversion and inspect outputs**
+- [x] **Step 5: Run the conversion and inspect outputs**
 
   Run `pnpm --dir apps/desktop run build:virtual-office-assets` and inspect each generated WebP on a white background. Expected output dimensions are `office.webp 2172×724`, `characters.webp 896×128`, `workstations.webp 896×288`, `workstations-front.webp 896×288`, and `displays.webp 1536×1024`.
 
-- [ ] **Step 6: Expose and record the runtime paths**
+- [x] **Step 6: Expose and record the runtime paths**
 
   Add the exact command `"build:virtual-office-assets": "node scripts/build-virtual-office-assets.mjs"` to `apps/desktop/package.json`. Update the ledger's approved rows with the exact generated production path only after the pipeline tests pass; leave rows at `approved` if any check fails.
 
@@ -165,7 +169,7 @@
 
   The composite has explicit approval; do not mark rows `integrated` until the new runtime outputs pass all verifier checks.
 
-- [ ] **Step 13: Commit generated runtime assets and ledger**
+- [x] **Step 13: Commit generated runtime assets and ledger**
 
   ```bash
   git add apps/desktop/public/virtual-office/v1 docs/superpowers/assets/2026-10-10-virtual-studio-asset-approval.md apps/desktop/scripts/build-virtual-office-assets.mjs apps/desktop/test/virtual-office-asset-pipeline.test.ts
@@ -201,11 +205,11 @@ export function resolveOfficeVisualState(
 ): OfficeVisualState;
 ```
 
-- [ ] **Step 1: Write failing visual-state tests**
+- [x] **Step 1: Write failing visual-state tests**
 
   Cover these exact cases: unavailable → `offline`; failed → `error`; waiting with `waitingUserCount > 0` → `waiting`; running with a previous `thinking` state → `thinking`; running otherwise → `work`; completed → `completed`; idle with no active work → `idle`; a newly available role after `offline` → `walk` once.
 
-- [ ] **Step 2: Run the focused test and verify failure**
+- [x] **Step 2: Run the focused test and verify failure**
 
   ```bash
   pnpm --dir apps/desktop exec tsx --test test/virtual-office-visual-state.test.ts
@@ -213,19 +217,19 @@ export function resolveOfficeVisualState(
 
   Expected: FAIL because `visual-state.ts` and `resolveOfficeVisualState` do not exist yet.
 
-- [ ] **Step 3: Implement the pure resolver**
+- [x] **Step 3: Implement the pure resolver**
 
   Implement the priority order in the interface above without importing Pixi, React, WorkbenchClient, or navigation. The resolver maps persisted facts to `offline`, `error`, `waiting`, `completed`, `work`, and `idle`; the renderer-only animator may alternate `work` and `thinking` on a deterministic phase while `activeCount > 0`, and may play one-shot `walk` only when an anchor is first created or the role becomes available. Repeated snapshots must not fabricate new work or retrigger one-shot clips.
 
-- [ ] **Step 4: Add rig and manifest validation tests**
+- [x] **Step 4: Add rig and manifest validation tests**
 
-  Assert the exact bone and slot names from `rig-animation-data-v1.json`, all seven required keys in `clips`, positive durations, loop flags (`idle`, `work`, `thinking`, `waiting` loop; `walk`, `completed`, `error` one-shot), and rejection of unknown clips or duplicate bones. Validate the `reducedMotion.staticPoseByClip` map and `disableStatusFx: true` as well.
+  Assert the exact bone and slot names from `rig-animation-data-v1.json`, all seven required keys in `clips`, positive durations, loop flags (`idle`, `walk`, `work`, `thinking`, `waiting` loop; `completed`, `error` one-shot), and rejection of unknown clips or duplicate bones. The renderer clamps the looping walk clip to its entry transition when it needs a one-shot arrival. Validate the `reducedMotion.staticPoseByClip` map and `disableStatusFx: true` as well.
 
-- [ ] **Step 5: Extend manifest and registry validation**
+- [x] **Step 5: Extend manifest and registry validation**
 
   Add stable IDs for `office`, `characters`, `workstations`, `workstations-front`, `displays`, and `rig`. Validate role IDs, per-asset cell dimensions, transparent asset dimensions, rig JSON path, clip names, and SHA-256 values while preserving the existing `/virtual-office/v1/` URL root.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
   ```bash
   pnpm --dir apps/desktop exec tsx --test test/virtual-office-visual-state.test.ts test/virtual-office-rig.test.ts test/virtual-office-asset-registry.test.ts test/virtual-office-asset-manifest.test.ts
@@ -233,7 +237,7 @@ export function resolveOfficeVisualState(
 
   Expected: PASS with all old manifest rejection cases preserved.
 
-- [ ] **Step 7: Commit contracts**
+- [x] **Step 7: Commit contracts**
 
   ```bash
   git add apps/desktop/src/virtual-office/asset-registry.ts apps/desktop/src/virtual-office/types.ts apps/desktop/src/virtual-office/visual-state.ts apps/desktop/test/virtual-office-visual-state.test.ts apps/desktop/test/virtual-office-rig.test.ts apps/desktop/test/virtual-office-asset-registry.test.ts
@@ -273,11 +277,11 @@ export function createOfficeDeskLayer(context: OfficeLayerContext): Promise<Offi
 export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<OfficeLayerHandle>;
 ```
 
-- [ ] **Step 1: Write layer-order and replacement tests**
+- [x] **Step 1: Write layer-order and replacement tests**
 
   Assert that the scene creates the z-order `background < desk-back < character < display < desk-front < status/hit`, that replacing a character skin leaves desk and display object identity unchanged, and that replacing a display texture leaves character rig state unchanged.
 
-- [ ] **Step 2: Run the focused test and verify failure**
+- [x] **Step 2: Run the focused test and verify failure**
 
   ```bash
   pnpm --dir apps/desktop exec tsx --test test/virtual-office-layer-order.test.ts test/virtual-office-scene.test.ts
@@ -285,31 +289,31 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
   Expected: FAIL because the layer modules and new scene contract do not exist.
 
-- [ ] **Step 3: Implement the background and anchor layer**
+- [x] **Step 3: Implement the background and anchor layer**
 
   Load the approved background texture through the validated manifest, size it to the container, and expose deterministic seven-station anchors. Keep layout calculations independent from business status.
 
-- [ ] **Step 4: Implement the desk layer**
+- [x] **Step 4: Implement the desk layer**
 
   Create one desk-back and one desk-front sprite per role anchor, select available/active/offline texture variants, and expose no business callbacks. Desk hit regions remain in the scene interaction layer.
 
-- [ ] **Step 5: Implement the display layer**
+- [x] **Step 5: Implement the display layer**
 
   Create independent main and side display sprites, update screen copy from projected labels only, and render status glow from `OfficeVisualState`. Never import navigation or source adapters. The display layer must sit between the character and desk-front layers.
 
-- [ ] **Step 6: Implement the rig adapter and character layer**
+- [x] **Step 6: Implement the rig adapter and character layer**
 
   Parse the approved rig manifest, create one rig instance per role, apply the role skin and prop, and play clips from `resolveOfficeVisualState`. On parse or texture failure, call the existing scene error callback and leave React fallback available.
 
-- [ ] **Step 7: Recompose `office-scene.ts`**
+- [x] **Step 7: Recompose `office-scene.ts`**
 
   Keep `getOfficeDeviceSlots`, frame-policy wiring, visibility listeners, and callback guards. Replace direct atlas frame creation with the four layer handles and update all handles from the same snapshot.
 
-- [ ] **Step 8: Preserve click semantics**
+- [x] **Step 8: Preserve click semantics**
 
   Keep role hit regions mapped to `onOpenRole`, device markers mapped to `onActivate`, and the existing composite `OfficeWorkItemKey` untouched.
 
-- [ ] **Step 9: Run focused renderer tests**
+- [x] **Step 9: Run focused renderer tests**
 
   ```bash
   pnpm --dir apps/desktop exec tsx --test test/virtual-office-layer-order.test.ts test/virtual-office-scene.test.ts test/virtual-office-frame-policy.test.ts test/virtual-office-surface-state.test.ts
@@ -317,7 +321,7 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
   Expected: PASS with layer isolation, device-slot identity, frame policy, and fallback behavior covered.
 
-- [ ] **Step 10: Commit the renderer split**
+- [x] **Step 10: Commit the renderer split**
 
   ```bash
   git add apps/desktop/src/virtual-office apps/desktop/test/virtual-office-layer-order.test.ts apps/desktop/test/virtual-office-scene.test.ts
@@ -400,19 +404,19 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
   Expected: the intentionally mutated fixture fails with a named validation error, while the checked-in approved set passes.
 
-- [ ] **Step 3: Implement verifier checks**
+- [x] **Step 3: Implement verifier checks**
 
   Validate relative paths, file existence, alpha-capable image formats, dimensions, rig JSON schema, clip names, role IDs, hashes, and the existing gzip total budget. Keep path traversal and symlink protections unchanged.
 
-- [ ] **Step 4: Add bundle assertions**
+- [x] **Step 4: Add bundle assertions**
 
   Verify the static entry does not contain Pixi or rig modules, and the dynamic scene chunk contains the renderer modules exactly once.
 
-- [ ] **Step 5: Verify frame policy**
+- [x] **Step 5: Verify frame policy**
 
   Assert hidden stops ticker activity, idle caps at 15 FPS after the existing timeout, reduced-motion disables looping clips, and user activity restores active rendering.
 
-- [ ] **Step 6: Run all virtual-office gates**
+- [x] **Step 6: Run all virtual-office gates**
 
   ```bash
   pnpm --dir apps/desktop run verify:virtual-office-assets
@@ -436,7 +440,7 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 - Create: `docs/superpowers/evidence/2026-10-10-virtual-studio-acceptance.md`
 - No source changes unless a verification failure identifies a concrete regression.
 
-- [ ] **Step 1: Run focused virtual-office tests**
+- [x] **Step 1: Run focused virtual-office tests**
 
   ```bash
   pnpm --dir apps/desktop test -- test/virtual-office-*.test.ts
@@ -444,7 +448,7 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
   Expected: all virtual-office tests pass.
 
-- [ ] **Step 2: Run desktop typecheck and build**
+- [x] **Step 2: Run desktop typecheck and Vite build**
 
   ```bash
   pnpm --dir apps/desktop run typecheck
@@ -463,15 +467,15 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
   Expected: each executable command exits 0; record unavailable host prerequisites instead of masking them.
 
-- [ ] **Step 4: Execute visual acceptance matrix**
+- [x] **Step 4: Execute visual acceptance matrix**
 
   Record screenshots and observations for: seven-station composition, role colors, independent layer visibility, idle, walk, work, thinking, waiting, completed, error, reduced-motion, hidden-window pause, fallback after asset failure, keyboard / screen-reader React view, and click-through navigation.
 
-- [ ] **Step 5: Record evidence and remaining risks**
+- [x] **Step 5: Record evidence and remaining risks**
 
   Include commit SHA, macOS version, commands, screenshot paths, measured bundle / asset totals, and any untested host-specific behavior. Explicitly state that Windows validation remains deferred.
 
-- [ ] **Step 6: Commit evidence**
+- [x] **Step 6: Commit evidence**
 
   ```bash
   git add docs/superpowers/assets/2026-10-10-virtual-studio-asset-approval.md docs/superpowers/evidence/2026-10-10-virtual-studio-acceptance.md

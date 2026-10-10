@@ -3,7 +3,7 @@
 ## 状态
 
 - 设计状态：方案 A 已确认（2026-10-10，Asia/Shanghai）
-- 实施状态：资源已逐项确认，代码接入待开始
+- 实施状态：已完成分层接入、骨骼状态映射、资源完整性校验与浏览器验收（2026-10-11，Asia/Shanghai）
 - 图片生成状态：背景、角色源图、7×8 转面、桌面、显示屏、骨骼预览与合成预览均已逐项通过
 - 目标平台：现有 Coworkany Desktop（当前 macOS 目标）
 
@@ -67,7 +67,7 @@
 
 每一项图片确认至少检查：构图、透明边缘、角色比例、色彩、层级关系、可切片性、与其他资源的组合效果。图片确认不是一次性总批准，用户可以单独退回某一项重生成。
 
-已批准草稿集中在 `docs/superpowers/assets/drafts/2026-10-10-virtual-studio/`，审批记录集中在 `docs/superpowers/assets/2026-10-10-virtual-studio-asset-approval.md`。在全部运行时校验通过前，草稿不得被视为生产资源。
+已批准草稿集中在 `docs/superpowers/assets/drafts/2026-10-10-virtual-studio/`，审批记录集中在 `docs/superpowers/assets/2026-10-10-virtual-studio-asset-approval.md`。运行时生产副本位于 `apps/desktop/public/virtual-office/v1/`，草稿仍作为不可变的 8 视图与设计审阅来源，不直接替代运行时图集。
 
 ## 交互与数据边界
 
@@ -120,7 +120,7 @@
 2. 先接入背景、桌面和显示屏分层，验证 3+4 锚点与遮挡顺序。
 3. 接入角色皮肤与 keyframe 插值器，映射真实投影状态到动作，不创建虚假工作项。
 4. 运行资源、类型、单元、浏览器场景和 macOS 构建检查；失败时保留 React fallback。
-5. 通过视觉验收后再记录 `integrated` 生产路径。
+5. 通过视觉验收后再记录 `integrated` 生产路径；当前已完成 macOS 目标下的资源、类型、测试、Vite 构建、动态场景包与浏览器验收。
 
 ## 非目标
 
