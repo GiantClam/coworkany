@@ -12,6 +12,7 @@ import { migrateWorkflowDefinitionToCurrent } from "@coworkany/workflow-core";
 test("desktop routes consume the retained online dashboard manifest", () => {
   const paths = WORKBENCH_ROUTE_MANIFEST.map((route) => route.path);
   assert.equal(paths[0], "/dashboard");
+  assert.ok(paths.includes("/dashboard/office"));
   assert.ok(paths.includes("/dashboard/ai"));
   assert.ok(paths.includes("/dashboard/writer"));
   assert.ok(paths.includes("/dashboard/workflows"));
@@ -25,6 +26,8 @@ test("desktop routes consume the retained online dashboard manifest", () => {
   assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/settings")?.placement, "footer");
   for (const excluded of ["/dashboard/billing", "/dashboard/platform-settings"]) assert.equal(paths.includes(excluded), false);
   assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/agent-platform")?.mode, "library");
+  assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/office")?.mode, "home");
+  assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/office")?.label.zh, "虚拟办公室");
   assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/writer")?.label.zh, "多平台写作");
   assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/workflows")?.label.zh, "工作流");
   assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/writer")?.description.zh, "统一生成多平台图文内容，并支持 Markdown 编辑与发布准备。");
@@ -200,7 +203,8 @@ test("agent-scoped PPT routes preserve the PPT capability for provider and artif
 
 test("task center opens the task entry and restores the requested media capability", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  assert.match(appSource, /function readDesktopTaskMetadata\(detail: RunDetail\)/u);
+  assert.match(appSource, /parseDesktopTaskMetadata/u);
+  assert.match(appSource, /function readTaskMetadataFromRunDetail\(detail: RunDetail\)/u);
   assert.match(appSource, /eventType: "task_metadata"/u);
   assert.match(appSource, /const openTaskEntry = async \(run: RunRow\)/u);
   assert.match(appSource, /metadata\?\.entryPath/u);
@@ -1315,15 +1319,16 @@ test("workflow node titles are editable and persist on blur or Enter", () => {
 
 test("desktop workflows persist the edited Canvas and restore the exact task snapshot with node outputs", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const metadataSource = readFileSync(resolve(process.cwd(), "src/desktop-task-metadata.ts"), "utf8");
   assert.ok(appSource.includes("workflowRestoreRequestRef"));
-  assert.ok(appSource.includes("workflowDefinition?: WorkflowDefinitionEnvelope"));
+  assert.ok(appSource.includes("type DesktopTaskMetadata"));
   assert.ok(appSource.includes("const workflowDefinitionSnapshot = isWorkflowRun"));
   assert.ok(appSource.includes("workflowDefinition: workflowDefinitionSnapshot"));
   assert.ok(appSource.includes("metadata?.workflowId"));
   assert.ok(appSource.includes("metadata?.workflowDefinition"));
   assert.ok(appSource.includes("const snapshotWorkflow = saved ??"));
   assert.ok(appSource.includes("openWorkflowCanvas(definition, snapshotWorkflow)"));
-  assert.ok(appSource.includes("workflowTitle?: string"));
+  assert.match(metadataSource, /workflowTitle\?: string/u);
   assert.ok(appSource.includes("workflowTitle: savedWorkflowForRun.name"));
   assert.ok(appSource.includes("async function restoreLatestWorkflowRun"));
   assert.ok(appSource.includes("void restoreLatestWorkflowRun(workflow, definition)"));

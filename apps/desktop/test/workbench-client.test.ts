@@ -103,6 +103,29 @@ test("desktop WorkbenchClient adapts conversations, workflows and file actions t
   assert.equal((calls.at(-1)?.args?.message as { type?: string } | undefined)?.type, "run.emergency_stop");
 });
 
+test("desktop WorkbenchClient reads recoverable attempts without invoking mutations", async () => {
+  const calls: string[] = [];
+  const bridge = {
+    async invoke<T>(command: string) {
+      calls.push(command);
+      if (command === "list_recoverable_attempts") return [
+        { run_id: "r1", node_key: "image", idempotency_key: "r1:image:1", status: "running", provider_task_id: "provider-1", updated_at: "2026-01-01T00:00:00Z" },
+        { run_id: "r2", node_key: "video", idempotency_key: "r2:video:1", status: "submitted", provider_task_id: "provider-2", updated_at: "2026-01-01T00:01:00Z" },
+        { run_id: "r3", node_key: "bad", idempotency_key: "r3:bad:1", status: "unknown", provider_task_id: "provider-3", updated_at: "2026-01-01T00:02:00Z" },
+        { run_id: "r4", node_key: "missing", idempotency_key: "r4:missing:1", status: "queued", provider_task_id: "", updated_at: "2026-01-01T00:03:00Z" },
+      ] as T;
+      return undefined as T;
+    },
+    async listen() { return () => undefined; },
+  };
+  const client = createDesktopWorkbenchClient(bridge, { go: () => undefined, replace: () => undefined, current: () => "/dashboard" });
+  assert.deepEqual(await client.runs.recoverableAttempts?.(), [
+    { runId: "r1", nodeKey: "image", idempotencyKey: "r1:image:1", status: "running", providerTaskId: "provider-1", updatedAt: "2026-01-01T00:00:00Z" },
+    { runId: "r2", nodeKey: "video", idempotencyKey: "r2:video:1", status: "submitted", providerTaskId: "provider-2", updatedAt: "2026-01-01T00:01:00Z" },
+  ]);
+  assert.deepEqual(calls, ["list_recoverable_attempts"]);
+});
+
 test("desktop WorkbenchClient restores UIMessage parts without projecting away metadata or media", async () => {
   const bridge = {
     async invoke<T>(command: string) {
@@ -336,6 +359,29 @@ test("desktop WorkbenchClient streams text, tool, usage, cancellation and termin
   ]);
   dispose();
   assert.equal(listener, undefined);
+});
+
+test("desktop WorkbenchClient disposes a late run listener registration", async () => {
+  let listener: ((payload: { raw: string }) => void) | undefined;
+  let resolveListen!: (unlisten: () => void) => void;
+  let unlistenCalls = 0;
+  const bridge = {
+    async invoke<T>() { return undefined as T; },
+    async listen<T>(_event: string, callback: (payload: T) => void) {
+      listener = callback as unknown as (payload: { raw: string }) => void;
+      return new Promise<() => void>((resolve) => { resolveListen = resolve; });
+    },
+  };
+  const client = createDesktopWorkbenchClient(bridge, { go: () => undefined, replace: () => undefined, current: () => "/dashboard/ai" });
+  const events: unknown[] = [];
+  const dispose = client.runs.subscribe("late-run", (event) => events.push(event));
+  dispose();
+  resolveListen(() => { unlistenCalls += 1; });
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  assert.equal(unlistenCalls, 1);
+  const body = JSON.stringify({ version: 1, data: { event: { runId: "late-run", event: "text_delta", delta: "ignored" } } });
+  listener?.({ raw: `${Buffer.byteLength(body, "utf8")}:${body}` });
+  assert.deepEqual(events, []);
 });
 
 test("desktop WorkbenchClient routes Obsidian index and search through host RPC", async () => {

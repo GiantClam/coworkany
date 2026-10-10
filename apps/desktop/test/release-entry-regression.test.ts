@@ -6,7 +6,7 @@ import { isWorkbenchSessionPath, workbenchSessionScope, WORKBENCH_ROUTE_MANIFEST
 import { resolveDesktopRunAction } from "../src/route-actions";
 
 type EntryContract = {
-  readonly surface: "home" | "conversation" | "media" | "workflow" | "library" | "settings";
+  readonly surface: "home" | "office" | "conversation" | "media" | "workflow" | "library" | "settings";
   readonly sessionScope?: string;
 };
 
@@ -16,6 +16,7 @@ type EntryContract = {
  */
 const ENTRY_CONTRACTS: Readonly<Record<string, EntryContract>> = {
   "/dashboard": { surface: "home" },
+  "/dashboard/office": { surface: "office" },
   "/dashboard/ai": { surface: "conversation" },
   "/dashboard/ai?entry=consulting-advisor": { surface: "conversation", sessionScope: "entry:consulting-advisor" },
   "/dashboard/ai?agent=executive-brand&entry=consulting-advisor": { surface: "conversation", sessionScope: "executive-brand" },
@@ -54,6 +55,7 @@ test("desktop route selection keeps every contracted surface mounted", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
   const expectedSurfaceMarkers: Record<EntryContract["surface"], string[]> = {
     home: ["const isHomeRoute = selected.path === \"/dashboard\"", "<HomeEntryGroups"],
+    office: ["const isVirtualOfficeRoute = selected.path === \"/dashboard/office\"", "<DesktopVirtualOffice"],
     conversation: ["selected.mode === \"chat\" || selected.mode === \"writer\"", "<DesktopConversationWorkspace"],
     media: ["selected.path === \"/dashboard/image-assistant\" || selected.path === \"/dashboard/video\" || selected.path === \"/dashboard/capabilities\"", "<DesktopMediaWorkspace"],
     workflow: ["selected.path === \"/dashboard/workflows\"", "<DesktopWorkflowWorkspace", "<WorkbenchWorkflowDirectory"],

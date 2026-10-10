@@ -59,3 +59,25 @@ test("workflow persistence and artifact evidence use the typed desktop service s
   assert.doesNotMatch(host, /from ["']\.\/storage["']/u);
   assert.doesNotMatch(host, /from ["']\.\/artifacts["']/u);
 });
+
+test("virtual office stays behind the desktop home and injected reader seam", () => {
+  const app = readFileSync(join(desktopRoot, "src", "App.tsx"), "utf8");
+  const home = readFileSync(join(desktopRoot, "src", "home", "DesktopHome.tsx"), "utf8");
+  const composition = readFileSync(join(desktopRoot, "src", "virtual-office", "office-composition.ts"), "utf8");
+  assert.match(app, /createAgentDirectoryReader/u);
+  assert.match(app, /agentDirectoryReader/u);
+  assert.match(app, /<DesktopHome/u);
+  assert.doesNotMatch(app, /from ["']pixi\.js["']/u);
+  assert.match(home, /VirtualOfficeHome/u);
+  assert.match(composition, /agentDirectoryReader/u);
+  assert.match(composition, /createRoleRunAdapter/u);
+  assert.match(composition, /enabledOfficeRoles/u);
+  assert.match(composition, /createAgentDirectoryHealthSource/u);
+});
+
+test("Pixi scene stays renderer-only", () => {
+  const scene = readFileSync(join(desktopRoot, "src", "virtual-office", "office-scene.ts"), "utf8");
+  assert.doesNotMatch(scene, /WorkbenchClient|tauriBridge|storage|navigation\.ts/u);
+  assert.match(scene, /OfficeSnapshot/u);
+  assert.match(scene, /onActivate/u);
+});

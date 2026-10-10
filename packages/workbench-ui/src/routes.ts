@@ -57,6 +57,7 @@ export const WORKBENCH_HOME_COPY = {
 /** Canonical retained dashboard routes. SaaS and Tauri adapters consume this manifest. */
 export const WORKBENCH_ROUTE_MANIFEST: readonly WorkbenchRoute[] = [
   { path: "/dashboard", label: { zh: "首页", en: "Home" }, description: { zh: "工作台按能力统一组织。顾问负责策略与增长，写作负责多平台内容生产，图片助手负责图片生成与画布精修。", en: "A capability-oriented AI marketing workspace for strategy, writing, image generation, and execution." }, mode: "home", glyph: "⌂" },
+  { path: "/dashboard/office", label: { zh: "虚拟办公室", en: "Virtual Office" }, description: { zh: "查看角色状态、任务繁忙程度和最近成果", en: "Inspect role status, workload, and recent work" }, mode: "home", section: { zh: "工作空间", en: "Workspace" }, glyph: "⌂" },
   // Keep the visible copy identical to the online AI-entry surface. OpenCode
   // remains the desktop transport, but it is an implementation detail rather
   // than a different user-facing route description.

@@ -20,6 +20,7 @@ import type {
   MetricsQueryResult,
   RunMetrics,
   RunMetricCount,
+  WorkbenchRunAttemptSummary,
 } from "@coworkany/workbench-client";
 import { createDesktopRunTransport, createDesktopUIMessage, desktopUIMessageStorage, desktopUIMessageText, parseDesktopUIMessage } from "@coworkany/workbench-client";
 import type { DesktopUIMessage } from "@coworkany/workbench-client";
@@ -35,6 +36,7 @@ type DesktopWorkflowAiOperationGroupRow = { id: string; conversation_id: string;
 type DesktopArtifactRow = { id: string; relative_path: string; mime_type: string; byte_length: number; sha256: string; created_at: string; available?: boolean };
 type DesktopRunRow = { id: string; conversation_id?: string | null; status: WorkbenchRun["status"] | string; model?: string | null; started_at: string; finished_at?: string | null };
 type DesktopRunDetail = { run: DesktopRunRow; nodes: Array<{ node_key: string; status: string; output_json?: string | null; updated_at: string }>; events: Array<{ sequence: number; event_type: string; payload_json: string; created_at: string }>; usage: Array<{ provider?: string | null; model: string; input_tokens?: number | null; output_tokens?: number | null; provider_cost?: number | null; estimated_cost?: number | null; created_at: string }> };
+type DesktopRunAttemptRow = { run_id?: unknown; node_key?: unknown; idempotency_key?: unknown; status?: unknown; provider_task_id?: unknown; updated_at?: unknown };
 type DesktopKnowledgeIndex = { generation: number; documents: number; chunks: number; indexPath: string; semantic: boolean; embeddingModel?: string; embeddingDimension?: number; watcher?: string };
 type DesktopKnowledgeResult = { chunkId: string; documentPath: string; heading?: string; excerpt: string; score?: number; lineStart?: number; lineEnd?: number };
 type DesktopMetricCount = { total: number; completed: number; failed: number; rejected: number; running?: number };
@@ -161,6 +163,12 @@ function toWorkbenchRunDetail(detail: DesktopRunDetail): WorkbenchRunDetail {
     events: detail.events.map((event) => ({ sequence: event.sequence, eventType: event.event_type, payloadJson: event.payload_json, createdAt: event.created_at })),
     usage: detail.usage.map((item) => ({ provider: item.provider, model: item.model, inputTokens: item.input_tokens, outputTokens: item.output_tokens, providerCost: item.provider_cost, estimatedCost: item.estimated_cost, createdAt: item.created_at })),
   };
+}
+
+function toWorkbenchRunAttempt(row: DesktopRunAttemptRow): WorkbenchRunAttemptSummary | null {
+  const statuses = ["queued", "running", "submitted", "download_failed"] as const;
+  if (typeof row.run_id !== "string" || !row.run_id || typeof row.node_key !== "string" || !row.node_key || typeof row.idempotency_key !== "string" || !row.idempotency_key || typeof row.provider_task_id !== "string" || !row.provider_task_id || typeof row.updated_at !== "string" || !row.updated_at || !statuses.includes(row.status as typeof statuses[number])) return null;
+  return { runId: row.run_id, nodeKey: row.node_key, idempotencyKey: row.idempotency_key, status: row.status as typeof statuses[number], providerTaskId: row.provider_task_id, updatedAt: row.updated_at };
 }
 
 function toWorkbenchKnowledgeIndex(value: DesktopKnowledgeIndex): WorkbenchKnowledgeIndex {
@@ -329,8 +337,10 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
     },
     subscribe(runId: string, onEvent: (event: WorkbenchRunEvent) => void) {
       let dispose: (() => void) | undefined;
+      let disposed = false;
       const activeToolCallIds = new Map<string, string>();
       void bridge.listen<{ raw: string }>("desktop://runtime-response", (payload) => {
+        if (disposed) return;
         try {
           const separator = payload.raw.indexOf(":");
           const frame = JSON.parse(payload.raw.slice(separator + 1)) as { data?: { event?: Record<string, unknown> } };
@@ -394,8 +404,19 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
             });
           }
         } catch { /* malformed frames remain in host diagnostics */ }
-      }).then((unlisten) => { dispose = unlisten; }).catch(() => undefined);
-      return () => dispose?.();
+      }).then((unlisten) => {
+        if (disposed) unlisten();
+        else dispose = unlisten;
+      }).catch(() => undefined);
+      return () => {
+        disposed = true;
+        dispose?.();
+        dispose = undefined;
+      };
+    },
+    async recoverableAttempts(): Promise<readonly WorkbenchRunAttemptSummary[]> {
+      const rows = await bridge.invoke<DesktopRunAttemptRow[]>("list_recoverable_attempts");
+      return rows.map(toWorkbenchRunAttempt).filter((row): row is WorkbenchRunAttemptSummary => row !== null);
     },
   };
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the current placeholder virtual-office scene with a warm 2.5D island office whose back-facing chibi characters, desks, displays, and bone animations are independently generated, approved, validated, and rendered without changing business-state ownership.
+**Goal:** Replace the current placeholder virtual-office scene with a warm 2.5D island office whose approved back-facing chibi characters, desks, displays, and bone animations are independently validated and rendered without changing business-state ownership.
 
 **Architecture:** Keep `OfficeStore` and the existing React fallback as the complete business and accessibility surface. Add a renderer-only visual-state resolver and a layered Pixi scene: background, desk, display, rigged character, and status interaction layers. Versioned assets are described by a manifest and are loaded lazily; every generated image is approved independently before it is copied into the production asset directory.
 
@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Image assets require separate user confirmation before integration.
+- All image families in the approval ledger have now received separate user confirmation; integration still requires runtime integrity checks before files enter `apps/desktop/public/virtual-office/v1/`.
 - The final art direction is a warm 2.5D cartoon office with a seven-station island layout.
 - Characters are big-headed, short-bodied, and shown from behind while working.
 - Character motion uses the gentle-loop direction: `idle`, `walk`, `work`, `thinking`, `waiting`, `completed`, and `error`.
@@ -21,6 +21,13 @@
 - Pixi remains lazy-loaded and excluded from the static entry chunk.
 - Existing navigation, bilingual labels, recent-work limits, reduced-motion, hidden-window, and idle-frame policies must not regress.
 - Current release verification is macOS-focused; do not claim Windows release readiness.
+
+## Current execution checkpoint
+
+- Approved source drafts are immutable inputs under `docs/superpowers/assets/drafts/2026-10-10-virtual-studio/`.
+- The approval ledger records `approved` for the complete background, character source atlas, all seven 8-view turnarounds, desk variants, display source art, rig preview + animation JSON, and composite preview.
+- `docs/superpowers/assets/drafts/2026-10-10-virtual-studio/rig-animation-data-v1.json` is the exact normalized keyframe source for the renderer adapter; it is not a Spine/DragonBones file.
+- Implementation starts with runtime asset conversion and manifest work. No approved draft is copied into the public directory until the conversion and verifier tests pass.
 
 ---
 
@@ -34,6 +41,7 @@
 - `apps/desktop/src/virtual-office/OfficeCanvasEnhancement.tsx` — pass the projected snapshot and visual-state callbacks into the new scene contract.
 - `apps/desktop/src/virtual-office/virtual-office.css` — update scene sizing, responsive island rail, and fallback spacing while preserving existing semantic card styles.
 - `apps/desktop/public/virtual-office/v1/manifest.json` — replace the placeholder asset entries only after individual image approvals and integrity checks.
+- `apps/desktop/package.json` — expose the deterministic `build:virtual-office-assets` conversion command.
 - `apps/desktop/scripts/verify-virtual-office-assets.mjs` — validate rig metadata, transparent assets, animation names, dimensions, and hash values.
 - `apps/desktop/scripts/verify-virtual-office-bundle.mjs` — retain static/dynamic Pixi bundle assertions and add the new renderer module names.
 
@@ -56,22 +64,22 @@
 
 ---
 
-## Task 0: Establish the image approval gate
+## Task 0: Reconcile the completed image approval gate
 
 **Files:**
-- Create: `docs/superpowers/assets/2026-10-10-virtual-studio-asset-approval.md`
-- Create: `docs/superpowers/assets/README.md`
-- Do not modify: `apps/desktop/public/virtual-office/v1/` until an asset is individually approved.
+- Modify: `docs/superpowers/assets/2026-10-10-virtual-studio-asset-approval.md`
+- Read: `docs/superpowers/specs/2026-10-10-virtual-studio-redesign-design.md`
+- Do not modify: `apps/desktop/public/virtual-office/v1/` until the runtime conversion checks pass.
 
 **Interfaces:**
-- Produces an approval ledger with one row per generated asset family: background, characters, desks, displays, rig preview/data, and composite preview.
-- Each row records the generated file path, dimensions, prompt/version, visual review result, and explicit user approval date.
+- Consumes the already approved ledger and preserves one row per generated asset family: background, characters, desks, displays, rig preview/data, and composite preview.
+- Produces no new art and does not infer approval from a continuation message; all rows must retain their explicit approval date.
 
-- [ ] **Step 1: Write the approval ledger template**
+- [x] **Step 1: Record the explicit approvals**
 
-  Add a table with the exact states `not-started`, `generated`, `revision-requested`, `approved`, and `integrated`. State that `approved` is required before an asset enters `public/virtual-office/v1/`.
+  Confirm that the ledger contains the exact states `not-started`, `generated`, `revision-requested`, `approved`, and `integrated`, and that each approved row has a dated user decision. The current ledger is the source of truth; do not duplicate it in another tracker.
 
-- [ ] **Step 2: Verify the gate is explicit**
+- [x] **Step 2: Verify the gate is explicit**
 
   Run:
 
@@ -79,80 +87,89 @@
   rg -n "not-started|revision-requested|approved|integrated|public/virtual-office/v1" docs/superpowers/assets/README.md docs/superpowers/assets/2026-10-10-virtual-studio-asset-approval.md
   ```
 
-  Expected: all five states and the production asset path appear in the output.
+  Expected: all five states and the production asset path appear in the output, with no approved row missing a date.
 
-- [ ] **Step 3: Commit the gate**
+- [x] **Step 3: Commit the design/approval records**
 
   ```bash
-  git add docs/superpowers/assets
-  git commit -m "Define independent virtual studio asset approval gate"
+  git add -f docs/superpowers/specs/2026-10-10-virtual-studio-redesign-design.md
+  git commit -m "docs: lock virtual studio redesign plan"
   ```
 
-## Task 1: Generate and individually approve the visual asset families
+## Task 1: Convert the approved visual asset families into runtime inputs
 
 **Files:**
-- Create approved drafts under: `docs/superpowers/assets/drafts/2026-10-10-virtual-studio/`
-- Integrate only approved files under: `apps/desktop/public/virtual-office/v1/`
+- Read approved drafts under: `docs/superpowers/assets/drafts/2026-10-10-virtual-studio/`
+- Create: `apps/desktop/scripts/build-virtual-office-assets.mjs`
+- Create: `apps/desktop/test/virtual-office-asset-pipeline.test.ts`
+- Integrate only after checks under: `apps/desktop/public/virtual-office/v1/`
 - Modify: `docs/superpowers/assets/2026-10-10-virtual-studio-asset-approval.md`
 
 **Interfaces:**
-- Produces independently inspectable PNG/WebP sources and a composite preview.
-- The approved character family produces a skin atlas plus the rig texture regions required by `character-rig.ts`.
-- The approved desk and display families expose stable IDs consumed by the manifest.
+- Consumes exactly these approved inputs: `complete-studio-background-v1.png`, `characters-v1.png`, seven `character-*-turnaround-v1.png` sheets, `desk-state-variants-v1.png`, `display-source-art-v1.png`, and `rig-animation-data-v1.json`.
+- Produces deterministic WebP/JSON runtime files: `office.webp`, `characters.webp`, `workstations.webp`, `workstations-front.webp`, `displays.webp`, `rig-animation-data.json`, and a manifest with hashes.
+- Uses the repository's existing `sharp@0.35.3` dependency; the script must fail on a missing input, a non-RGBA source, or an unexpected source dimension rather than silently substituting art.
 
-- [ ] **Step 1: Generate the background draft**
+- [x] **Step 1: Verify the approved source set**
 
-  Use the image-generation tool with a prompt that specifies a warm 2.5D cartoon office, seven distinct island workstations, empty chairs / character slots, soft cream and walnut palette, clean negative space behind desks, no text, no logos, and no characters. Save the result as a draft and mark only the background row `generated`.
+  Read the ledger and assert that all seven source families are `approved`. Check the source dimensions and alpha corners before conversion; do not regenerate or overwrite any draft.
 
-- [ ] **Step 2: Pause for background approval**
+- [x] **Step 2: Preserve the approval boundary**
 
-  Show the generated background image and ask for approval or a concrete revision. If revision is requested, generate a new draft filename; never overwrite the prior draft. Do not continue to the next asset family until the user marks the background approved.
+  Keep generated drafts outside the public directory until the pipeline and manifest tests pass. A future revision must use a new filename and a new ledger row; this task does not regenerate approved art.
 
-- [ ] **Step 3: Generate the character family**
+- [ ] **Step 3: Implement the deterministic conversion script**
 
-  Generate transparent back-facing big-head/short-body character source art with a shared silhouette, seven role accent colors, seven small role props, and clear arm/hand separation for rigging. Include neutral, work, thinking, and walking pose references. Mark the character row `generated` only after the files are inspectable.
+  In `build-virtual-office-assets.mjs`, use `sharp` to:
 
-- [ ] **Step 4: Pause for character approval**
+  1. keep the background at 2172 × 724 RGBA and encode it as lossless WebP;
+  2. crop the seven full-body character columns from `characters-v1.png` using the fixed source bands `[0,315), [315,630), [630,945), [945,1260), [1260,1575), [1575,1890), [1890,2203)` and place each role in a 128 × 128 transparent cell;
+  3. crop the three desk variants from `desk-state-variants-v1.png` using 724-pixel bands, derive a desk shell from the lower 430 pixels, derive a front-edge overlay from the lower 180 pixels, and duplicate each state across the seven role columns;
+  4. preserve `display-source-art-v1.png` as a 1536 × 1024 transparent WebP whose quadrants are described by manifest regions;
+  5. copy the approved rig JSON to `rig-animation-data.json` without changing its bone or clip names;
+  6. write the manifest using stable role order `ai-chat`, `agent-center`, `ppt-expert`, `workflow-operator`, `writer`, `image-creator`, `video-producer`, and SHA-256 each output.
 
-  Show the character sheet and transparent cutouts individually. Accept approval or revision for this family only; do not infer approval from the background decision.
+- [ ] **Step 4: Add pipeline tests before running conversion**
 
-- [ ] **Step 5: Generate the desk family**
+  Add tests that run the script into a temporary directory and assert output names, dimensions, alpha-capable formats, role order, three desk states, seven rig clips, and stable hashes across two runs.
 
-  Generate transparent warm-wood desk art with a stable front edge, cable-safe silhouette, and three visual variants: available, active, offline. Keep the desk independent from the character lower body.
+- [ ] **Step 5: Run the conversion and inspect outputs**
 
-- [ ] **Step 6: Pause for desk approval**
+  Run `pnpm --dir apps/desktop run build:virtual-office-assets` and inspect each generated WebP on a white background. Expected output dimensions are `office.webp 2172×724`, `characters.webp 896×128`, `workstations.webp 896×288`, `workstations-front.webp 896×288`, and `displays.webp 1536×1024`.
 
-  Show the desk sheet and ask for a separate approval. Revise with a new draft filename if needed.
+- [ ] **Step 6: Expose and record the runtime paths**
 
-- [ ] **Step 7: Generate the display family**
+  Add the exact command `"build:virtual-office-assets": "node scripts/build-virtual-office-assets.mjs"` to `apps/desktop/package.json`. Update the ledger's approved rows with the exact generated production path only after the pipeline tests pass; leave rows at `approved` if any check fails.
 
-  Generate transparent main display, side display, stands, status lamp, and three screen-state treatments. Keep screen frames neutral enough to host dynamic UI copy.
+- [x] **Step 7: Preserve the separately approved display source**
 
-- [ ] **Step 8: Pause for display approval**
+  The display source is already approved and remains independently addressable through manifest regions; do not flatten it into the character atlas.
 
-  Show the display sheet and ask for a separate approval. Do not merge it into the scene before approval.
+- [x] **Step 8: Preserve the separately approved display decision**
 
-- [ ] **Step 9: Prepare the rig preview and animation data draft**
+  The ledger records the explicit approval date; implementation may consume it only through the generated `displays.webp` output.
 
-  Create a visual rig preview and JSON draft with the exact bones `root`, `torso`, `head`, `arm.l`, `arm.r`, `hand.l`, `hand.r`, and `prop`, plus clips `idle`, `walk`, `work`, `thinking`, `waiting`, `completed`, and `error`.
+- [x] **Step 9: Preserve the approved rig data**
 
-- [ ] **Step 10: Pause for rig approval**
+  Keep the approved visual preview and JSON companion immutable. The runtime adapter will consume the JSON in a later task.
 
-  Show the rig preview and a short animation contact sheet / preview. Record approval independently from the character art approval.
+- [x] **Step 10: Preserve the rig approval**
 
-- [ ] **Step 11: Generate the composite preview**
+  The ledger records the explicit approval date independently from the character source approval.
 
-  Compose the approved background, character, desk, and display layers into the seven-station island scene. Verify that each layer can be toggled off without changing the remaining layers.
+- [x] **Step 11: Preserve the approved composite reference**
 
-- [ ] **Step 12: Pause for composite approval**
+  Keep `complete-studio-ui-v1.png` as a visual reference only; runtime layers remain independently replaceable.
 
-  Show the composite preview. Only after approval mark each family `integrated` and copy approved files into the versioned public asset directory.
+- [x] **Step 12: Preserve the composite approval**
 
-- [ ] **Step 13: Commit approved assets and ledger**
+  The composite has explicit approval; do not mark rows `integrated` until the new runtime outputs pass all verifier checks.
+
+- [ ] **Step 13: Commit generated runtime assets and ledger**
 
   ```bash
-  git add docs/superpowers/assets apps/desktop/public/virtual-office/v1
-  git commit -m "Add individually approved virtual studio art assets"
+  git add apps/desktop/public/virtual-office/v1 docs/superpowers/assets/2026-10-10-virtual-studio-asset-approval.md apps/desktop/scripts/build-virtual-office-assets.mjs apps/desktop/test/virtual-office-asset-pipeline.test.ts
+  git commit -m "Add approved virtual studio runtime assets"
   ```
 
 ## Task 2: Lock the manifest and renderer-neutral visual contracts with tests first
@@ -172,18 +189,11 @@ export type OfficeVisualState =
   | "idle" | "walk" | "work" | "thinking"
   | "waiting" | "completed" | "error" | "offline";
 
-export interface OfficeRigClip {
-  readonly name: OfficeVisualState;
-  readonly loop: boolean;
-  readonly durationMs: number;
-}
-
-export interface OfficeRigManifest {
-  readonly bones: readonly string[];
-  readonly slots: readonly string[];
-  readonly skins: readonly string[];
-  readonly clips: readonly OfficeRigClip[];
-}
+export interface OfficeRigBone { readonly name: string; readonly parent: string | null; readonly length: number; readonly x: number; readonly y: number; readonly rotation: number }
+export interface OfficeRigSlot { readonly name: string; readonly bone: string; readonly zIndex: number; readonly blend: "normal" | "additive" }
+export interface OfficeRigKeyframe { readonly t: number; readonly x?: number; readonly y?: number; readonly rotation?: number; readonly opacity?: number }
+export interface OfficeRigClip { readonly durationMs: number; readonly loop: boolean; readonly tracks: Readonly<Record<string, readonly OfficeRigKeyframe[]>> }
+export interface OfficeRigManifest { readonly schemaVersion: number; readonly bones: readonly OfficeRigBone[]; readonly slots: readonly OfficeRigSlot[]; readonly textureRegions: Readonly<Record<string, string>>; readonly clips: Readonly<Record<string, OfficeRigClip>>; readonly reducedMotion: { readonly staticPoseByClip: Readonly<Record<string, string>>; readonly disableStatusFx: boolean } }
 
 export function resolveOfficeVisualState(
   state: Pick<OfficeRoleState, "status" | "available" | "activeCount" | "waitingUserCount">,
@@ -205,15 +215,15 @@ export function resolveOfficeVisualState(
 
 - [ ] **Step 3: Implement the pure resolver**
 
-  Implement the priority order in the interface above without importing Pixi, React, WorkbenchClient, or navigation. Keep the one-shot `walk` transition explicit in the returned state or a companion transition helper so repeated snapshots do not retrigger it.
+  Implement the priority order in the interface above without importing Pixi, React, WorkbenchClient, or navigation. The resolver maps persisted facts to `offline`, `error`, `waiting`, `completed`, `work`, and `idle`; the renderer-only animator may alternate `work` and `thinking` on a deterministic phase while `activeCount > 0`, and may play one-shot `walk` only when an anchor is first created or the role becomes available. Repeated snapshots must not fabricate new work or retrigger one-shot clips.
 
 - [ ] **Step 4: Add rig and manifest validation tests**
 
-  Assert the exact bone and slot names, all seven required clips, positive durations, loop flags (`idle`, `work`, `thinking`, `waiting` loop; `walk`, `completed`, `error` one-shot), and rejection of unknown clips or duplicate bones.
+  Assert the exact bone and slot names from `rig-animation-data-v1.json`, all seven required keys in `clips`, positive durations, loop flags (`idle`, `work`, `thinking`, `waiting` loop; `walk`, `completed`, `error` one-shot), and rejection of unknown clips or duplicate bones. Validate the `reducedMotion.staticPoseByClip` map and `disableStatusFx: true` as well.
 
 - [ ] **Step 5: Extend manifest and registry validation**
 
-  Add stable IDs for `studio-background`, `character-skins`, `character-rig`, `desks`, `displays`, and `display-effects`. Validate role IDs, transparent asset dimensions, rig JSON path, clip names, and SHA-256 values while preserving the existing v1 path and legacy compatibility checks until integration is complete.
+  Add stable IDs for `office`, `characters`, `workstations`, `workstations-front`, `displays`, and `rig`. Validate role IDs, per-asset cell dimensions, transparent asset dimensions, rig JSON path, clip names, and SHA-256 values while preserving the existing `/virtual-office/v1/` URL root.
 
 - [ ] **Step 6: Run focused tests**
 
@@ -265,7 +275,7 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
 - [ ] **Step 1: Write layer-order and replacement tests**
 
-  Assert that the scene creates the z-order `background < character < display < desk < status/hit`, that replacing a character skin leaves desk and display object identity unchanged, and that replacing a display texture leaves character rig state unchanged.
+  Assert that the scene creates the z-order `background < desk-back < character < display < desk-front < status/hit`, that replacing a character skin leaves desk and display object identity unchanged, and that replacing a display texture leaves character rig state unchanged.
 
 - [ ] **Step 2: Run the focused test and verify failure**
 
@@ -281,11 +291,11 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
 - [ ] **Step 4: Implement the desk layer**
 
-  Create one desk sprite per role anchor, select available/active/offline texture variants, and expose no business callbacks. Desk hit regions remain in the scene interaction layer.
+  Create one desk-back and one desk-front sprite per role anchor, select available/active/offline texture variants, and expose no business callbacks. Desk hit regions remain in the scene interaction layer.
 
 - [ ] **Step 5: Implement the display layer**
 
-  Create independent main and side display sprites, update screen copy from projected labels only, and render status glow from `OfficeVisualState`. Never import navigation or source adapters.
+  Create independent main and side display sprites, update screen copy from projected labels only, and render status glow from `OfficeVisualState`. Never import navigation or source adapters. The display layer must sit between the character and desk-front layers.
 
 - [ ] **Step 6: Implement the rig adapter and character layer**
 

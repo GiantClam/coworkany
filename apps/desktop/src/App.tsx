@@ -12,6 +12,12 @@ import type { DesktopArtifactData, DesktopMediaData, DesktopPreviewData, Desktop
 import type { ChatTransport } from "ai";
 import { isTauriBridgeAvailable, tauriBridge } from "./tauri";
 import { createDesktopChatTransport, createDesktopWorkbenchClient, type DesktopChatTransportOptions } from "./workbench-client";
+import { readDesktopTaskMetadata as parseDesktopTaskMetadata, type DesktopImageGenerationMetadata, type DesktopImageGenerationParameterValue, type DesktopTaskMetadata } from "./desktop-task-metadata";
+import { createAgentDirectoryReader } from "./virtual-office/agent-directory-reader";
+import { buildOfficeCapabilities, type MediaRuntimeReader } from "./virtual-office/capabilities";
+import { createOfficeComposition } from "./virtual-office/office-composition";
+import { DesktopHome } from "./home/DesktopHome";
+import { DesktopVirtualOffice } from "./home/DesktopVirtualOffice";
 import { useDesktopChat } from "./use-desktop-chat";
 import { buildAgencyAgentGroups } from "./agency-agent-catalog";
 import { closeDesktopMediaTab, createDesktopMediaTab, openDesktopMediaTab, syncDesktopMediaTabModel, type DesktopMediaTabState } from "./media-tabs";
@@ -289,18 +295,6 @@ type ArtifactRow = { id: string; relative_path: string; mime_type: string; byte_
 type LocalMediaPreview = { mimeType: string; data: number[] };
 type RunRow = { id: string; conversation_id?: string | null; status: string; model?: string | null; started_at: string; finished_at?: string | null };
 type RunDetail = { run: RunRow; nodes: Array<{ node_key: string; status: string; output_json?: string | null; updated_at: string }>; events: Array<{ sequence: number; event_type: string; payload_json: string; created_at: string }>; usage: Array<{ provider?: string | null; model: string; input_tokens?: number | null; output_tokens?: number | null; provider_cost?: number | null; estimated_cost?: number | null; created_at: string }> };
-type DesktopImageGenerationParameterValue = string | number | boolean;
-type DesktopImageGenerationMetadata = { prompt: string; parameters: Readonly<Record<string, DesktopImageGenerationParameterValue>> };
-type DesktopTaskMetadata = {
-  kind: "workflow" | "media" | "agent";
-  featureId?: string;
-  entryPath?: string;
-  imageGeneration?: DesktopImageGenerationMetadata;
-  workflowId?: string;
-  workflowTitle?: string;
-  definitionHash?: string;
-  workflowDefinition?: WorkflowDefinitionEnvelope;
-};
 
 function buildDesktopImageGenerationMetadata(prompt: string, inputs?: Record<string, unknown>): DesktopImageGenerationMetadata {
   const parameters: Record<string, DesktopImageGenerationParameterValue> = {};
@@ -328,16 +322,6 @@ function buildDesktopImageGenerationMetadata(prompt: string, inputs?: Record<str
   }
   if (referenceImageCount > 0) parameters.referenceImageCount = referenceImageCount;
   return { prompt: prompt.trim(), parameters };
-}
-
-function readDesktopImageGenerationMetadata(value: unknown): DesktopImageGenerationMetadata | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const raw = value as Record<string, unknown>;
-  const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
-  const parameters = raw.parameters && typeof raw.parameters === "object" && !Array.isArray(raw.parameters)
-    ? Object.fromEntries(Object.entries(raw.parameters as Record<string, unknown>).filter(([key, item]) => key !== "response_format" && key !== "responseFormat" && (typeof item === "string" || typeof item === "number" || typeof item === "boolean"))) as Record<string, DesktopImageGenerationParameterValue>
-    : {};
-  return prompt || Object.keys(parameters).length ? { prompt, parameters } : undefined;
 }
 
 async function resolveDesktopMediaSource(media: DesktopMediaData): Promise<WorkbenchMediaSource | null> {
@@ -539,6 +523,7 @@ function formatDateTime(value: string | undefined, locale: "zh" | "en") {
 
 const routeIconKeys: Record<string, string> = {
   "/dashboard": "home",
+  "/dashboard/office": "network",
   "/dashboard/ai": "chat",
   "/dashboard/ai?entry=consulting-advisor": "advisor",
   "/dashboard/ai?agent=executive-brand&entry=consulting-advisor": "advisor",
@@ -790,26 +775,20 @@ function desktopRunIsVisible(context: DesktopRunContext | undefined, path: strin
   return routeConversationId === context.conversationId || (routeConversationId === null && activeConversationId === context.conversationId);
 }
 
-function readDesktopTaskMetadata(detail: RunDetail): DesktopTaskMetadata | null {
-  const metadataEvent = detail.events.find((event) => event.event_type === "task_metadata");
-  if (!metadataEvent) return null;
-  try {
-    const payload = JSON.parse(metadataEvent.payload_json) as Record<string, unknown>;
-    if (payload.kind !== "workflow" && payload.kind !== "media" && payload.kind !== "agent") return null;
-    const imageGeneration = readDesktopImageGenerationMetadata(payload.imageGeneration);
-    return {
-      kind: payload.kind,
-      ...(typeof payload.featureId === "string" ? { featureId: payload.featureId } : {}),
-      ...(typeof payload.entryPath === "string" ? { entryPath: payload.entryPath } : {}),
-      ...(imageGeneration ? { imageGeneration } : {}),
-      ...(typeof payload.workflowId === "string" ? { workflowId: payload.workflowId } : {}),
-      ...(typeof payload.workflowTitle === "string" ? { workflowTitle: payload.workflowTitle } : {}),
-      ...(typeof payload.definitionHash === "string" ? { definitionHash: payload.definitionHash } : {}),
-      ...(isWorkflowDefinition(payload.workflowDefinition) ? { workflowDefinition: payload.workflowDefinition } : {}),
-    };
-  } catch {
-    return null;
-  }
+function readTaskMetadataFromRunDetail(detail: RunDetail): DesktopTaskMetadata | null {
+  return parseDesktopTaskMetadata({
+    run: {
+      id: detail.run.id,
+      conversationId: detail.run.conversation_id ?? "",
+      status: detail.run.status as WorkbenchRun["status"],
+      model: detail.run.model ?? undefined,
+      startedAt: detail.run.started_at,
+      finishedAt: detail.run.finished_at ?? undefined,
+    },
+    nodes: detail.nodes.map((node) => ({ nodeKey: node.node_key, status: node.status, outputJson: node.output_json, updatedAt: node.updated_at })),
+    events: detail.events.map((event) => ({ sequence: event.sequence, eventType: event.event_type, payloadJson: event.payload_json, createdAt: event.created_at })),
+    usage: detail.usage.map((item) => ({ provider: item.provider, model: item.model, inputTokens: item.input_tokens, outputTokens: item.output_tokens, providerCost: item.provider_cost, estimatedCost: item.estimated_cost, createdAt: item.created_at })),
+  });
 }
 
 function buildDesktopWorkflowNodeConfig(type: WorkflowAction, prompt: string, model: string, providerId = "local") {
@@ -3493,7 +3472,7 @@ function DesktopTaskCenterSurfaceContent({ runs, conversations, onNavigate: navi
     setEntryLoadingId(run.id);
     try {
       const runDetail = await onInspectRun(run.id);
-      const metadata = readDesktopTaskMetadata(runDetail);
+      const metadata = readTaskMetadataFromRunDetail(runDetail);
       const target = metadata?.entryPath || (run.conversation_id ? routeForConversationId(run.conversation_id) : null);
       if (target) onNavigate(target);
       else await inspect(run.id);
@@ -3839,6 +3818,7 @@ export function App() {
   const [runtimeStatus, setRuntimeStatus] = useState("检查本地运行环境…");
   const [runtimePhase, setRuntimePhase] = useState<DesktopBootstrapPhase>("bridge");
   const [runtimeReady, setRuntimeReady] = useState(false);
+  const runtimeProbeRef = useRef<RuntimeProbe | null>(null);
   const [shellReady, setShellReady] = useState(false);
   const [runStatus, setRunStatus] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -4217,6 +4197,34 @@ export function App() {
     replace: navigate,
     current: () => activePathRef.current,
   }), [navigate]);
+  const agentDirectoryReader = useMemo(() => createAgentDirectoryReader((command, args) => tauriBridge.invoke(command, args)), []);
+  const mediaRuntimeReader = useMemo<MediaRuntimeReader>(() => ({
+    read: async () => runtimeProbeRef.current,
+  }), []);
+  const [agentDirectoryReady, setAgentDirectoryReady] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void agentDirectoryReader.read({ refresh: true }).then((result) => {
+      if (active) setAgentDirectoryReady(result.status === "ready");
+    });
+    return () => { active = false; };
+  }, [agentDirectoryReader, runtimeReady]);
+  const officeCapabilities = useMemo(() => buildOfficeCapabilities({
+    routes: new Set(routes.map((route) => route.path.split("?", 1)[0])),
+    featureFlags: new Set(routes.some((route) => route.path.includes("executive-ppt")) ? ["ppt_generate"] : []),
+    runtime: { text: runtimeReady, agents: runtimeReady, workflows: routes.some((route) => route.path === "/dashboard/workflows") },
+    providers: {
+      image: supportsProviderCapability(providerForCapability(config, "image"), "image") && isMediaProviderConfigured(providerForCapability(config, "image")) ? "configured" : "unconfigured",
+      video: supportsProviderCapability(providerForCapability(config, "video"), "video") && isMediaProviderConfigured(providerForCapability(config, "video")) ? "configured" : "unconfigured",
+    },
+    agentDirectoryReady,
+  }), [agentDirectoryReady, config, routes, runtimeReady]);
+  const officeComposition = useMemo(() => createOfficeComposition({
+    client: workbenchClient,
+    capabilities: officeCapabilities,
+    agentDirectoryReader,
+    mediaRuntimeReader,
+  }), [agentDirectoryReader, mediaRuntimeReader, officeCapabilities, workbenchClient]);
   useEffect(() => {
     let cancelled = false;
     const unresolved = runs.filter((run) => !runMetadataById.has(run.id));
@@ -4224,7 +4232,7 @@ export function App() {
     void Promise.all(unresolved.map(async (run) => {
       try {
         const detail = toRunDetail(await workbenchClient.runs.inspect(run.id));
-        return [run.id, readDesktopTaskMetadata(detail)] as const;
+        return [run.id, readTaskMetadataFromRunDetail(detail)] as const;
       } catch {
         return [run.id, null] as const;
       }
@@ -4951,6 +4959,7 @@ export function App() {
          setRuntimePhase("runtime");
          setRuntimeStatus(locale === "zh" ? "正在读取桌面启动时的运行环境检查结果…" : "Reading the runtime checks completed during desktop startup…");
          const runtime = await tauriBridge.invoke<RuntimeProbe>("runtime_status");
+         runtimeProbeRef.current = runtime;
          if (migratedStored) {
            const currentConfig = configRef.current;
            const selectedRuntime = { ...currentConfig.runtime, ...(runtime.paths?.node ? { nodePath: runtime.paths.node } : {}), ...(runtime.paths?.opencode ? { opencodePath: runtime.paths.opencode } : {}), ...(runtime.paths?.python ? { pythonPath: runtime.paths.python } : {}), ...(runtime.paths?.host ? { hostPath: runtime.paths.host } : {}), ...(runtime.paths?.skills ? { skillsPath: runtime.paths.skills } : {}), ...(runtime.paths?.fonts ? { fontsPath: runtime.paths.fonts } : {}), ...(runtime.paths?.lancedb ? { lancedbPath: runtime.paths.lancedb } : {}), ...(runtime.paths?.embedding ? { embeddingPath: runtime.paths.embedding } : {}) };
@@ -5517,7 +5526,7 @@ export function App() {
       let startedPayload: Record<string, unknown> = {};
       try { startedPayload = started ? JSON.parse(started.payload_json) as Record<string, unknown> : {}; } catch { startedPayload = {}; }
       const definitionHash = typeof startedPayload.definitionHash === "string" ? startedPayload.definitionHash : "";
-      const metadata = readDesktopTaskMetadata(detail);
+      const metadata = readTaskMetadataFromRunDetail(detail);
       const saved = definitionHash
         ? (await workbenchClient.workflows.list()).find((workflow) => workflow.definition.definitionHash === definitionHash)
         : undefined;
@@ -5831,7 +5840,7 @@ export function App() {
       } catch {
         continue;
       }
-      const metadata = readDesktopTaskMetadata(detail);
+      const metadata = readTaskMetadataFromRunDetail(detail);
       if (metadata?.kind !== "workflow") continue;
       if (metadata.workflowId !== workflow.id && metadata.definitionHash !== definitionHash) continue;
       applyWorkflowRunDetail(detail, restoreToken);
@@ -5945,7 +5954,7 @@ export function App() {
     void (async () => {
       try {
         const detail = toRunDetail(await workbenchClient.runs.inspect(runId));
-        const metadata = readDesktopTaskMetadata(detail);
+        const metadata = readTaskMetadataFromRunDetail(detail);
         const saved = metadata?.workflowId
           ? savedWorkflows.find((workflow) => workflow.id === metadata.workflowId)
           : metadata?.definitionHash
@@ -6450,6 +6459,7 @@ export function App() {
 
   const immersivePage = selected.mode === "chat" || selected.mode === "writer" || selected.path === "/dashboard/image-assistant" || selected.path === "/dashboard/video" || selected.path === "/dashboard/workflows" || selected.path.includes("executive-ppt");
   const isHomeRoute = selected.path === "/dashboard";
+  const isVirtualOfficeRoute = selected.path === "/dashboard/office";
   const questionSessionId = questionSessionIdForRoute(activePath, conversations, availableQuestionSessionIds);
   const currentWorkflowRun = workflowCanvasKey ? workflowRunsRef.current.get(workflowCanvasKey) : undefined;
   const currentWorkflowRunId = currentWorkflowRun?.runId ?? null;
@@ -6483,16 +6493,17 @@ export function App() {
     <div className="shell" style={workbenchThemeStyle}>
       {showTopTip ? <DesktopTopTip message={topTipMessage} locale={locale} onDismiss={() => setDismissedTopTip(topTipMessage)} /> : null}
       <DesktopMediaHistoryContext.Provider value={mediaHistory}>
-      <WorkbenchShell title="Coworkany" brandMark={<img src="/brand/coworkany-icon-64.png" alt="Coworkany" width={40} height={40} />} navItems={sidebarRoutes.map((item) => ({ ...item, icon: <RouteIcon name={item.iconKey} /> }))} activePath={activePath} onNavigate={workbenchClient.navigation.go} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((current) => !current)} locale={locale} onLocaleChange={(nextLocale) => { if (nextLocale !== locale) setLocalePreference(nextLocale); }} onLocaleToggle={toggleLocale} localLabel={copy.localWorkspace} sessions={conversations.map((conversation) => ({ path: conversationRoute(conversation), title: conversation.title, updatedAt: formatDateTime(conversation.updated_at, locale), agentId: conversation.agent_id ?? undefined, status: runs.some((run) => run.conversation_id === conversation.id && run.status === "running") ? "running" as const : undefined }))} sessionsLabel={conversationScope === "entry:writer" ? (locale === "zh" ? "写作会话" : "Writing sessions") : conversationScope === "entry:image-assistant" ? (locale === "zh" ? "图片助手会话" : "Image assistant sessions") : locale === "zh" ? "最近会话" : "Recent chats"} activeSessionAgentId={conversationScope} activeSessionAgentLabel={activeAgentCard?.title ?? activeChatRoute.label} hideSessionScopes={["entry:image-assistant"]} newSessionLabel={locale === "zh" ? "新建会话" : "New chat"} onNewSession={() => void startNewConversation()}>
-      <section ref={workspaceRef} className={`workspace ${selected.path === "/dashboard" ? "workspace-home" : ""} ${immersivePage ? "workspace-immersive" : ""}`.trim()}>
-      {settingsOpen && <DesktopSettingsPanel config={config} locale={locale} localePreference={localePreference} copy={copy} onConfigChange={(nextConfig) => { void persistSettingsConfig(nextConfig); }} onDiscoverModels={discoverProviderModels} onImportProviders={importProvidersFromFile} onLocalePreferenceChange={updateSettingsLocalePreference} onClose={() => { void persistSettingsConfig({ ...configRef.current, locale: localePreference }, true); if (selected.path === "/dashboard/settings") workbenchClient.navigation.go("/dashboard"); setSettingsOpen(false); }} onSave={() => void saveSettings()} onRebuildVault={() => void rebuildVaultIndex()} onPickDirectory={(kind) => void pickDirectory(kind)} onRepairRuntime={() => { setRunStatus(locale === "zh" ? "正在导入离线运行时…" : "Importing offline runtime…"); void tauriBridge.invoke<RuntimeProbe>("repair_runtime", runtimeRepairOptions(config)).then((runtime) => { setRuntimeReady(runtime.ready); setRuntimePhase(runtime.ready ? "ready" : "error"); setRuntimeStatus(runtime.ready ? (locale === "zh" ? "运行环境就绪" : "Runtime ready") : (locale === "zh" ? "运行环境需要修复" : "Runtime needs repair")); setRunStatus(runtime.ready ? (locale === "zh" ? "已导入离线运行时并完成复检" : "Offline runtime imported and rechecked") : (locale === "zh" ? "运行时仍不完整" : "Runtime is still incomplete")); }).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "离线运行时导入失败" : "Offline runtime import failed"))); }} onExportDiagnostics={() => { setRunStatus(locale === "zh" ? "正在导出诊断包…" : "Exporting diagnostics…"); void tauriBridge.invoke<{ path: string }>("export_diagnostics").then((result) => setRunStatus(locale === "zh" ? `诊断包已导出：${result.path}` : `Diagnostics exported: ${result.path}`)).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "诊断包导出失败" : "Diagnostics export failed"))); }} status={runStatus} />}
-           {isHomeRoute ? <>
+      <WorkbenchShell title="Coworkany" brandMark={<img src="/brand/coworkany-icon-64.png" alt="Coworkany" width={40} height={40} />} navItems={sidebarRoutes.map((item) => ({ ...item, icon: <RouteIcon name={item.iconKey} /> }))} activePath={activePath} onNavigate={workbenchClient.navigation.go} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((current) => !current)} locale={locale} onLocaleChange={(nextLocale) => { if (nextLocale !== locale) setLocalePreference(nextLocale); }} onLocaleToggle={toggleLocale} sessions={conversations.map((conversation) => ({ path: conversationRoute(conversation), title: conversation.title, updatedAt: formatDateTime(conversation.updated_at, locale), agentId: conversation.agent_id ?? undefined, status: runs.some((run) => run.conversation_id === conversation.id && run.status === "running") ? "running" as const : undefined }))} sessionsLabel={conversationScope === "entry:writer" ? (locale === "zh" ? "写作会话" : "Writing sessions") : conversationScope === "entry:image-assistant" ? (locale === "zh" ? "图片助手会话" : "Image assistant sessions") : locale === "zh" ? "最近会话" : "Recent chats"} activeSessionAgentId={conversationScope} activeSessionAgentLabel={activeAgentCard?.title ?? activeChatRoute.label} hideSessionScopes={["entry:image-assistant"]} newSessionLabel={locale === "zh" ? "新建会话" : "New chat"} onNewSession={() => void startNewConversation()}>
+      <section ref={workspaceRef} className={`workspace ${selected.path === "/dashboard" ? "workspace-home" : ""} ${isVirtualOfficeRoute ? "workspace-virtual-office" : ""} ${immersivePage ? "workspace-immersive" : ""}`.trim()}>
+      {settingsOpen && <DesktopSettingsPanel config={config} locale={locale} localePreference={localePreference} copy={copy} onConfigChange={(nextConfig) => { void persistSettingsConfig(nextConfig); }} onDiscoverModels={discoverProviderModels} onImportProviders={importProvidersFromFile} onLocalePreferenceChange={updateSettingsLocalePreference} onClose={() => { void persistSettingsConfig({ ...configRef.current, locale: localePreference }, true); if (selected.path === "/dashboard/settings") workbenchClient.navigation.go("/dashboard"); setSettingsOpen(false); }} onSave={() => void saveSettings()} onRebuildVault={() => void rebuildVaultIndex()} onPickDirectory={(kind) => void pickDirectory(kind)} onRepairRuntime={() => { setRunStatus(locale === "zh" ? "正在导入离线运行时…" : "Importing offline runtime…"); void tauriBridge.invoke<RuntimeProbe>("repair_runtime", runtimeRepairOptions(config)).then((runtime) => { runtimeProbeRef.current = runtime; setRuntimeReady(runtime.ready); setRuntimePhase(runtime.ready ? "ready" : "error"); setRuntimeStatus(runtime.ready ? (locale === "zh" ? "运行环境就绪" : "Runtime ready") : (locale === "zh" ? "运行环境需要修复" : "Runtime needs repair")); setRunStatus(runtime.ready ? (locale === "zh" ? "已导入离线运行时并完成复检" : "Offline runtime imported and rechecked") : (locale === "zh" ? "运行时仍不完整" : "Runtime is still incomplete")); }).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "离线运行时导入失败" : "Offline runtime import failed"))); }} onExportDiagnostics={() => { setRunStatus(locale === "zh" ? "正在导出诊断包…" : "Exporting diagnostics…"); void tauriBridge.invoke<{ path: string }>("export_diagnostics").then((result) => setRunStatus(locale === "zh" ? `诊断包已导出：${result.path}` : `Diagnostics exported: ${result.path}`)).catch((error) => setRunStatus(error instanceof Error ? error.message : (locale === "zh" ? "诊断包导出失败" : "Diagnostics export failed"))); }} status={runStatus} />}
+           {isVirtualOfficeRoute ? <DesktopVirtualOffice composition={officeComposition} capabilities={officeCapabilities} navigation={workbenchClient.navigation} locale={locale} /> : null}
+           {isHomeRoute ? <DesktopHome composition={officeComposition} capabilities={officeCapabilities} navigation={workbenchClient.navigation} locale={locale}>
           <div className="home-shell"><div className="home-page-shell"><header className="home-topbar"><div className="home-topbar-status"><span className="public-signal" aria-hidden="true" /><span>{homeCopy.workspaceReady}</span></div><button type="button" className="home-credits-link" onClick={() => workbenchClient.navigation.go("/dashboard/usage")}><span className="home-credits-icon"><WorkbenchRouteIcon name="sparkles" size={14} /></span><span>{homeCopy.viewUsage}</span><WorkbenchRouteIcon name="arrowUpRight" size={15} /></button></header><main className="home-main"><section className="home-welcome"><div className="home-welcome-kicker">COWORKANY WORKSPACE</div><h1>{homeCopy.welcomePrefix}{homeCopy.welcomeDefaultName}<span className="home-welcome-mark" aria-hidden="true">✦</span></h1><p>{homeCopy.welcomeSubtitle}</p></section>
           <section className="home-chat-workspace"><div className="chat-composer"><WorkbenchPromptInput value={prompt} onValueChange={setPrompt} onSubmit={() => void runAgent()} attachments={attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mediaType: attachment.mediaType, status: attachment.status, error: attachment.error }))} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} models={activeModels.map((item) => ({ id: item, label: formatWorkbenchModelLabel(item, { zh: "本地模型", en: "Local model" }, locale), provider: locale === "zh" ? "已配置模型" : "Configured models" }))} model={activeModel} onModelChange={updateModel} reasoningEffort={reasoningEffort} onReasoningChange={updateReasoning} knowledgeBases={knowledgeBaseOptions} knowledgeEnabled={knowledgeContextEnabled} onKnowledgeToggle={() => setKnowledgeContextEnabled((current) => !current)} placeholder={copy.homePlaceholder} status={activeRunId ? "streaming" : "ready"} onStop={() => void cancelActiveRun()} locale={locale}><span className="sr-only" aria-live="polite">{localizeDesktopStatus(runStatus, locale)}</span></WorkbenchPromptInput></div></section>
           <HomeEntryGroups onNavigate={workbenchClient.navigation.go} locale={locale} /></main></div></div>
           <section className="recent-card"><div className="section-title"><span>{selected.path === "/dashboard/assets" ? (locale === "zh" ? "资产库" : "Asset library") : mode === "library" ? (locale === "zh" ? "本地工作流与会话" : "Local workflows and sessions") : (locale === "zh" ? "最近会话" : "Recent sessions")}</span><span className="muted">{selected.path === "/dashboard/assets" ? `${artifactRows.length} ${locale === "zh" ? "个产物" : "artifacts"}` : savedWorkflows.length ? `${savedWorkflows.length} ${locale === "zh" ? "个工作流" : "workflows"}` : ""}</span></div>{selected.path === "/dashboard/assets" ? (artifactRows.length ? <div className="conversation-list">{artifactRows.map((item) => <button key={item.id} className="conversation-row artifact-row" onClick={() => void workbenchClient.files.reveal(item.relative_path, item.mime_type)}><span>{item.relative_path}</span><small>{Math.ceil(item.byte_length / 1024)} KB · {item.mime_type}</small></button>)}</div> : <div className="empty-state"><strong>{locale === "zh" ? "还没有本地产物" : "No local artifacts yet"}</strong><p>{locale === "zh" ? "运行写作、PPT 或媒体任务后，文件会出现在这里。" : "Artifacts appear here after writing, PPT, or media runs."}</p></div>) : mode === "library" && savedWorkflows.length ? <div className="conversation-list">{savedWorkflows.map((item) => <div key={item.id} className="conversation-row"><span>{item.name}</span><small>{formatDateTime(item.updated_at, locale)}</small></div>)}</div> : homeMessages.length ? <div className="message-thread"><WorkbenchMessageSurface messages={homeMessages} locale={locale} pendingMessageId={activeRunId ? homeMessages.at(-1)?.id : undefined} onCopy={(message) => navigator.clipboard?.writeText(desktopUIMessageText(message))} onArtifactOpen={(artifact) => void workbenchClient.files.open(artifact.relativePath, artifact.mimeType)} onArtifactDownload={(artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (artifact) void workbenchClient.files.open(artifact.relative_path, artifact.mime_type); }} resolveMediaSource={resolveDesktopMediaSource} resolveArtifactSource={resolveDesktopArtifactSource} resolvePreviewSource={resolveDesktopPreviewSource} onPreviewDownload={(preview) => { const artifact = artifactRows.find((item) => item.id === preview.artifactId); if (artifact) return workbenchClient.files.open(artifact.relative_path, artifact.mime_type); if (preview.relativePath) return workbenchClient.files.open(preview.relativePath, preview.mimeType ?? "application/octet-stream"); }} onPreviewExport={(preview) => exportDesktopPreview(preview, (artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (!artifact) throw new Error("preview_export_artifact_missing"); return workbenchClient.files.open(artifact.relative_path, artifact.mime_type); })} onPreviewOpenExternal={openDesktopPreviewInBrowser} /></div> : conversations.length ? <div className="conversation-list">{conversations.map((item) => <button key={item.id} type="button" className="conversation-row" onClick={() => navigate(conversationRoute(item))}><span>{item.title}</span><small>{formatDateTime(item.updated_at, locale)}</small></button>)}</div> : <div className="empty-state"><div className="empty-icon">⌁</div><strong>{locale === "zh" ? "还没有本地会话" : "No local sessions yet"}</strong><p>{locale === "zh" ? "运行第一个任务后，文本、工具步骤和产物会显示在这里。" : "Text, tool steps, and artifacts will appear here after your first task."}</p></div>}</section>
            <section className="stats-card"><div className="section-title"><span>{locale === "zh" ? "本地状态" : "Local status"}</span><span className="muted">{locale === "zh" ? "只统计，不扣费" : "Stats only; no billing"}</span></div><div className="stats-grid"><div><strong>{taskCount}</strong><span>{locale === "zh" ? "本地任务" : "Local tasks"}</span></div><div><strong>{tokenCount}</strong><span>Token</span></div><div><strong>{artifactCount}</strong><span>{locale === "zh" ? "产物" : "Artifacts"}</span></div></div></section>
-         </> : null}
+         </DesktopHome> : null}
 
         {selected.path !== "/dashboard" && (selected.mode === "chat" || selected.mode === "writer") ? <DesktopConversationWorkspace route={activeChatRoute} prompt={prompt} onPromptChange={setPrompt} runStatus={runStatus} activeRunId={activeRunId} onGenerateImages={(article) => { const articleText = desktopUIMessageText(article).trim(); if (!articleText) return; void runAgent(`${locale === "zh" ? "基于以下文章生成配图，并将图片产物写入当前项目目录。" : "Generate images for the following article and write the image artifacts into the current project directory."}\n\n${articleText}`, "image_generate", undefined, undefined, undefined, locale === "zh" ? "为所选文章生成配图" : "Generate images for the selected article", article.id); }} onCancel={() => void cancelActiveRun()} onNewConversation={startNewConversation} knowledgeBases={knowledgeBaseOptions} knowledgeEnabled={knowledgeContextEnabled} onKnowledgeToggle={() => setKnowledgeContextEnabled((current) => !current)} onPrepareExecutionPrompt={prepareChatExecutionPrompt} assistantText={assistantText} onAssistantTextChange={setAssistantText} onSaveDraft={saveWriterDraft} onExportDraft={exportWriterDraft} messages={conversationMessages} conversationId={conversationIdFromPath(activePath)} chatTransport={desktopChatTransport} chatReady={Boolean(conversationIdFromPath(activePath))} providerId={textProvider.id} conversations={conversations} onNavigate={workbenchClient.navigation.go} onArtifactOpen={(relativePath, mimeType) => workbenchClient.files.open(relativePath, mimeType)} onArtifactDownload={(artifactId) => { const artifact = artifactRows.find((item) => item.id === artifactId); if (!artifact) throw new Error("preview_export_artifact_missing"); return workbenchClient.files.open(artifact.relative_path, artifact.mime_type); }} model={textProvider.model} models={modelOptionsForProvider(config, textProvider) ?? []} configuredModels={textModelOptions} modelSelection={configuredTextModelSelectionId(textProvider.id, textProvider.model)} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} attachments={attachments} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} onModelChange={updateChatTextModel} onReasoningChange={updateReasoning} onSkillChange={setSkillId} onReachTop={(viewport) => { const id = conversationIdFromPath(activePath); if (id) loadOlderConversationMessages(id, viewport); }} conversationScrollTop={conversationScrollRestore} onConversationScroll={persistActiveConversationScroll} onChatFinish={persistFinishedChatMessage} locale={locale} /> : selected.path === "/dashboard/workflows" ? (workflowBuilderOpen ? <DesktopWorkflowWorkspace workflowId={workflowCanvasKey ?? "draft:workflow"} workbenchClient={workbenchClient} createAgentChatTransport={createDesktopChatTransportWithOverrides} configuredProviders={configuredProviderEntries(config).map(([, provider]) => provider)} goldenTemplates={aiGoldenTemplates} textProvider={providerForCapability(config, "text")} onEnsureWorkflow={ensureCurrentWorkflowId} route={selected} onBack={() => setWorkflowBuilderOpen(false)} prompt={prompt} onPromptChange={setPrompt} runStatus={workflowRunStatus} activeRunId={currentWorkflowRunId} onRun={(definition) => void runAgent(undefined, undefined, undefined, definition)} onRerun={(definition) => void runAgent(undefined, undefined, undefined, definition)} onContinue={() => void continueWorkflowFromCanvas()} onCancel={() => void cancelActiveRun()} savedWorkflows={savedWorkflows} workflowAction={workflowAction} onWorkflowAction={setWorkflowAction} definition={workflowDefinition} onDefinitionChange={setWorkflowDefinition} workflowMetadata={workflowMetadata} onWorkflowMetaChange={(patch) => setWorkflowMetadata((current) => ({ ...current, ...patch }))} onSave={async (definition) => Boolean(await saveCurrentWorkflow("manual", definition))} onExport={(definition) => exportCurrentWorkflow(definition)} onImport={(file) => importWorkflow(file)} model={activeModel} models={activeModels} modelForNode={(nodeType, providerId) => providerForWorkflowNode(nodeType, providerId).model} modelsForNode={(nodeType, providerId) => modelOptionsForProvider(config, providerForWorkflowNode(nodeType, providerId)) ?? []} providersForNode={(nodeType) => Object.values(config.providers ?? {}).filter((provider) => supportsProviderCapability(provider, capabilityForWorkflowAction(nodeType)) || (nodeType === "agent_execute" && provider.source?.trim().toLowerCase() === "runninghub" && provider.workflows?.some((workflow) => workflow.capability === "audio_transcription")))} agentOptions={workflowAgentOptions} loadVoicesForProvider={loadDesktopVoices} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} providerConfiguredForNode={(nodeType) => isMediaProviderConfigured(providerForCapability(config, capabilityForWorkflowAction(nodeType))) || (nodeType === "agent_execute" && Object.values(config.providers ?? {}).some((provider) => provider.source?.trim().toLowerCase() === "runninghub" && provider.workflows?.some((workflow) => workflow.capability === "audio_transcription")))} onSelectWorkflowFiles={selectWorkflowFiles} nodeExecutionSnapshots={workflowNodeSnapshots} locale={locale} /> : <WorkbenchWorkflowDirectory locale={locale} workflows={workflowDirectoryWorkflows} templates={workflowDirectoryTemplates} recentRuns={workflowDirectoryRuns} actionAvailability={{ duplicate: true, delete: true }} onAction={(action) => void handleWorkflowDirectoryAction(action)} />) : (selected.path === "/dashboard/image-assistant" || selected.path === "/dashboard/video" || selected.path === "/dashboard/capabilities") ? <DesktopMediaWorkspace route={selected} prompt={prompt} onPromptChange={setPrompt} runStatus={runStatus} activeRunId={activeRunId} onRun={(override, featureId, mediaInputs) => void runAgent(override, featureId, mediaInputs)} onCancel={() => void cancelActiveRun()} workflowAction={workflowAction} onWorkflowAction={setWorkflowAction} artifactRows={artifactRows} providerConfigured={isMediaProviderConfigured(activeProvider)} onOpenSettings={() => { setSettingsOpen(true); workbenchClient.navigation.go("/dashboard/settings"); }} onOpenTasks={() => workbenchClient.navigation.go("/dashboard/tasks")} onArtifactReveal={(relativePath, mimeType) => void workbenchClient.files.reveal(relativePath, mimeType)} onAddAttachments={addAttachments} onRemoveAttachment={removeAttachment} attachments={attachments} model={activeModel} models={activeModels} reasoningEffort={reasoningEffort} skillId={effectiveSkillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={setSkillId} locale={locale} /> : selected.path === "/dashboard/agent-platform" ? <WorkbenchAgentDirectory locale={locale} title={selected.label} description={selected.description} groups={directoryGroups} onAction={(card, action) => { if (action.id.startsWith("menu:")) { toggleMenuAgent(card.id); return; } if (action.id.startsWith("start:")) { void startNewConversationForAgent(card.id === "general" ? null : card.id); return; } workbenchClient.navigation.go(card.id === "general" ? "/dashboard/ai" : `/dashboard/ai?agent=${encodeURIComponent(card.id)}`); }} /> : selected.path === "/dashboard/usage" ? <DesktopUsageDashboard client={workbenchClient} locale={locale} initialRunId={new URLSearchParams(activePath.split("?", 2)[1] ?? "").get("runId") ?? undefined} onNavigate={workbenchClient.navigation.go} /> : selected.path === "/dashboard/settings" ? null : selected.mode === "library" ? <DesktopLibraryWorkspace route={selected} artifactRows={artifactRows} savedWorkflows={savedWorkflows} conversations={conversations} runs={runs} taskCount={taskCount} tokenCount={tokenCount} artifactCount={artifactCount} providerCost={providerCost} estimatedCost={estimatedCost} onNavigate={workbenchClient.navigation.go} onRetryRun={(run) => void prepareRunRetry(run)} onInspectRun={(runId) => workbenchClient.runs.inspect(runId).then(toRunDetail)} onArtifactRemove={async (artifactId) => { await workbenchClient.artifacts.remove(artifactId); setArtifactRows((current) => current.filter((item) => item.id !== artifactId)); setArtifactCount((current) => Math.max(0, current - 1)); }} onArtifactReveal={(relativePath, mimeType) => void workbenchClient.files.reveal(relativePath, mimeType)} onKnowledgeOpen={(relativePath) => void workbenchClient.knowledge.open(relativePath)} knowledgeQuery={knowledgeQuery} knowledgeResults={knowledgeResults} knowledgeStatus={knowledgeStatus} onKnowledgeQueryChange={setKnowledgeQuery} onKnowledgeSearch={() => void searchKnowledge()} locale={locale} /> : null}
       </section>

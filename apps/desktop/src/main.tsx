@@ -7,6 +7,7 @@ import "@coworkany/workbench-ui/styles.css";
 import "./styles.css";
 import "./native-questions.css";
 import "./styles-macos.css";
+import "./virtual-office/virtual-office.css";
 
 document.documentElement.dataset.desktopPlatform = desktopStylePlatform(navigator.userAgent, navigator.maxTouchPoints);
 

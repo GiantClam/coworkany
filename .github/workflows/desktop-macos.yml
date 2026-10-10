@@ -56,6 +56,12 @@ jobs:
           pnpm desktop:typecheck
           pnpm desktop:test
 
+      - name: Validate virtual office release assets and lazy renderer
+        run: |
+          pnpm --filter @coworkany/desktop verify:virtual-office-assets
+          pnpm --filter @coworkany/desktop exec vite build
+          pnpm --filter @coworkany/desktop verify:virtual-office-bundle
+
       - name: Validate macOS Rust target
         env:
           TAURI_CONFIG: '{"bundle":{"resources":[],"icon":["icons/coworkany-icon.png"]}}'

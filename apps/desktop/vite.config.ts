@@ -38,6 +38,7 @@ export default defineConfig({
     watch: { ignored: ["**/src-tauri/target/**"] },
   },
   build: {
+    manifest: true,
     outDir: "dist",
     emptyOutDir: true,
     chunkSizeWarningLimit: 700,

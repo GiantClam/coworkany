@@ -111,6 +111,15 @@ export interface WorkbenchRunDetail {
   readonly usage: readonly { readonly provider?: string | null; readonly model: string; readonly inputTokens?: number | null; readonly outputTokens?: number | null; readonly providerCost?: number | null; readonly estimatedCost?: number | null; readonly createdAt: string }[];
 }
 
+export interface WorkbenchRunAttemptSummary {
+  readonly runId: string;
+  readonly nodeKey: string;
+  readonly idempotencyKey: string;
+  readonly status: "queued" | "running" | "submitted" | "download_failed";
+  readonly providerTaskId: string;
+  readonly updatedAt: string;
+}
+
 export interface WorkbenchArtifact {
   readonly id: string;
   readonly relativePath: string;
@@ -259,6 +268,7 @@ export interface WorkbenchClient {
     readonly cancel: (runId: string) => Promise<void>;
     readonly emergencyStop: (runId: string) => Promise<void>;
     readonly subscribe: (runId: string, onEvent: (event: WorkbenchRunEvent) => void) => () => void;
+    readonly recoverableAttempts?: () => Promise<readonly WorkbenchRunAttemptSummary[]>;
   };
   readonly usage: {
     readonly list: (conversationId?: string) => Promise<readonly WorkbenchUsage[]>;
