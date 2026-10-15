@@ -46,6 +46,7 @@ test("ordinary chat remains on the OpenCode session path", () => {
 test("workflow persistence and artifact evidence use the typed desktop service seam", () => {
   const host = readFileSync(join(desktopRoot, "runtime", "host.ts"), "utf8");
   const rustHost = readFileSync(join(desktopRoot, "src-tauri", "src", "host.rs"), "utf8");
+  const rustLib = readFileSync(join(desktopRoot, "src-tauri", "src", "lib.rs"), "utf8");
   const ports = readFileSync(join(desktopRoot, "runtime", "workflow-ports.ts"), "utf8");
   assert.match(host, /requestService: \(method, payload\) => requestService\(method, payload, controller\.signal\)/u);
   assert.match(ports, /workflow\.repository\.create/u);
@@ -54,6 +55,7 @@ test("workflow persistence and artifact evidence use the typed desktop service s
   assert.match(ports, /workflow\.event\.append/u);
   assert.match(host, /runtime\.artifact\.write/u);
   assert.match(rustHost, /runtime_artifact_workspace_mismatch/u);
+  assert.match(rustLib, /artifact_workspace_untrusted/u);
   assert.match(rustHost, /runtime_artifact_content_too_large/u);
   assert.match(rustHost, /std::fs::rename/u);
   assert.doesNotMatch(host, /from ["']\.\/storage["']/u);

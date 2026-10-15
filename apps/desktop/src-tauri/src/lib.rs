@@ -678,6 +678,40 @@ fn project_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(root)
 }
 
+/// Artifacts may be created by bundled Skills in the app-local projects
+/// directory even when an older configuration points at a previous workspace.
+/// Keep both roots explicit so RPC callers cannot register arbitrary folders.
+fn trusted_artifact_roots(app: &tauri::AppHandle) -> Result<Vec<PathBuf>, String> {
+    let configured = project_root(app)?;
+    let data_projects = data_dir(app)?.join("projects");
+    let local_projects = configured_local_app_data(app).map(|root| root.join("projects"));
+    let mut roots = Vec::new();
+    for root in [Some(configured), Some(data_projects), local_projects].into_iter().flatten() {
+        std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+        let root = root.canonicalize().map_err(|error| error.to_string())?;
+        if !roots.contains(&root) { roots.push(root); }
+    }
+    Ok(roots)
+}
+
+fn trusted_artifact_root(app: &tauri::AppHandle, requested: Option<&str>) -> Result<PathBuf, String> {
+    let roots = trusted_artifact_roots(app)?;
+    let Some(requested) = requested.filter(|value| !value.trim().is_empty()) else {
+        return roots.into_iter().next().ok_or_else(|| "artifact_workspace_unavailable".to_string());
+    };
+    let requested = PathBuf::from(requested).canonicalize().map_err(|error| error.to_string())?;
+    roots.into_iter().find(|root| root == &requested).ok_or_else(|| "artifact_workspace_untrusted".to_string())
+}
+
+fn locate_trusted_artifact(app: &tauri::AppHandle, relative_path: &str, mime_type: &str) -> Result<(PathBuf, artifacts::ArtifactMetadata), String> {
+    for root in trusted_artifact_roots(app)? {
+        if let Ok(metadata) = artifacts::inspect(&root, relative_path, mime_type) {
+            return Ok((root, metadata));
+        }
+    }
+    Err("artifact_not_found_in_trusted_workspace".to_string())
+}
+
 const MAX_ATTACHMENT_BYTES: usize = 512 * 1024 * 1024;
 const MAX_ATTACHMENT_CHUNK_BYTES: usize = 1024 * 1024;
 const MAX_ATTACHMENT_NAME_CHARS: usize = 180;
@@ -784,20 +818,23 @@ fn write_writer_draft(app: tauri::AppHandle, content: String) -> Result<artifact
 
 #[tauri::command]
 fn inspect_artifact(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<artifacts::ArtifactMetadata, String> {
-    artifacts::inspect(&project_root(&app)?, &relative_path, &mime_type)
+    locate_trusted_artifact(&app, &relative_path, &mime_type).map(|(_, metadata)| metadata)
 }
 
 #[tauri::command]
 fn register_artifact(app: tauri::AppHandle, artifact_id: String, project_id: Option<String>, relative_path: String, mime_type: String) -> Result<artifacts::ArtifactMetadata, String> {
-  let metadata = artifacts::inspect(&project_root(&app)?, &relative_path, &mime_type)?;
+  let (_, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
   storage::register_artifact(&database_path(&app)?, &artifact_id, project_id.as_deref(), &metadata).map_err(|error| error.to_string())?;
   Ok(metadata)
 }
 
-fn reconcile_persisted_artifacts(root: &std::path::Path, database: &std::path::Path) -> Result<(), String> {
+fn reconcile_persisted_artifacts(roots: &[PathBuf], database: &std::path::Path) -> Result<(), String> {
   for candidate in storage::artifact_reconciliation_candidates(database).map_err(|error| error.to_string())? {
-    if let Ok(metadata) = artifacts::inspect(root, &candidate.relative_path, &candidate.mime_type) {
-      storage::register_artifact(database, &candidate.id, None, &metadata).map_err(|error| error.to_string())?;
+    for root in roots {
+      if let Ok(metadata) = artifacts::inspect(root, &candidate.relative_path, &candidate.mime_type) {
+        storage::register_artifact(database, &candidate.id, None, &metadata).map_err(|error| error.to_string())?;
+        break;
+      }
     }
   }
   Ok(())
@@ -805,12 +842,12 @@ fn reconcile_persisted_artifacts(root: &std::path::Path, database: &std::path::P
 
 #[tauri::command]
 fn list_artifacts(app: tauri::AppHandle) -> Result<Vec<storage::ArtifactRow>, String> {
-  let root = project_root(&app)?;
+  let roots = trusted_artifact_roots(&app)?;
   let database = database_path(&app)?;
-  reconcile_persisted_artifacts(&root, &database)?;
+  reconcile_persisted_artifacts(&roots, &database)?;
   let mut rows = storage::list_artifacts(&database).map_err(|error| error.to_string())?;
     for row in &mut rows {
-        row.available = artifacts::is_available(&root, &row.relative_path, &row.mime_type);
+        row.available = roots.iter().any(|root| artifacts::is_available(root, &row.relative_path, &row.mime_type));
     }
     Ok(rows)
 }
@@ -1318,16 +1355,14 @@ fn read_workflow_local_file(local_path: String, mime_type: String) -> Result<ser
 
 #[tauri::command]
 fn open_artifact(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
-    let root = project_root(&app)?;
-    let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
+    let (root, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
     let target = root.join(metadata.relative_path);
     platform::reveal_path_command(&target).spawn().map(|_| ()).map_err(|error| format!("artifact_reveal_failed: {error}"))
 }
 
 #[tauri::command]
 fn open_artifact_folder(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
-    let root = project_root(&app)?;
-    let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
+    let (root, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
     let target = root.join(metadata.relative_path);
     let folder = target.parent().ok_or_else(|| "artifact_folder_missing".to_string())?;
     platform::open_path_command(folder).spawn().map(|_| ()).map_err(|error| format!("artifact_folder_open_failed: {error}"))
@@ -1354,16 +1389,14 @@ fn open_with_installed_program(target: &Path) -> Result<(), String> {
 
 #[tauri::command]
 fn open_artifact_default(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
-    let root = project_root(&app)?;
-    let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
+    let (root, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
     let target = root.join(metadata.relative_path);
     open_with_default_program(&target)
 }
 
 #[tauri::command]
 fn open_artifact_with(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
-    let root = project_root(&app)?;
-    let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
+    let (root, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
     let target = root.join(metadata.relative_path);
     open_with_installed_program(&target)
 }
@@ -1371,8 +1404,7 @@ fn open_artifact_with(app: tauri::AppHandle, relative_path: String, mime_type: S
 #[tauri::command]
 fn read_artifact(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<serde_json::Value, String> {
     const MAX_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
-    let root = project_root(&app)?;
-    let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
+    let (root, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
     if metadata.byte_length > MAX_PREVIEW_BYTES {
         return Err("artifact_preview_too_large".to_string());
     }

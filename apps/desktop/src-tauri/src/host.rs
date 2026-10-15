@@ -409,7 +409,9 @@ fn dispatch_workflow_service_request(app: &AppHandle, request: &serde_json::Valu
             let run_id = payload_string(request, "runId")?;
             let relative_path = payload_string(request, "relativePath")?;
             let mime_type = payload_string(request, "mimeType")?;
-            let metadata = crate::artifacts::inspect(&crate::project_root(app)?, relative_path, mime_type)?;
+            let workspace_path = request.get("payload").and_then(|value| value.get("workspacePath")).and_then(serde_json::Value::as_str);
+            let root = crate::trusted_artifact_root(app, workspace_path)?;
+            let metadata = crate::artifacts::inspect(&root, relative_path, mime_type)?;
             let artifact_id = format!("{run_id}:{relative_path}");
             crate::storage::register_artifact(&database, &artifact_id, None, &metadata).map_err(|error| error.to_string())?;
             Ok(serde_json::json!({ "artifactId": artifact_id, "relativePath": metadata.relative_path, "mimeType": metadata.mime_type, "byteLength": metadata.byte_length, "sha256": metadata.sha256 }))

@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const option = (name) => process.argv[process.argv.indexOf(name) + 1];
 const port = Number(option("--port"));
@@ -134,13 +135,25 @@ const server = createServer(async (request, response) => {
     const payload = JSON.parse(body);
     if (process.env.FAKE_OPENCODE_REQUEST_LOG) appendFileSync(process.env.FAKE_OPENCODE_REQUEST_LOG, JSON.stringify({ path: url.pathname, payload }) + "\n", "utf8");
     let createdArtifactPath = "";
+    let createdProcessPaths = [];
     if (url.pathname.endsWith("/command")) {
       payload.parts = [{ type: "text", text: payload.arguments }];
       const [providerID, ...model] = String(payload.model).split("/");
       payload.model = { providerID, modelID: model.join("/") };
       if (payload.command === "ppt-master") {
-        createdArtifactPath = "workflow-deck.pptx";
+        const artifactDirectory = process.env.FAKE_OPENCODE_ARTIFACT_DIRECTORY;
+        if (artifactDirectory) {
+          mkdirSync(artifactDirectory, { recursive: true });
+          createdArtifactPath = join(artifactDirectory, "workflow-deck.pptx");
+        } else createdArtifactPath = "workflow-deck.pptx";
         writeFileSync(createdArtifactPath, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0, 0, 0]));
+        if (process.env.FAKE_OPENCODE_PPT_PROCESS_FILES === "1") {
+          createdProcessPaths = ["backup/draft.pptx", "validation/report.json", "svg_output/slide-1.svg", "tmp/render.tmp"].map((relativePath) => join(artifactDirectory || ".", relativePath));
+          for (const processPath of createdProcessPaths) {
+            mkdirSync(dirname(processPath), { recursive: true });
+            writeFileSync(processPath, "process artifact", "utf8");
+          }
+        }
       }
     }
     const userID = payload.messageID ?? `user-${++userCounter}`;
@@ -258,7 +271,7 @@ const server = createServer(async (request, response) => {
       }
       sendEvent({ payload: { type: "message.updated", properties: { ...sessionProperty, info: { id: "assistant-1", role: "assistant", time: { completed: Date.now() } } } } });
       sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "text-1", messageID: "assistant-1", type: "text", text: answer } } } });
-      sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "tool-1", messageID: "assistant-1", type: "tool", tool: createdArtifactPath ? "bash" : tool, state: { status: "completed", title: "saved", ...(prompt === "Create chat artifact" ? { input: { filePath: "chat-final.md", content: "final chat artifact\\n" }, output: { path: "chat-final.md" } } : createdArtifactPath ? { output: { path: createdArtifactPath } } : {}) } } } } });
+      sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "tool-1", messageID: "assistant-1", type: "tool", tool: createdArtifactPath ? "bash" : tool, state: { status: "completed", title: "saved", ...(prompt === "Create chat artifact" ? { input: { filePath: "chat-final.md", content: "final chat artifact\\n" }, output: { path: "chat-final.md" } } : createdArtifactPath ? { output: { path: createdArtifactPath, ...(createdProcessPaths.length ? { metadata: createdProcessPaths.map((path) => ({ path })) } : {}) } } : {}) } } } } });
       sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "usage-1", messageID: "assistant-1", type: "step-finish", tokens: { input: 11, output: 7 }, cost: 0.02 } } } });
       sendEvent({ payload: { type: "session.status", properties: { ...sessionProperty, status: { type: "idle" } } } });
     }, 25);

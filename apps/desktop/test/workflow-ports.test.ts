@@ -6,7 +6,7 @@ test("desktop workflow ports bridge repository, artifact and ordered event evide
   const emitted: Array<Record<string, unknown>> = [];
   const serviceCalls: Array<{ method: string; payload: Record<string, unknown> }> = [];
   const capability = { execute: async () => ({ text: "ok" }) };
-  const ports = createDesktopWorkflowPorts({ runId: "run-ports", capability, emit: (event) => emitted.push(event as unknown as Record<string, unknown>), requestService: async (method, payload) => { serviceCalls.push({ method, payload }); return method === "workflow.artifact.register" ? { artifactId: "run-ports:artifacts/run-ports/result.md" } : {}; } });
+  const ports = createDesktopWorkflowPorts({ runId: "run-ports", workspacePath: "C:/CoworkAny/projects", capability, emit: (event) => emitted.push(event as unknown as Record<string, unknown>), requestService: async (method, payload) => { serviceCalls.push({ method, payload }); return method === "workflow.artifact.register" ? { artifactId: "run-ports:artifacts/run-ports/result.md" } : {}; } });
   const definition = { schemaVersion: 2, revision: 1, definitionHash: "hash-1", nodes: [], edges: [] } as never;
 
   await ports.repository.create({ runId: "run-ports", definition });
@@ -17,6 +17,7 @@ test("desktop workflow ports bridge repository, artifact and ordered event evide
   assert.equal(ports.capability, capability);
   assert.equal(registration.artifactId, "run-ports:artifacts/run-ports/result.md");
   assert.deepEqual(serviceCalls.map((call) => call.method), ["workflow.repository.create", "workflow.repository.update_status", "workflow.event.append", "workflow.artifact.register"]);
+  assert.equal(serviceCalls[3]?.payload.workspacePath, "C:/CoworkAny/projects");
   assert.deepEqual(emitted.map((event) => (event as { tool?: string }).tool), [
     "workflow:run_created",
     "workflow:run_status",
@@ -29,7 +30,7 @@ test("desktop workflow ports bridge repository, artifact and ordered event evide
 
 test("desktop workflow event sink bounds oversized checkpoint payloads", async () => {
   const emitted: Array<Record<string, unknown>> = [];
-  const ports = createDesktopWorkflowPorts({ runId: "run-bounded", capability: { execute: async () => ({}) }, emit: (event) => emitted.push(event as unknown as Record<string, unknown>), requestService: async () => ({}) });
+  const ports = createDesktopWorkflowPorts({ runId: "run-bounded", workspacePath: "C:/CoworkAny/projects", capability: { execute: async () => ({}) }, emit: (event) => emitted.push(event as unknown as Record<string, unknown>), requestService: async () => ({}) });
   await ports.events.append({ runId: "run-bounded", sequence: 1, type: "node_succeeded", payload: { output: "x".repeat(80_000) } });
   const message = String(emitted[0].message);
   assert.ok(message.length <= 64 * 1024);

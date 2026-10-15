@@ -495,6 +495,37 @@ test("workflow-host registers a PPT artifact when the presentation skill writes 
   }
 });
 
+test("workflow-host registers a PPT artifact created in the CoworkAny local workspace", async () => {
+  const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-configured-workspace-"));
+  const localData = await mkdtemp(join(tmpdir(), "coworkany-host-local-data-"));
+  const localProjects = join(localData, "projects");
+  const fixture = join(desktopRoot, "test", "fixtures", "fake-opencode-serve.mjs");
+  const child = startHost(desktopRoot, { COWORKANY_OPENCODE_PATH: fixture, COWORKANY_RUNTIME_DIR: join(localData, "runtime"), FAKE_OPENCODE_ARTIFACT_DIRECTORY: localProjects, FAKE_OPENCODE_PPT_PROCESS_FILES: "1", OPENCODE_RUNTIME_DIR: workspace });
+  try {
+    const provider = { id: "configured", source: "openai-compatible", model: "configured/model" };
+    const sessionRequestId = randomUUID();
+    child.child.stdin.write(encodeRpcMessage({ version: 1, requestId: sessionRequestId, type: "session.create", payload: { conversationId: "conversation-local-ppt-artifact", workspacePath: workspace, model: provider.model, provider, allowArtifacts: true } }));
+    const sessionResponse = await child.waitFor((frame) => frame.requestId === sessionRequestId && frame.ok === true);
+    const sessionId = String((sessionResponse.data as Record<string, unknown>).sessionId ?? "");
+    const runId = `local-ppt-artifact-${randomUUID()}`;
+    child.child.stdin.write(encodeRpcMessage({ version: 1, requestId: runId, runId, sessionId, type: "session.prompt", payload: { prompt: "Create ppt-master artifact", model: provider.model, provider, allowArtifacts: true, skillId: "ppt-master" } }));
+    await child.waitFor((frame) => {
+      const event = (frame.data as Record<string, unknown> | undefined)?.event as Record<string, unknown> | undefined;
+      return event?.event === "done" && event.runId === runId;
+    });
+    const registrations = child.frames
+      .filter((frame) => frame.type === "service_request" && frame.method === "workflow.artifact.register")
+      .map((frame) => frame.payload as Record<string, unknown>);
+    assert.equal(registrations.some((payload) => payload.runId === runId && payload.workspacePath === localProjects && payload.relativePath === "workflow-deck.pptx"), true);
+    assert.deepEqual(registrations.filter((payload) => payload.runId === runId).map((payload) => payload.relativePath), ["workflow-deck.pptx"]);
+  } finally {
+    if (child.child.exitCode === null) child.child.kill();
+    child.child.stdin.destroy();
+    await Promise.all([rm(workspace, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }), rm(localData, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })]);
+  }
+});
+
 test("workflow-host preserves a PPT artifact when a late turn error follows file creation", async () => {
   const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const workspace = await mkdtemp(join(tmpdir(), "coworkany-host-ppt-late-error-"));

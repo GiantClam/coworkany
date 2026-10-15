@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import { buildOpenCodeCommand, createOpenCodeEventParser, type OpenCodeRuntimeEvent } from "@coworkany/runtime-contracts/opencode";
@@ -36,11 +36,20 @@ let skillWorkspaceQueue: Promise<void> = Promise.resolve();
 let stagedSkillSourceKey = "";
 
 function defaultWorkspacePath() {
+  const coworkAnyRuntime = process.env.COWORKANY_RUNTIME_DIR?.trim();
+  if (coworkAnyRuntime) return join(dirname(coworkAnyRuntime), "projects");
+  const localAppData = process.env.LOCALAPPDATA?.trim();
+  if (localAppData) return join(localAppData, "CoworkAny", "projects");
   const runtimeRoot = process.env.OPENCODE_RUNTIME_DIR?.trim();
   if (runtimeRoot) return join(runtimeRoot, "projects");
   const home = process.env.HOME?.trim();
   if (home) return join(home, "Library", "Application Support", "CoworkAny", "projects");
   return join(process.cwd(), "projects");
+}
+
+function localCoworkAnyWorkspacePath() {
+  const localAppData = process.env.LOCALAPPDATA?.trim();
+  return localAppData ? join(localAppData, "CoworkAny", "projects") : undefined;
 }
 
 /**
@@ -315,6 +324,27 @@ async function preparedAgentName(configDirectory: string, agentId?: string) {
 }
 
 const FILE_ARTIFACT_TOOLS = new Set(["write", "edit", "patch", "apply_patch", "bash"]);
+const PROCESS_ARTIFACT_DIRECTORIES = new Set([
+  ".cache",
+  ".git",
+  ".opencode",
+  ".tmp",
+  "backup",
+  "cache",
+  "log",
+  "logs",
+  "node_modules",
+  "svg_output",
+  "temp",
+  "tmp",
+  "validation",
+]);
+
+function isProcessArtifactPath(relative: string) {
+  const segments = relative.split("/");
+  return segments.some((segment) => PROCESS_ARTIFACT_DIRECTORIES.has(segment.toLowerCase()))
+    || segments.some((segment) => segment.toLowerCase().endsWith(".tmp"));
+}
 
 function workspaceRelativeFilePath(workspacePath: string, candidate: string) {
   const root = resolve(workspacePath);
@@ -324,8 +354,7 @@ function workspaceRelativeFilePath(workspacePath: string, candidate: string) {
   if (target !== root && !target.startsWith(`${root}${sep}`)) return undefined;
   const relative = relativePath(root, target).replaceAll("\\", "/");
   if (!relative || relative === "." || relative.split("/").includes("..")) return undefined;
-  const segments = relative.split("/");
-  if (segments.includes(".opencode") || segments.includes("node_modules") || segments.includes(".git") || segments.some((segment) => segment.endsWith(".tmp"))) return undefined;
+  if (isProcessArtifactPath(relative)) return undefined;
   return relative;
 }
 
@@ -347,23 +376,54 @@ function fileArtifactMimeType(relative: string) {
                             : "application/octet-stream";
 }
 
+function artifactWorkspaceRoots(workspacePath: string) {
+  return [...new Set([workspacePath, defaultWorkspacePath(), localCoworkAnyWorkspacePath()].filter((path): path is string => Boolean(path)).map((path) => resolve(path)))];
+}
+
 function fileArtifactPaths(workspacePath: string, events: readonly OpenCodeRuntimeEvent[]) {
-  const candidates = new Set<string>();
+  const candidates = new Map<string, { readonly workspacePath: string; readonly relativePath: string }>();
   for (const event of events) {
     if (event.event !== "tool_event" || event.phase !== "completed" || !FILE_ARTIFACT_TOOLS.has(event.tool)) continue;
     for (const candidate of event.paths ?? []) {
-      const relative = workspaceRelativeFilePath(workspacePath, candidate);
-      if (relative) candidates.add(relative);
+      for (const root of artifactWorkspaceRoots(workspacePath)) {
+        const relative = workspaceRelativeFilePath(root, candidate);
+        if (relative) candidates.set(`${root}\u0000${relative}`, { workspacePath: root, relativePath: relative });
+      }
     }
   }
-  return [...candidates];
+  return [...candidates.values()];
 }
 
-function localFileArtifacts(workspacePath: string, events: readonly OpenCodeRuntimeEvent[]) {
-  return fileArtifactPaths(workspacePath, events).flatMap((relative) => {
+function presentationExportArtifacts(workspacePath: string, runId?: string) {
+  if (!runId) return [];
+  const presentationRunId = runId.split(":", 1)[0]?.replace(/[^a-zA-Z0-9_-]/g, "_") ?? "";
+  if (!presentationRunId) return [];
+  const candidates = new Map<string, { readonly workspacePath: string; readonly relativePath: string }>();
+  for (const root of artifactWorkspaceRoots(workspacePath)) {
     try {
-      const metadata = statSync(resolve(workspacePath, relative));
-      return metadata.isFile() ? [{ relativePath: relative, title: basename(relative), mimeType: fileArtifactMimeType(relative), bytes: metadata.size }] : [];
+      for (const entry of readdirSync(root, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !entry.name.startsWith(presentationRunId)) continue;
+        const exportDirectory = join(root, entry.name, "exports");
+        for (const exportEntry of readdirSync(exportDirectory, { withFileTypes: true })) {
+          if (!exportEntry.isFile() || !/\.pptx$/iu.test(exportEntry.name)) continue;
+          const relativePath = join(entry.name, "exports", exportEntry.name).replaceAll("\\", "/");
+          candidates.set(`${root}\u0000${relativePath}`, { workspacePath: root, relativePath });
+        }
+      }
+    } catch {
+      // A normal non-PPT workspace has no exports directory to inspect.
+    }
+  }
+  return [...candidates.values()];
+}
+
+function localFileArtifacts(workspacePath: string, events: readonly OpenCodeRuntimeEvent[], runId?: string) {
+  const candidates = [...fileArtifactPaths(workspacePath, events), ...presentationExportArtifacts(workspacePath, runId)];
+  const unique = new Map(candidates.map((candidate) => [`${candidate.workspacePath}\u0000${candidate.relativePath}`, candidate]));
+  return [...unique.values()].flatMap(({ workspacePath: root, relativePath }) => {
+    try {
+      const metadata = statSync(resolve(root, relativePath));
+      return metadata.isFile() ? [{ workspacePath: root, relativePath, title: basename(relativePath), mimeType: fileArtifactMimeType(relativePath), bytes: metadata.size }] : [];
     } catch {
       return [];
     }
@@ -582,11 +642,11 @@ async function emitFinalFileArtifacts(command: HostCommand, runId: string, works
   // Emit only after the model turn has completed. Repeated writes are
   // collapsed to one card per path, and metadata describes the final
   // on-disk version instead of an intermediate tool step.
-  for (const artifact of localFileArtifacts(workspacePath, events)) {
-    const { relativePath: relative, mimeType, bytes } = artifact;
+  for (const artifact of localFileArtifacts(workspacePath, events, runId)) {
+    const { workspacePath: artifactWorkspacePath, relativePath: relative, mimeType, bytes } = artifact;
     let registration: Record<string, unknown> | undefined;
     try {
-      registration = await requestService("workflow.artifact.register", { runId, relativePath: relative, mimeType });
+      registration = await requestService("workflow.artifact.register", { runId, workspacePath: artifactWorkspacePath, relativePath: relative, mimeType });
     } catch (error) {
       emit(command, {
         event: "runtime_warning",
@@ -1266,7 +1326,7 @@ async function runWorkflow(command: HostCommand) {
       const runtimeError = (events ?? []).find((event) => event.event === "runtime_error");
       if (runtimeError?.event === "runtime_error") throw new Error(runtimeError.message);
       const text = (events ?? []).filter((event): event is Extract<OpenCodeRuntimeEvent, { event: "text_delta" }> => event.event === "text_delta").map((event) => event.delta).join("");
-      const artifacts = localFileArtifacts(workspacePath, events ?? []);
+      const artifacts = localFileArtifacts(workspacePath, events ?? [], runId);
       return { text, ...(artifacts.length ? { artifacts, ...(executorId === "ppt_generate" ? { ppt: artifacts } : {}) } : {}) };
     }, resume: async ({ executorId, nodeKey, config, inputs, providerTaskId }, signal) => {
       if (["image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate"].includes(executorId)) {
@@ -1276,7 +1336,7 @@ async function runWorkflow(command: HostCommand) {
       if (executorId === "agent_execute" && config.operation === "audio_transcription") return runRunningHubAudioTranscription(command, runId, nodeKey, config, inputs, workspacePath, signal, providerTaskId);
       throw new Error(`workflow_recovery_unsupported:${executorId}`);
     } };
-  const ports = createDesktopWorkflowPorts({ runId, emit: (event) => emit(command, event), requestService: (method, payload) => requestService(method, payload, controller.signal), capability });
+  const ports = createDesktopWorkflowPorts({ runId, workspacePath, emit: (event) => emit(command, event), requestService: (method, payload) => requestService(method, payload, controller.signal), capability });
   const artifactPort: WorkflowArtifactPort = ports.artifacts;
   const recoveryDefinitionHash = typeof command.payload?.recoveryDefinitionHash === "string" && command.payload.recoveryDefinitionHash.trim() ? command.payload.recoveryDefinitionHash.trim() : undefined;
   try { result = await executeWorkflow(normalizedDefinition, { runId, signal: controller.signal, recovering: readWorkflowRecovery(command.payload?.recovering), ...(recoveryDefinitionHash ? { recoveryDefinitionHash } : {}), ...(command.payload?.completed && typeof command.payload.completed === "object" ? { completed: command.payload.completed as Record<string, Record<string, unknown>> } : {}), ports }); } catch (error) {
