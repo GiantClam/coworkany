@@ -38,23 +38,27 @@ test("desktop brand assets are wired into the window, bundle, and responsive sid
   assert.equal(tauriConfig.identifier, "com.coworkany.desktop");
   assert.equal(tauriConfig.app.windows[0]?.title, "CoworkAny");
   assert.ok(existsSync(resolve(desktopRoot, "public/brand/coworkany-icon-64.png")));
-  assert.ok(existsSync(resolve(desktopRoot, "public/brand/coworkany-logo.svg")));
+  assert.ok(existsSync(resolve(desktopRoot, "public/brand/coworkany-logo.png")));
   assert.ok(existsSync(resolve(desktopRoot, "src-tauri/icons/coworkany-icon.ico")));
   assert.deepEqual(pngDimensions(resolve(desktopRoot, "public/brand/coworkany-icon-64.png")), { width: 64, height: 64 });
   assert.deepEqual(icoSizes(resolve(desktopRoot, "src-tauri/icons/coworkany-icon.ico")), [16, 24, 32, 48, 64, 128, 256]);
-  for (const svg of ["coworkany-logo.svg", "coworkany-logo-dark.svg"]) {
-    const source = readFileSync(resolve(desktopRoot, "public/brand", svg), "utf8");
-    assert.match(source, /^<svg[\s\S]*<title[^>]*>CoworkAny<\/title>[\s\S]*<\/svg>\s*$/u);
-    assert.doesNotMatch(source, /<script\b/iu);
-  }
+  assert.deepEqual(pngDimensions(resolve(desktopRoot, "public/brand/coworkany-logo.png")), { width: 1120, height: 228 });
+  assert.deepEqual(readFileSync(resolve(desktopRoot, "public/brand/coworkany-logo.png")), readFileSync(resolve(desktopRoot, "../../public/brand/coworkany-logo.png")));
+  assert.deepEqual(readFileSync(resolve(desktopRoot, "public/brand/coworkany-icon-64.png")), readFileSync(resolve(desktopRoot, "../../app/icon.png")));
+  const icns = readFileSync(resolve(desktopRoot, "src-tauri/icons/coworkany-icon.icns"));
+  assert.equal(icns.toString("ascii", 0, 4), "icns");
+  assert.equal(icns.readUInt32BE(4), icns.length);
+  assert.deepEqual(icns.subarray(16), readFileSync(resolve(desktopRoot, "src-tauri/icons/coworkany-icon.png")));
+  assert.deepEqual(pngDimensions(resolve(desktopRoot, "src-tauri/icons/coworkany-icon.png")), { width: 1024, height: 1024 });
+  assert.match(app, /className="bootstrap-logo" src="\/brand\/coworkany-logo\.png" alt="Coworkany"/u);
   assert.match(index, /href="\/brand\/coworkany-icon-64\.png"/u);
   assert.deepEqual(tauriConfig.bundle.icon, ["icons/coworkany-icon.ico"]);
   const csp = (tauriConfig as unknown as { app: { security: { csp: string } } }).app.security.csp;
   assert.match(csp, /connect-src[^;]*ipc:\s*http:\/\/ipc\.localhost/u);
   const capability = JSON.parse(readFileSync(resolve(desktopRoot, "src-tauri/capabilities/default.json"), "utf8")) as { permissions: string[] };
   assert.ok(capability.permissions.includes("core:event:default"));
-  assert.match(styles, /\.wb-brand-mark[^}]+background:\s*var\(--wb-sidebar-highlight/u);
-  assert.match(styles, /\.wb-brand-title[^}]+coworkany-logo\.svg/u);
+  assert.match(styles, /\.wb-brand-mark[^}]+coworkany-icon-64\.png/u);
+  assert.match(styles, /\.wb-brand-title[^}]+coworkany-logo\.png/u);
   assert.match(styles, /\.wb-brand-title[^}]+display:\s*none/u);
   assert.doesNotMatch(styles, /\.wb-shell:not\(\.wb-shell-collapsed\)[^}]+\.wb-brand-mark[^}]+display:\s*none/u);
   assert.match(styles, /\.bootstrap-mark[^}]+coworkany-icon-64\.png/u);
@@ -62,7 +66,6 @@ test("desktop brand assets are wired into the window, bundle, and responsive sid
   assert.match(app, /"--sidebar-primary":\s*WORKBENCH_THEME\.light\.sidebarPrimary/u);
   assert.match(app, /"--wb-sidebar-highlight":\s*WORKBENCH_THEME\.light\.sidebarPrimary/u);
   assert.match(app, /className="bootstrap-screen" style=\{(?:style|workbenchThemeStyle)\}/u);
-  assert.match(app, /className="wb-runtime-status"[\s\S]*name="runtime"/u);
-  assert.match(styles, /\.wb-runtime-status-icon\s*\{/u);
+  assert.doesNotMatch(app, /className="wb-runtime-status"/u);
   assert.doesNotMatch(styles, /#f5f84a/u);
 });

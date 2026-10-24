@@ -85,6 +85,34 @@ function validatePortShape(port: unknown, nodeKey: string, field: string): Workf
   return issues;
 }
 
+function matchesWorkflowConfigFieldType(field: { valueType: string; rendererId: string }, value: unknown) {
+  if (field.valueType === "object") return typeof value === "object" && value !== null && (field.rendererId === "asset" || !Array.isArray(value));
+  if (field.valueType === "string[]") return Array.isArray(value) && value.every((item) => typeof item === "string");
+  if (field.valueType === "number") return typeof value === "number" && Number.isFinite(value);
+  if (field.valueType === "boolean") return typeof value === "boolean";
+  return typeof value === "string";
+}
+
+function validateWorkflowNodeConfig(node: Record<string, unknown>, nodeKey: string, definition: ReturnType<typeof workflowNodeRegistry.get>): WorkflowValidationIssue[] {
+  if (!definition || !isRecord(node.config)) return [];
+  const issues: WorkflowValidationIssue[] = [];
+  for (const field of definition.configSchema) {
+    const value = node.config[field.id];
+    if (value === undefined) {
+      if (field.required) issues.push(issue("invalid_workflow_definition", `Node config field ${field.id} is required`, { nodeKey, field: `config.${field.id}` }));
+      continue;
+    }
+    if (!matchesWorkflowConfigFieldType(field, value)) issues.push(issue("invalid_workflow_definition", `Node config field ${field.id} has an invalid value type`, { nodeKey, field: `config.${field.id}` }));
+    if (field.rendererId === "select" && field.options && typeof value === "string" && !field.options.some((option) => option.value === value)) {
+      issues.push(issue("invalid_workflow_definition", `Node config field ${field.id} has an unsupported value`, { nodeKey, field: `config.${field.id}` }));
+    }
+    if (typeof value === "number" && ((field.min !== undefined && value < field.min) || (field.max !== undefined && value > field.max))) {
+      issues.push(issue("invalid_workflow_definition", `Node config field ${field.id} is outside its allowed range`, { nodeKey, field: `config.${field.id}` }));
+    }
+  }
+  return issues;
+}
+
 function detectCycles(nodes: WorkflowDefinitionNodeV2[], edges: WorkflowDefinitionEdgeV2[]) {
   const adjacency = new Map<string, string[]>(); for (const node of nodes) adjacency.set(node.nodeKey, []); for (const edge of edges) adjacency.get(edge.sourceNodeKey)?.push(edge.targetNodeKey);
   const visiting = new Set<string>(); const visited = new Set<string>(); const issues: WorkflowValidationIssue[] = [];
@@ -109,7 +137,7 @@ export function validateWorkflowDefinitionEnvelope(value: unknown): WorkflowVali
     if (!nodeKey || nodeKey.length > 120) issues.push(issue("invalid_workflow_definition", "nodeKey is required and must be <= 120 characters", { nodeKey, field: "nodeKey" }));
     else if (nodeKeys.has(nodeKey)) issues.push(issue("duplicate_workflow_node_key", `Duplicate nodeKey: ${nodeKey}`, { nodeKey })); else nodeKeys.add(nodeKey);
     if (typeof candidate.type !== "string" || !candidate.type) issues.push(issue("invalid_workflow_definition", "node type is required", { nodeKey, field: "type" }));
-    else { const registered = workflowNodeRegistry.get(candidate.type); if (!registered) issues.push(issue("unsupported_node_type", `Unsupported node type: ${candidate.type}`, { nodeKey, field: "type" })); else if (!Number.isInteger(candidate.nodeVersion) || Number(candidate.nodeVersion) < 1 || Number(candidate.nodeVersion) > registered.version) issues.push(issue("unsupported_node_version", `Unsupported node version for ${candidate.type}`, { nodeKey, field: "nodeVersion" })); }
+    else { const registered = workflowNodeRegistry.get(candidate.type); if (!registered) issues.push(issue("unsupported_node_type", `Unsupported node type: ${candidate.type}`, { nodeKey, field: "type" })); else { if (!Number.isInteger(candidate.nodeVersion) || Number(candidate.nodeVersion) < 1 || Number(candidate.nodeVersion) > registered.version) issues.push(issue("unsupported_node_version", `Unsupported node version for ${candidate.type}`, { nodeKey, field: "nodeVersion" })); issues.push(...validateWorkflowNodeConfig(candidate, nodeKey ?? "", registered)); } }
     if (!Number.isFinite(candidate.positionX) || !Number.isFinite(candidate.positionY)) issues.push(issue("invalid_workflow_definition", "node position must be finite", { nodeKey, field: "position" }));
     if (!isRecord(candidate.config)) issues.push(issue("invalid_workflow_definition", "node config must be an object", { nodeKey, field: "config" }));
   }

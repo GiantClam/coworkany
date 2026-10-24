@@ -73,6 +73,13 @@ test("workflow canvas keeps compact parameters when no editor is supplied", () =
   assert.match(inputCard, /文本: hello/u);
 });
 
+test("workflow canvas marks preserved nodes that need Provider configuration", () => {
+  const markup = renderCanvas(baseNodes.map((node) => node.nodeKey === "writer" ? { ...node, config: { ...node.config, needsConfig: true } } : node));
+  const writerCard = markup.match(/data-agent-node="writer"[\s\S]*?<\/article>/u)?.[0] ?? "";
+  assert.match(writerCard, /需要配置/u);
+  assert.match(writerCard, /配置 Provider 和模型/u);
+});
+
 test("workflow canvas keeps only the default input fixed so multiple result previews are editable", () => {
   const markup = renderCanvas([
     ...baseNodes,

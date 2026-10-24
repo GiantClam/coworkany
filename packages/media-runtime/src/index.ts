@@ -133,7 +133,7 @@ export function createHttpMediaAdapter(options: MediaHttpAdapterOptions): MediaP
   const toTask = (value: Record<string, unknown>, fallbackId?: string): MediaTask => {
     const providerTaskId = String(value.id ?? value.request_id ?? value.requestId ?? value.task_id ?? value.taskId ?? fallbackId ?? `sync-${Date.now()}`);
     const statusText = String(value.status ?? value.state ?? (value.request_id || value.requestId ? "queued" : "succeeded")).toLowerCase();
-    const status: MediaTaskStatus = statusText.includes("fail") || statusText.includes("error") ? "failed" : statusText.includes("queue") || statusText.includes("pending") || statusText.includes("submitted") ? "queued" : statusText.includes("run") || statusText.includes("process") ? "running" : "succeeded";
+    const status: MediaTaskStatus = statusText.includes("fail") || statusText.includes("error") ? "failed" : statusText.includes("cancel") ? "cancelled" : statusText.includes("queue") || statusText.includes("pending") || statusText.includes("submitted") ? "queued" : statusText.includes("run") || statusText.includes("process") || statusText === "in_progress" ? "running" : "succeeded";
     const outputValues = Array.isArray(value.data) ? value.data : Array.isArray(value.output) ? value.output : Array.isArray(value.outputs) ? value.outputs : [];
     const outputs = outputValues.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")).map((item) => ({ ...item }));
     const nestedOutput = value.output && typeof value.output === "object" ? value.output as Record<string, unknown> : undefined;
@@ -147,7 +147,7 @@ export function createHttpMediaAdapter(options: MediaHttpAdapterOptions): MediaP
   };
   return {
     provider: options.provider,
-    execute: async (requestInput, cancellation) => toTask(await request(options.submitPath, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: requestInput.modelId, ...requestInput.input, ...(requestInput.idempotencyKey ? { idempotency_key: requestInput.idempotencyKey } : {}) }) }, cancellation)),
+    execute: async (requestInput, cancellation) => toTask(await request(options.submitPath, { method: "POST", headers: { "content-type": "application/json", ...(requestInput.idempotencyKey ? { "Idempotency-Key": requestInput.idempotencyKey } : {}) }, body: JSON.stringify({ model: requestInput.modelId, ...requestInput.input, ...(requestInput.idempotencyKey ? { idempotency_key: requestInput.idempotencyKey } : {}) }) }, cancellation)),
     ...(options.queryPath ? { query: async (providerTaskId, cancellation) => toTask(await request(options.queryPath!(providerTaskId), { method: "GET" }, cancellation), providerTaskId) } : {}),
     ...(options.cancelPath ? { cancel: async (providerTaskId, cancellation) => toTask(await request(options.cancelPath!(providerTaskId), { method: "POST" }, cancellation), providerTaskId) } : {}),
   };
@@ -168,6 +168,71 @@ export interface DirectProviderOptions {
 }
 
 export const IMAGE_GENERATION_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Relay video protocol; account/session credentials never enter media requests. */
+export function createCheapBuddyVideoAdapter(options: DirectProviderOptions): MediaProviderAdapter {
+  const toTask = (payload: Record<string, unknown>, fallbackId?: string): MediaTask => {
+    const raw = payload.data && typeof payload.data === "object" && !Array.isArray(payload.data) ? payload.data as Record<string, unknown> : payload;
+    const providerTaskId = text(raw.id ?? raw.task_id ?? raw.taskId) || fallbackId;
+    if (!providerTaskId) throw new Error("cheapbuddy_video_submission_ambiguous");
+    const task = asTask(options.provider, raw, providerTaskId);
+    const status = text(raw.status ?? raw.state).toLowerCase();
+    const recognized = ["queued", "pending", "submitted", "running", "processing", "in_progress", "completed", "succeeded", "success", "done", "failed", "error", "cancelled", "canceled"].includes(status);
+    // Retain an acknowledged ID for polling even when a new upstream status
+    // appears; losing it could make a retry submit a second chargeable job.
+    const mappedStatus: MediaTaskStatus = !status ? "queued" : !recognized || status === "in_progress" ? "running" : status === "queued" ? "queued" : status === "completed" ? "succeeded" : status === "cancelled" || status === "canceled" ? "cancelled" : task.status;
+    const error = raw.error && typeof raw.error === "object" ? text((raw.error as Record<string, unknown>).message).slice(0, 240) : "";
+    const outputs = task.outputs.map((output) => typeof output.url === "string" && output.url.startsWith("/") ? { ...output, url: new URL(output.url, options.baseUrl).toString() } : output);
+    return { ...task, status: mappedStatus, ...(mappedStatus === "failed" && error ? { error } : {}), outputs: mappedStatus === "succeeded" && !outputs.length ? [{ url: providerUrl(options.baseUrl, `/videos/${encodeURIComponent(task.providerTaskId)}/content`).toString() }] : outputs };
+  };
+  return {
+    provider: options.provider,
+    execute: async (request, cancellation) => {
+      const input = request.input as Record<string, unknown>;
+      const prompt = text(input.prompt);
+      if (!prompt) throw new Error("video_prompt_required");
+      if (text(input.sourceVideoUrl) || (Array.isArray(input.referenceVideoUrls) && input.referenceVideoUrls.length) || (Array.isArray(input.referenceAudioUrls) && input.referenceAudioUrls.length)) throw new Error("provider_media_role_unsupported:cheapbuddy.video.reference");
+      const references = Array.isArray(input.referenceImageUrls) ? input.referenceImageUrls.filter((value): value is string => typeof value === "string" && Boolean(value.trim())) : [];
+      if (references.length > 1 || text(input.lastFrameUrl)) throw new Error("provider_media_role_unsupported:cheapbuddy.video.reference");
+      const reference = text(input.input_reference ?? input.firstFrameUrl ?? references[0]);
+      if (reference && !/^(?:https?:\/\/|data:image\/)/iu.test(reference)) throw new Error("provider_media_role_unsupported:cheapbuddy.video.local_reference");
+      const seconds = text(input.seconds) || (typeof input.seconds === "number" ? String(input.seconds) : typeof input.duration === "number" ? String(input.duration) : text(input.duration));
+      const payload = await jsonRequest(options, "/videos", {
+        method: "POST",
+        headers: request.idempotencyKey ? { "Idempotency-Key": request.idempotencyKey } : {},
+        body: JSON.stringify({ model: request.modelId, prompt, ...(seconds ? { seconds } : {}), ...(text(input.size) ? { size: text(input.size) } : {}), ...(reference ? { input_reference: reference } : {}) }),
+      }, cancellation);
+      return toTask(payload);
+    },
+    query: async (providerTaskId, cancellation) => toTask(await jsonRequest(options, `/videos/${encodeURIComponent(providerTaskId)}`, { method: "GET" }, cancellation), providerTaskId),
+  };
+}
+
+/** Authenticate only Relay content downloads; strip the key at every external redirect. */
+export function createCheapBuddyMediaFetch(baseUrl: string, apiKey: string, fetchImpl: typeof fetch = fetch): typeof fetch {
+  const base = new URL(baseUrl);
+  if (base.origin !== "https://api.cheapbuddy.cc" || base.pathname.replace(/\/+$/u, "") !== "/v1") throw new Error("cheapbuddy_media_origin_invalid");
+  return async (input, init) => {
+    let url = new URL(typeof input === "string" || input instanceof URL ? String(input) : input.url);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      if (url.protocol !== "https:") throw new Error("cheapbuddy_media_download_protocol_invalid");
+      const headers = new Headers(init?.headers);
+      headers.delete("authorization");
+      const protectedContent = url.origin === base.origin && /^\/v1\/videos\/[^/]+\/content\/?$/u.test(url.pathname);
+      if (protectedContent) {
+        if (!apiKey.trim()) throw new Error("cheapbuddy_media_key_required");
+        headers.set("authorization", `Bearer ${apiKey}`);
+      }
+      const response = await fetchImpl(url, { ...init, headers, redirect: "manual" });
+      if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+      const location = response.headers.get("location");
+      if (!location) return response;
+      await response.body?.cancel();
+      url = new URL(location, url);
+    }
+    throw new Error("cheapbuddy_media_download_redirect_limit");
+  };
+}
 
 type WorkflowLocalMediaFile = {
   readonly bytes: Uint8Array;

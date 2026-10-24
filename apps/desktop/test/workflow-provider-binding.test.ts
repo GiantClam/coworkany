@@ -3,6 +3,8 @@ import test from "node:test";
 import type { WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
 import { bindWorkflowProviderDefaults } from "../src/workflow-provider-binding";
 import { sanitizeWorkflowDefinitionForStorage } from "../src/workflow-storage";
+import { createCheapBuddyProvider } from "../src/cheapbuddy";
+import { setProviderCapabilityModels, type DesktopProviderConfig } from "../src/provider-config";
 
 const definition: WorkflowDefinitionEnvelope = {
   schemaVersion: 2,
@@ -16,6 +18,22 @@ const definition: WorkflowDefinitionEnvelope = {
   ],
   edges: [],
 };
+
+test("one CheapBuddy profile binds each node to its own capability catalog without exposing its reference", () => {
+  let provider: DesktopProviderConfig = { ...createCheapBuddyProvider(), credentialRef: "account-ref" };
+  provider = setProviderCapabilityModels(provider, "text", ["glm-5.3"]);
+  provider = setProviderCapabilityModels(provider, "image", ["grok-imagine-image-2.0"]);
+  provider = setProviderCapabilityModels(provider, "video", ["MiniMax-H3"]);
+  const bound = bindWorkflowProviderDefaults({ ...definition, nodes: definition.nodes.filter((node) => node.nodeKey !== "audio").map((node) => node.nodeKey === "image" ? { ...node, config: { selectedProviderId: "cheapbuddy", selectedModelId: "glm-5.3" } } : node) }, {
+    provider, providers: { cheapbuddy: provider }, defaults: { text: "cheapbuddy", image: "cheapbuddy", video: "cheapbuddy" },
+  });
+  assert.equal(bound.nodes.find((node) => node.nodeKey === "image")?.config.model, "grok-imagine-image-2.0");
+  assert.equal(bound.nodes.find((node) => node.nodeKey === "video")?.config.model, "MiniMax-H3");
+  assert.equal(JSON.stringify(bound).includes("account-ref"), false);
+  const empty = setProviderCapabilityModels(provider, "image", []);
+  const unconfigured = bindWorkflowProviderDefaults({ ...definition, nodes: [definition.nodes[1]!] }, { provider: empty, providers: { cheapbuddy: empty }, defaults: { image: "cheapbuddy" } });
+  assert.equal(unconfigured.nodes[0]?.config.model, "");
+});
 
 test("mixed media workflows bind each node to its configured capability provider and model", () => {
   const bound = bindWorkflowProviderDefaults(definition, {

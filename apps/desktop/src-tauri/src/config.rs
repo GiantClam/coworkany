@@ -6,11 +6,18 @@ use std::io::Write;
 use std::path::Path;
 
 pub fn default_config(workspace_path: &Path) -> Value {
+    let provider = json!({
+        "id": "cheapbuddy", "source": "cheapbuddy", "model": "", "models": [],
+        "baseUrl": "https://api.cheapbuddy.cc/v1", "capabilities": ["text", "image", "video"],
+        "capabilityModels": { "text": { "model": "", "models": [] }, "image": { "model": "", "models": [] }, "video": { "model": "", "models": [] } }
+    });
     json!({
         "schemaVersion": 1,
         "locale": "auto",
         "workspacePath": workspace_path.join("projects"),
-        "provider": { "id": "local", "source": "local", "model": "", "baseUrl": "http://127.0.0.1:11434/v1", "apiKey": "" },
+        "provider": provider.clone(),
+        "providers": { "cheapbuddy": provider },
+        "defaults": { "text": "cheapbuddy", "image": "cheapbuddy", "video": "cheapbuddy" },
         "runtime": { "source": "system" }
     })
 }
@@ -24,6 +31,7 @@ pub fn read(path: &Path, workspace_path: &Path) -> Result<Value, String> {
                 remove_development_runninghub_workflow_ids(&mut value);
             }
             normalize_runtime_and_workspace(&mut value, workspace_path);
+            remove_referenced_api_keys(&mut value);
             Ok(value)
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(default_config(workspace_path)),
@@ -43,6 +51,7 @@ fn normalize_runtime_and_workspace(value: &mut Value, workspace_path: &Path) {
 
 pub fn write(path: &Path, value: &Value) -> Result<(), String> {
     let mut normalized = value.clone();
+    remove_referenced_api_keys(&mut normalized);
     if !is_customer_package(&normalized) {
         remove_development_runninghub_workflow_ids(&mut normalized);
     }
@@ -87,6 +96,21 @@ fn is_customer_package(value: &Value) -> bool {
     value.get("packageType").and_then(Value::as_str) == Some("customer")
 }
 
+/// Store the opaque reference only; a Host-resolved key is never config data.
+fn remove_referenced_api_keys(value: &mut Value) {
+    fn sanitize(profile: &mut Value) {
+        if let Some(object) = profile.as_object_mut() {
+            if object.get("credentialRef").and_then(Value::as_str).map(|value| !value.trim().is_empty()).unwrap_or(false) {
+                object.remove("apiKey");
+            }
+        }
+    }
+    if let Some(provider) = value.get_mut("provider") { sanitize(provider); }
+    if let Some(providers) = value.get_mut("providers").and_then(Value::as_object_mut) {
+        for profile in providers.values_mut() { sanitize(profile); }
+    }
+}
+
 #[cfg(unix)]
 fn sync_parent(parent: &Path) -> Result<(), String> {
     File::open(parent).map_err(|error| error.to_string())?.sync_all().map_err(|error| error.to_string())
@@ -107,6 +131,25 @@ fn validate(value: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_run_uses_one_unconfigured_cheapbuddy_profile() {
+        let value = default_config(Path::new("/workspace"));
+        assert_eq!(value["provider"]["id"], "cheapbuddy");
+        assert_eq!(value["provider"]["model"], "");
+        assert_eq!(value["defaults"]["image"], "cheapbuddy");
+        assert_eq!(value["defaults"]["video"], "cheapbuddy");
+        assert_eq!(value["providers"]["cheapbuddy"], value["provider"]);
+    }
+
+    #[test]
+    fn credential_references_strip_resolved_keys_without_changing_legacy_keys() {
+        let mut value = json!({ "provider": { "credentialRef": "ref-1", "apiKey": "resolved" }, "providers": { "cheapbuddy": { "credentialRef": "ref-1", "apiKey": "resolved" }, "legacy": { "apiKey": "legacy-key" } } });
+        remove_referenced_api_keys(&mut value);
+        assert!(value["provider"].get("apiKey").is_none());
+        assert!(value["providers"]["cheapbuddy"].get("apiKey").is_none());
+        assert_eq!(value["providers"]["legacy"]["apiKey"], "legacy-key");
+    }
 
     #[test]
     fn config_round_trip_rejects_invalid_schema() {

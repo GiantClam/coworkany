@@ -41,11 +41,14 @@ test("macOS x64 uses the same local paths without semantic retrieval", () => {
   assert.equal(platform.semanticRag, false);
 });
 
-test("first-run desktop config has no default text model", () => {
+test("first-run desktop config has one unconfigured CheapBuddy profile", () => {
   const root = join(tmpdir(), "coworkany-default-config");
   const config = defaultDesktopConfig(createPaths(root, "normal"));
   assert.equal(config.provider.model, "");
-  assert.equal(config.provider.models, undefined);
+  assert.deepEqual(config.provider.models, []);
+  assert.equal(config.provider.id, "cheapbuddy");
+  assert.deepEqual(config.defaults, { text: "cheapbuddy", image: "cheapbuddy", video: "cheapbuddy" });
+  assert.deepEqual(config.providers?.cheapbuddy, config.provider);
 });
 
 test("config writes atomically and recovers from backup", async () => {

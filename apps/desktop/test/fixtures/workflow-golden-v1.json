@@ -1,0 +1,1690 @@
+{
+  "sourceCommit": "5cfb930cad41ab0e9f706c5ccc49eef3c3dc9f6a",
+  "provider": {
+    "id": "fixture-provider",
+    "model": "fixture-model",
+    "baseUrl": "https://fixture.invalid"
+  },
+  "definitions": {
+    "zh": {
+      "content-pipeline": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "052210da6418cef29d9236e67ff087e9c91047e42d24f4fa52fc9820290d964e",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "text_input",
+            "nodeVersion": 1,
+            "title": "输入任务",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "text": ""
+            }
+          },
+          {
+            "nodeKey": "capability",
+            "type": "writer",
+            "nodeVersion": 1,
+            "title": "内容写作",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "selectedProviderId": "fixture-provider",
+              "selectedModelId": "fixture-model",
+              "platform": "wechat",
+              "mode": "article",
+              "language": "auto",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "asset-library",
+            "type": "product_store",
+            "nodeVersion": 1,
+            "title": "保存到资产库",
+            "positionX": 816,
+            "positionY": 0,
+            "config": {
+              "fileName": "workflow-output.md",
+              "title": "",
+              "persistToWorkLibrary": true,
+              "persistToKnowledgeBase": false,
+              "knowledgeTargetType": "knowledge_base"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "input-capability",
+            "sourceNodeKey": "input",
+            "sourcePortId": "text",
+            "targetNodeKey": "capability",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "capability-asset-library",
+            "sourceNodeKey": "capability",
+            "sourcePortId": "text",
+            "targetNodeKey": "asset-library",
+            "targetPortId": "text"
+          }
+        ],
+        "metadata": {
+          "templateKey": "content-pipeline",
+          "templateVersion": 1
+        }
+      },
+      "presentation": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "0653a2d0aabea40ebac4187385b65abf6f78f139292100ec625405b05fabfea8",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "text_input",
+            "nodeVersion": 1,
+            "title": "输入任务",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "text": ""
+            }
+          },
+          {
+            "nodeKey": "capability",
+            "type": "ppt_generate",
+            "nodeVersion": 1,
+            "title": "PPT（ppt-master）",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "prompt": "",
+              "previewRuntime": "frontend-slides-agent",
+              "model": "fixture-model",
+              "pageCount": 8,
+              "templateId": "",
+              "language": "zh-CN",
+              "scenario": "marketing-campaign",
+              "provider": "fixture-provider",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "asset-library",
+            "type": "product_store",
+            "nodeVersion": 1,
+            "title": "保存到资产库",
+            "positionX": 816,
+            "positionY": 0,
+            "config": {
+              "fileName": "workflow-output.md",
+              "title": "",
+              "persistToWorkLibrary": true,
+              "persistToKnowledgeBase": false,
+              "knowledgeTargetType": "knowledge_base"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "input-capability",
+            "sourceNodeKey": "input",
+            "sourcePortId": "text",
+            "targetNodeKey": "capability",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "capability-asset-library",
+            "sourceNodeKey": "capability",
+            "sourcePortId": "ppt",
+            "targetNodeKey": "asset-library",
+            "targetPortId": "presentations"
+          }
+        ],
+        "metadata": {
+          "templateKey": "presentation",
+          "templateVersion": 1
+        }
+      },
+      "image-campaign": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "eb80ef00f5d1ace1f58e523ba3bc123257a7e34ec9ec61a793fb5e2129a49110",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "text_input",
+            "nodeVersion": 1,
+            "title": "输入任务",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "text": ""
+            }
+          },
+          {
+            "nodeKey": "capability",
+            "type": "image_generate",
+            "nodeVersion": 1,
+            "title": "图片生成",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "prompt": "",
+              "selectedProviderId": "fixture-provider",
+              "selectedModelId": "fixture-model",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "asset-library",
+            "type": "product_store",
+            "nodeVersion": 1,
+            "title": "保存到资产库",
+            "positionX": 816,
+            "positionY": 0,
+            "config": {
+              "fileName": "workflow-output.md",
+              "title": "",
+              "persistToWorkLibrary": true,
+              "persistToKnowledgeBase": false,
+              "knowledgeTargetType": "knowledge_base"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "input-capability",
+            "sourceNodeKey": "input",
+            "sourcePortId": "text",
+            "targetNodeKey": "capability",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "capability-asset-library",
+            "sourceNodeKey": "capability",
+            "sourcePortId": "image",
+            "targetNodeKey": "asset-library",
+            "targetPortId": "images"
+          }
+        ],
+        "metadata": {
+          "templateKey": "image-campaign",
+          "templateVersion": 1
+        }
+      },
+      "video-ffmpeg-transform": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "7c50d127b5319c3bf99f42f8a362b0a8f7ccedd8999c981f5cd96d3bb5e1561e",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "upload",
+            "nodeVersion": 1,
+            "title": "上传媒体",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "uploadedFiles": [],
+              "referencedArtifactIds": []
+            }
+          },
+          {
+            "nodeKey": "process",
+            "type": "video_process",
+            "nodeVersion": 1,
+            "title": "FFmpeg 视频变换",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "operation": "transform",
+              "ratio": "16:9",
+              "width": 1280,
+              "height": 720,
+              "fps": 30
+            }
+          },
+          {
+            "nodeKey": "output",
+            "type": "output",
+            "nodeVersion": 1,
+            "title": "结果预览",
+            "positionX": 816,
+            "positionY": 0,
+            "config": {}
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "input-process",
+            "sourceNodeKey": "input",
+            "sourcePortId": "video",
+            "targetNodeKey": "process",
+            "targetPortId": "videos"
+          },
+          {
+            "edgeKey": "process-output",
+            "sourceNodeKey": "process",
+            "sourcePortId": "video",
+            "targetNodeKey": "output",
+            "targetPortId": "videos"
+          }
+        ],
+        "metadata": {
+          "description": "使用 FFmpeg 调整本地视频尺寸并统一帧率。",
+          "status": "draft",
+          "templateKey": "video-ffmpeg-transform",
+          "templateVersion": 1
+        }
+      },
+      "audio-ffmpeg-trim": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "3dc75f3de3c5f00c71f7047a722be9ad2c440d5adc88ccbf583bfd85551e99e8",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "upload",
+            "nodeVersion": 1,
+            "title": "上传媒体",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "uploadedFiles": [],
+              "referencedArtifactIds": []
+            }
+          },
+          {
+            "nodeKey": "process",
+            "type": "audio_process",
+            "nodeVersion": 1,
+            "title": "FFmpeg 音频裁剪",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "operation": "trim",
+              "startSeconds": 0,
+              "endSeconds": 2
+            }
+          },
+          {
+            "nodeKey": "output",
+            "type": "output",
+            "nodeVersion": 1,
+            "title": "结果预览",
+            "positionX": 816,
+            "positionY": 0,
+            "config": {}
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "input-process",
+            "sourceNodeKey": "input",
+            "sourcePortId": "audio",
+            "targetNodeKey": "process",
+            "targetPortId": "audios"
+          },
+          {
+            "edgeKey": "process-output",
+            "sourceNodeKey": "process",
+            "sourcePortId": "audio",
+            "targetNodeKey": "output",
+            "targetPortId": "audios"
+          }
+        ],
+        "metadata": {
+          "description": "使用 FFmpeg 裁剪本地音频前两秒。",
+          "status": "draft",
+          "templateKey": "audio-ffmpeg-trim",
+          "templateVersion": 1
+        }
+      },
+      "product-promotion-video": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "6c8ce0fea4767e7a41b73ce0516ce83606568cf0006542c1313d17b4aa95b82a",
+        "nodes": [
+          {
+            "nodeKey": "script",
+            "type": "text_input",
+            "nodeVersion": 1,
+            "title": "UGC 产品宣传脚本",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "text": "[0-4 秒 Hook]\n产品：[名称]。目标用户：[人群]。核心价值：[一句话价值]。画面、口播、表情、屏幕字幕。\n\n[4-10 秒 Pain Point]\n画面、口播、快速切镜、真实细节。\n\n[10-23 秒 Product Demo]\n屏幕操作、口播反应、产品结果、字幕。\n\n[23-28 秒 Proof]\n具体结果、第三方证明、口播。\n\n[28-33 秒 CTA]\n自然、低销售感的行动号召。\n\n[33-35 秒 Easter Egg]\n自然低声说出的优惠或彩蛋。"
+            }
+          },
+          {
+            "nodeKey": "creator-reference",
+            "type": "image_generate",
+            "nodeVersion": 1,
+            "title": "生成 UGC 人物参考图",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "prompt": "根据产品宣传脚本生成一张统一的竖屏 UGC 人物参考图。固定同一个真实、亲切的人物、年龄、发型、服装、光线、房间和手机手持拍摄质感，供所有场景复用。体现产品使用环境，但不要生成可读文字或水印。",
+              "mode": "text-to-image",
+              "ratio": "9:16",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "script-split",
+            "type": "text_split",
+            "nodeVersion": 1,
+            "title": "将脚本拆为场景",
+            "positionX": 408,
+            "positionY": 360,
+            "config": {
+              "separator": "heading",
+              "delimiter": "",
+              "pattern": "",
+              "trim": true
+            }
+          },
+          {
+            "nodeKey": "scene-foreach",
+            "type": "foreach",
+            "nodeVersion": 1,
+            "title": "逐段生成场景",
+            "positionX": 816,
+            "positionY": 360,
+            "config": {
+              "inputPortId": "text",
+              "collectNodeKey": "scene-collect",
+              "concurrency": 1,
+              "maxIterations": 20,
+              "failurePolicy": "fail_fast"
+            }
+          },
+          {
+            "nodeKey": "scene-video",
+            "type": "video_generate",
+            "nodeVersion": 1,
+            "title": "UGC 场景视频",
+            "positionX": 1224,
+            "positionY": 360,
+            "config": {
+              "prompt": "以输入的场景脚本为唯一事实来源，生成一段竖屏 UGC 场景，内置口播、自然表演、字幕和手持手机真实感；产品画面必须准确，不得虚构功能，并保持输入的人物参考图一致。",
+              "mode": "reference-to-video",
+              "ratio": "9:16",
+              "width": 1080,
+              "height": 1920,
+              "fps": 30,
+              "sound": "on",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "scene-collect",
+            "type": "collect",
+            "nodeVersion": 1,
+            "title": "汇总场景视频",
+            "positionX": 1632,
+            "positionY": 360,
+            "config": {
+              "order": "input",
+              "includeFailures": false
+            }
+          },
+          {
+            "nodeKey": "stitch",
+            "type": "video_process",
+            "nodeVersion": 1,
+            "title": "拼接生成的 UGC 场景",
+            "positionX": 2040,
+            "positionY": 660,
+            "config": {
+              "operation": "stitch",
+              "transition": "cut",
+              "ratio": "9:16",
+              "width": 1080,
+              "height": 1920,
+              "fps": 30,
+              "outputFormat": "mp4"
+            }
+          },
+          {
+            "nodeKey": "cover-image",
+            "type": "image_generate",
+            "nodeVersion": 1,
+            "title": "生成视频封面",
+            "positionX": 2040,
+            "positionY": 0,
+            "config": {
+              "prompt": "为这条 UGC 产品宣传视频生成一张 9:16 竖屏封面。保持同一人物和产品环境，突出 Hook 的真实情绪和产品主体，为标题预留干净留白；不要生成可读文字或水印。",
+              "mode": "text-to-image",
+              "ratio": "9:16",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "compose",
+            "type": "video_compose",
+            "nodeVersion": 1,
+            "title": "将封面写入最终视频",
+            "positionX": 2448,
+            "positionY": 660,
+            "config": {
+              "outputFormat": "mp4",
+              "subtitleMode": "none",
+              "fitMode": "contain"
+            }
+          },
+          {
+            "nodeKey": "output",
+            "type": "output",
+            "nodeVersion": 1,
+            "title": "UGC 产品宣传成片",
+            "positionX": 2856,
+            "positionY": 660,
+            "config": {
+              "displayName": "UGC 产品宣传成片",
+              "allowEmpty": false,
+              "requireAllSucceeded": true
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "script-reference",
+            "sourceNodeKey": "script",
+            "sourcePortId": "text",
+            "targetNodeKey": "creator-reference",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "reference-cover",
+            "sourceNodeKey": "creator-reference",
+            "sourcePortId": "image",
+            "targetNodeKey": "cover-image",
+            "targetPortId": "referenceImage"
+          },
+          {
+            "edgeKey": "script-cover",
+            "sourceNodeKey": "script",
+            "sourcePortId": "text",
+            "targetNodeKey": "cover-image",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "script-split",
+            "sourceNodeKey": "script",
+            "sourcePortId": "text",
+            "targetNodeKey": "script-split",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "split-foreach",
+            "sourceNodeKey": "script-split",
+            "sourcePortId": "texts",
+            "targetNodeKey": "scene-foreach",
+            "targetPortId": "items.text"
+          },
+          {
+            "edgeKey": "reference-foreach",
+            "sourceNodeKey": "creator-reference",
+            "sourcePortId": "image",
+            "targetNodeKey": "scene-foreach",
+            "targetPortId": "referenceImage"
+          },
+          {
+            "edgeKey": "foreach-scene",
+            "sourceNodeKey": "scene-foreach",
+            "sourcePortId": "item.text",
+            "targetNodeKey": "scene-video",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "foreach-reference-scene",
+            "sourceNodeKey": "scene-foreach",
+            "sourcePortId": "item.image",
+            "targetNodeKey": "scene-video",
+            "targetPortId": "referenceImages"
+          },
+          {
+            "edgeKey": "scene-collect",
+            "sourceNodeKey": "scene-video",
+            "sourcePortId": "video",
+            "targetNodeKey": "scene-collect",
+            "targetPortId": "items.video"
+          },
+          {
+            "edgeKey": "collect-stitch",
+            "sourceNodeKey": "scene-collect",
+            "sourcePortId": "videos",
+            "targetNodeKey": "stitch",
+            "targetPortId": "videos"
+          },
+          {
+            "edgeKey": "stitch-compose",
+            "sourceNodeKey": "stitch",
+            "sourcePortId": "video",
+            "targetNodeKey": "compose",
+            "targetPortId": "videos"
+          },
+          {
+            "edgeKey": "cover-image-compose",
+            "sourceNodeKey": "cover-image",
+            "sourcePortId": "image",
+            "targetNodeKey": "compose",
+            "targetPortId": "coverImage"
+          },
+          {
+            "edgeKey": "compose-output",
+            "sourceNodeKey": "compose",
+            "sourcePortId": "video",
+            "targetNodeKey": "output",
+            "targetPortId": "videos"
+          }
+        ],
+        "metadata": {
+          "templateKey": "product-promotion-video",
+          "description": "根据统一的人物参考图和可复用的场景脚本生成竖屏 UGC 产品宣传视频。一个文本分割节点拆出多个场景，一个视频节点逐段执行并内置口播、表演、字幕和手机拍摄质感；随后汇总拼接、生成封面，并将封面写入成片。",
+          "status": "draft",
+          "templateVersion": 1
+        }
+      },
+      "character-swap-video": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "83de51d10ecaa77203b5ec59e7e4d317066f0bf6989e22a260f00a7183c673ac",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "text_input",
+            "nodeVersion": 1,
+            "title": "替换与字幕说明",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "text": "将人物图中的人物替换到参考图中，保留参考图的背景、构图、光影和整体风格。"
+            }
+          },
+          {
+            "nodeKey": "reference-image",
+            "type": "upload",
+            "nodeVersion": 1,
+            "title": "参考图",
+            "positionX": 0,
+            "positionY": 360,
+            "config": {
+              "uploadedFiles": [],
+              "referencedArtifactIds": []
+            }
+          },
+          {
+            "nodeKey": "character-image",
+            "type": "upload",
+            "nodeVersion": 1,
+            "title": "人物图",
+            "positionX": 0,
+            "positionY": 720,
+            "config": {
+              "uploadedFiles": [],
+              "referencedArtifactIds": []
+            }
+          },
+          {
+            "nodeKey": "audio",
+            "type": "upload",
+            "nodeVersion": 1,
+            "title": "音频文件",
+            "positionX": 0,
+            "positionY": 1080,
+            "config": {
+              "uploadedFiles": [],
+              "referencedArtifactIds": []
+            }
+          },
+          {
+            "nodeKey": "replace",
+            "type": "image_generate",
+            "nodeVersion": 1,
+            "title": "替换参考图中的人物",
+            "positionX": 480,
+            "positionY": 260,
+            "config": {
+              "selectedProviderId": "fixture-provider",
+              "selectedModelId": "fixture-model",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid",
+              "prompt": "将人物图中的人物替换到参考图中，保留参考图的背景、构图、光影和整体风格。",
+              "featureId": "image-edit",
+              "mode": "image-edit",
+              "requiresCharacterImageBindings": true
+            }
+          },
+          {
+            "nodeKey": "asr",
+            "type": "agent_execute",
+            "nodeVersion": 1,
+            "title": "ASR 转字幕",
+            "positionX": 480,
+            "positionY": 900,
+            "config": {
+              "selectedProviderId": "fixture-provider",
+              "selectedModelId": "fixture-model",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid",
+              "operation": "audio_transcription",
+              "prompt": "将音频转为带时间戳的 SRT 字幕文本。"
+            }
+          },
+          {
+            "nodeKey": "subtitle",
+            "type": "file_create",
+            "nodeVersion": 1,
+            "title": "字幕文件",
+            "positionX": 900,
+            "positionY": 900,
+            "config": {
+              "fileName": "subtitles.srt",
+              "fileFormat": "srt"
+            }
+          },
+          {
+            "nodeKey": "video",
+            "type": "video_compose",
+            "nodeVersion": 1,
+            "title": "合成带字幕视频",
+            "positionX": 900,
+            "positionY": 260,
+            "config": {
+              "outputFormat": "mp4",
+              "subtitleMode": "burn_in",
+              "fitMode": "contain"
+            }
+          },
+          {
+            "nodeKey": "output",
+            "type": "output",
+            "nodeVersion": 1,
+            "title": "最终输出",
+            "positionX": 1360,
+            "positionY": 420,
+            "config": {
+              "displayName": "最终输出",
+              "allowEmpty": false,
+              "requireAllSucceeded": true
+            }
+          },
+          {
+            "nodeKey": "store",
+            "type": "product_store",
+            "nodeVersion": 1,
+            "title": "保存最终产物",
+            "positionX": 1780,
+            "positionY": 420,
+            "config": {
+              "fileName": "character-swap-video.md",
+              "persistToWorkLibrary": true,
+              "persistToKnowledgeBase": false
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "prompt-replace",
+            "sourceNodeKey": "input",
+            "sourcePortId": "text",
+            "targetNodeKey": "replace",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "reference-replace",
+            "sourceNodeKey": "reference-image",
+            "sourcePortId": "image",
+            "targetNodeKey": "replace",
+            "targetPortId": "referenceImage"
+          },
+          {
+            "edgeKey": "character-replace",
+            "sourceNodeKey": "character-image",
+            "sourcePortId": "image",
+            "targetNodeKey": "replace",
+            "targetPortId": "characterImage"
+          },
+          {
+            "edgeKey": "audio-asr",
+            "sourceNodeKey": "audio",
+            "sourcePortId": "audio",
+            "targetNodeKey": "asr",
+            "targetPortId": "audio"
+          },
+          {
+            "edgeKey": "replace-video",
+            "sourceNodeKey": "replace",
+            "sourcePortId": "image",
+            "targetNodeKey": "video",
+            "targetPortId": "coverImage"
+          },
+          {
+            "edgeKey": "audio-video",
+            "sourceNodeKey": "audio",
+            "sourcePortId": "audio",
+            "targetNodeKey": "video",
+            "targetPortId": "audio"
+          },
+          {
+            "edgeKey": "asr-subtitle",
+            "sourceNodeKey": "asr",
+            "sourcePortId": "text",
+            "targetNodeKey": "subtitle",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "subtitle-video",
+            "sourceNodeKey": "subtitle",
+            "sourcePortId": "asset",
+            "targetNodeKey": "video",
+            "targetPortId": "subtitle"
+          },
+          {
+            "edgeKey": "video-output",
+            "sourceNodeKey": "video",
+            "sourcePortId": "video",
+            "targetNodeKey": "output",
+            "targetPortId": "videos"
+          },
+          {
+            "edgeKey": "subtitle-output",
+            "sourceNodeKey": "subtitle",
+            "sourcePortId": "asset",
+            "targetNodeKey": "output",
+            "targetPortId": "assets"
+          },
+          {
+            "edgeKey": "asr-output",
+            "sourceNodeKey": "asr",
+            "sourcePortId": "text",
+            "targetNodeKey": "output",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "video-store",
+            "sourceNodeKey": "video",
+            "sourcePortId": "video",
+            "targetNodeKey": "store",
+            "targetPortId": "videos"
+          },
+          {
+            "edgeKey": "subtitle-store",
+            "sourceNodeKey": "subtitle",
+            "sourcePortId": "asset",
+            "targetNodeKey": "store",
+            "targetPortId": "assets"
+          },
+          {
+            "edgeKey": "audio-store",
+            "sourceNodeKey": "audio",
+            "sourcePortId": "audio",
+            "targetNodeKey": "store",
+            "targetPortId": "audios"
+          }
+        ],
+        "metadata": {
+          "templateKey": "character-swap-video",
+          "templateVersion": 1
+        }
+      }
+    },
+    "en": {
+      "content-pipeline": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "0767966cdde64f735893a577b2ad1aef63d3cf3bb1ca442b236d7528a3f3a70b",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "text_input",
+            "nodeVersion": 1,
+            "title": "Input task",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "text": ""
+            }
+          },
+          {
+            "nodeKey": "capability",
+            "type": "writer",
+            "nodeVersion": 1,
+            "title": "Content writing",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "selectedProviderId": "fixture-provider",
+              "selectedModelId": "fixture-model",
+              "platform": "wechat",
+              "mode": "article",
+              "language": "auto",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "asset-library",
+            "type": "product_store",
+            "nodeVersion": 1,
+            "title": "Save to Asset Library",
+            "positionX": 816,
+            "positionY": 0,
+            "config": {
+              "fileName": "workflow-output.md",
+              "title": "",
+              "persistToWorkLibrary": true,
+              "persistToKnowledgeBase": false,
+              "knowledgeTargetType": "knowledge_base"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "input-capability",
+            "sourceNodeKey": "input",
+            "sourcePortId": "text",
+            "targetNodeKey": "capability",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "capability-asset-library",
+            "sourceNodeKey": "capability",
+            "sourcePortId": "text",
+            "targetNodeKey": "asset-library",
+            "targetPortId": "text"
+          }
+        ],
+        "metadata": {
+          "templateKey": "content-pipeline",
+          "templateVersion": 1
+        }
+      },
+      "presentation": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "c426fcf45fb4e8d2bb980f83bc57b3fcd89bee0cad7860999154303200f7f134",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "text_input",
+            "nodeVersion": 1,
+            "title": "Input task",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "text": ""
+            }
+          },
+          {
+            "nodeKey": "capability",
+            "type": "ppt_generate",
+            "nodeVersion": 1,
+            "title": "PPT (ppt-master)",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "prompt": "",
+              "previewRuntime": "frontend-slides-agent",
+              "model": "fixture-model",
+              "pageCount": 8,
+              "templateId": "",
+              "language": "zh-CN",
+              "scenario": "marketing-campaign",
+              "provider": "fixture-provider",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "asset-library",
+            "type": "product_store",
+            "nodeVersion": 1,
+            "title": "Save to Asset Library",
+            "positionX": 816,
+            "positionY": 0,
+            "config": {
+              "fileName": "workflow-output.md",
+              "title": "",
+              "persistToWorkLibrary": true,
+              "persistToKnowledgeBase": false,
+              "knowledgeTargetType": "knowledge_base"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "input-capability",
+            "sourceNodeKey": "input",
+            "sourcePortId": "text",
+            "targetNodeKey": "capability",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "capability-asset-library",
+            "sourceNodeKey": "capability",
+            "sourcePortId": "ppt",
+            "targetNodeKey": "asset-library",
+            "targetPortId": "presentations"
+          }
+        ],
+        "metadata": {
+          "templateKey": "presentation",
+          "templateVersion": 1
+        }
+      },
+      "image-campaign": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "8a4fc4a5bd922d584c10b446fdfd7d02fe31e5e7badc0802a0d5142753c9f765",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "text_input",
+            "nodeVersion": 1,
+            "title": "Input task",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "text": ""
+            }
+          },
+          {
+            "nodeKey": "capability",
+            "type": "image_generate",
+            "nodeVersion": 1,
+            "title": "Image generation",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "prompt": "",
+              "selectedProviderId": "fixture-provider",
+              "selectedModelId": "fixture-model",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "asset-library",
+            "type": "product_store",
+            "nodeVersion": 1,
+            "title": "Save to Asset Library",
+            "positionX": 816,
+            "positionY": 0,
+            "config": {
+              "fileName": "workflow-output.md",
+              "title": "",
+              "persistToWorkLibrary": true,
+              "persistToKnowledgeBase": false,
+              "knowledgeTargetType": "knowledge_base"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "input-capability",
+            "sourceNodeKey": "input",
+            "sourcePortId": "text",
+            "targetNodeKey": "capability",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "capability-asset-library",
+            "sourceNodeKey": "capability",
+            "sourcePortId": "image",
+            "targetNodeKey": "asset-library",
+            "targetPortId": "images"
+          }
+        ],
+        "metadata": {
+          "templateKey": "image-campaign",
+          "templateVersion": 1
+        }
+      },
+      "video-ffmpeg-transform": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "5d151ee764edf0acca386e6d81757bb7ed85a6fae5143429744928137706039d",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "upload",
+            "nodeVersion": 1,
+            "title": "Upload media",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "uploadedFiles": [],
+              "referencedArtifactIds": []
+            }
+          },
+          {
+            "nodeKey": "process",
+            "type": "video_process",
+            "nodeVersion": 1,
+            "title": "FFmpeg video transform",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "operation": "transform",
+              "ratio": "16:9",
+              "width": 1280,
+              "height": 720,
+              "fps": 30
+            }
+          },
+          {
+            "nodeKey": "output",
+            "type": "output",
+            "nodeVersion": 1,
+            "title": "Result preview",
+            "positionX": 816,
+            "positionY": 0,
+            "config": {}
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "input-process",
+            "sourceNodeKey": "input",
+            "sourcePortId": "video",
+            "targetNodeKey": "process",
+            "targetPortId": "videos"
+          },
+          {
+            "edgeKey": "process-output",
+            "sourceNodeKey": "process",
+            "sourcePortId": "video",
+            "targetNodeKey": "output",
+            "targetPortId": "videos"
+          }
+        ],
+        "metadata": {
+          "description": "Resize and normalize a local video with FFmpeg.",
+          "status": "draft",
+          "templateKey": "video-ffmpeg-transform",
+          "templateVersion": 1
+        }
+      },
+      "audio-ffmpeg-trim": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "616f01dc709e89d4b9de28b4dc8cd4e2a2c21442ebb94c09a148304a8fcc244f",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "upload",
+            "nodeVersion": 1,
+            "title": "Upload media",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "uploadedFiles": [],
+              "referencedArtifactIds": []
+            }
+          },
+          {
+            "nodeKey": "process",
+            "type": "audio_process",
+            "nodeVersion": 1,
+            "title": "FFmpeg audio trim",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "operation": "trim",
+              "startSeconds": 0,
+              "endSeconds": 2
+            }
+          },
+          {
+            "nodeKey": "output",
+            "type": "output",
+            "nodeVersion": 1,
+            "title": "Result preview",
+            "positionX": 816,
+            "positionY": 0,
+            "config": {}
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "input-process",
+            "sourceNodeKey": "input",
+            "sourcePortId": "audio",
+            "targetNodeKey": "process",
+            "targetPortId": "audios"
+          },
+          {
+            "edgeKey": "process-output",
+            "sourceNodeKey": "process",
+            "sourcePortId": "audio",
+            "targetNodeKey": "output",
+            "targetPortId": "audios"
+          }
+        ],
+        "metadata": {
+          "description": "Trim the first two seconds of a local audio file with FFmpeg.",
+          "status": "draft",
+          "templateKey": "audio-ffmpeg-trim",
+          "templateVersion": 1
+        }
+      },
+      "product-promotion-video": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "cecfcbb5bd32c306215bfe851fcabf32779197f06b177b598529b7d990ca54af",
+        "nodes": [
+          {
+            "nodeKey": "script",
+            "type": "text_input",
+            "nodeVersion": 1,
+            "title": "UGC product promotion script",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "text": "[0-4s Hook]\nProduct: [name]. Audience: [target user]. Core value: [one sentence]. Visual, spoken line, expression, and on-screen caption.\n\n[4-10s Pain Point]\nVisual, spoken line, quick cuts, realistic details.\n\n[10-23s Product Demo]\nScreen action, spoken reaction, product result, subtitles.\n\n[23-28s Proof]\nSpecific result, third-party proof, spoken line.\n\n[28-33s CTA]\nNatural low-pressure call to action.\n\n[33-35s Easter Egg]\nBonus tip or offer, whispered naturally."
+            }
+          },
+          {
+            "nodeKey": "creator-reference",
+            "type": "image_generate",
+            "nodeVersion": 1,
+            "title": "Generate UGC creator reference",
+            "positionX": 408,
+            "positionY": 0,
+            "config": {
+              "prompt": "Create a consistent vertical UGC creator reference image from the product script. Show the same relatable person, wardrobe, age, hair, lighting, room and handheld-phone aesthetic that all scenes can reuse. Include a believable product context, but do not add readable text or watermarks.",
+              "mode": "text-to-image",
+              "ratio": "9:16",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "script-split",
+            "type": "text_split",
+            "nodeVersion": 1,
+            "title": "Split script into scenes",
+            "positionX": 408,
+            "positionY": 360,
+            "config": {
+              "separator": "heading",
+              "delimiter": "",
+              "pattern": "",
+              "trim": true
+            }
+          },
+          {
+            "nodeKey": "scene-foreach",
+            "type": "foreach",
+            "nodeVersion": 1,
+            "title": "Generate each scene",
+            "positionX": 816,
+            "positionY": 360,
+            "config": {
+              "inputPortId": "text",
+              "collectNodeKey": "scene-collect",
+              "concurrency": 1,
+              "maxIterations": 20,
+              "failurePolicy": "fail_fast"
+            }
+          },
+          {
+            "nodeKey": "scene-video",
+            "type": "video_generate",
+            "nodeVersion": 1,
+            "title": "UGC scene video",
+            "positionX": 1224,
+            "positionY": 360,
+            "config": {
+              "prompt": "Use the supplied scene script as the source of truth. Generate one vertical UGC scene with built-in spoken voice, natural performance, captions, handheld realism, and product-accurate visuals. Keep the supplied creator reference consistent.",
+              "mode": "reference-to-video",
+              "ratio": "9:16",
+              "width": 1080,
+              "height": 1920,
+              "fps": 30,
+              "sound": "on",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "scene-collect",
+            "type": "collect",
+            "nodeVersion": 1,
+            "title": "Collect scene videos",
+            "positionX": 1632,
+            "positionY": 360,
+            "config": {
+              "order": "input",
+              "includeFailures": false
+            }
+          },
+          {
+            "nodeKey": "stitch",
+            "type": "video_process",
+            "nodeVersion": 1,
+            "title": "Stitch generated UGC scenes",
+            "positionX": 2040,
+            "positionY": 660,
+            "config": {
+              "operation": "stitch",
+              "transition": "cut",
+              "ratio": "9:16",
+              "width": 1080,
+              "height": 1920,
+              "fps": 30,
+              "outputFormat": "mp4"
+            }
+          },
+          {
+            "nodeKey": "cover-image",
+            "type": "image_generate",
+            "nodeVersion": 1,
+            "title": "Generate video cover",
+            "positionX": 2040,
+            "positionY": 0,
+            "config": {
+              "prompt": "Create a vertical 9:16 thumbnail for this UGC product video. Use the same creator and product context, make the Hook emotion immediately readable, leave clean negative space for a headline, and do not generate readable text or watermarks.",
+              "mode": "text-to-image",
+              "ratio": "9:16",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid"
+            }
+          },
+          {
+            "nodeKey": "compose",
+            "type": "video_compose",
+            "nodeVersion": 1,
+            "title": "Embed cover in final video",
+            "positionX": 2448,
+            "positionY": 660,
+            "config": {
+              "outputFormat": "mp4",
+              "subtitleMode": "none",
+              "fitMode": "contain"
+            }
+          },
+          {
+            "nodeKey": "output",
+            "type": "output",
+            "nodeVersion": 1,
+            "title": "Final UGC product video",
+            "positionX": 2856,
+            "positionY": 660,
+            "config": {
+              "displayName": "Final UGC product video",
+              "allowEmpty": false,
+              "requireAllSucceeded": true
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "script-reference",
+            "sourceNodeKey": "script",
+            "sourcePortId": "text",
+            "targetNodeKey": "creator-reference",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "reference-cover",
+            "sourceNodeKey": "creator-reference",
+            "sourcePortId": "image",
+            "targetNodeKey": "cover-image",
+            "targetPortId": "referenceImage"
+          },
+          {
+            "edgeKey": "script-cover",
+            "sourceNodeKey": "script",
+            "sourcePortId": "text",
+            "targetNodeKey": "cover-image",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "script-split",
+            "sourceNodeKey": "script",
+            "sourcePortId": "text",
+            "targetNodeKey": "script-split",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "split-foreach",
+            "sourceNodeKey": "script-split",
+            "sourcePortId": "texts",
+            "targetNodeKey": "scene-foreach",
+            "targetPortId": "items.text"
+          },
+          {
+            "edgeKey": "reference-foreach",
+            "sourceNodeKey": "creator-reference",
+            "sourcePortId": "image",
+            "targetNodeKey": "scene-foreach",
+            "targetPortId": "referenceImage"
+          },
+          {
+            "edgeKey": "foreach-scene",
+            "sourceNodeKey": "scene-foreach",
+            "sourcePortId": "item.text",
+            "targetNodeKey": "scene-video",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "foreach-reference-scene",
+            "sourceNodeKey": "scene-foreach",
+            "sourcePortId": "item.image",
+            "targetNodeKey": "scene-video",
+            "targetPortId": "referenceImages"
+          },
+          {
+            "edgeKey": "scene-collect",
+            "sourceNodeKey": "scene-video",
+            "sourcePortId": "video",
+            "targetNodeKey": "scene-collect",
+            "targetPortId": "items.video"
+          },
+          {
+            "edgeKey": "collect-stitch",
+            "sourceNodeKey": "scene-collect",
+            "sourcePortId": "videos",
+            "targetNodeKey": "stitch",
+            "targetPortId": "videos"
+          },
+          {
+            "edgeKey": "stitch-compose",
+            "sourceNodeKey": "stitch",
+            "sourcePortId": "video",
+            "targetNodeKey": "compose",
+            "targetPortId": "videos"
+          },
+          {
+            "edgeKey": "cover-image-compose",
+            "sourceNodeKey": "cover-image",
+            "sourcePortId": "image",
+            "targetNodeKey": "compose",
+            "targetPortId": "coverImage"
+          },
+          {
+            "edgeKey": "compose-output",
+            "sourceNodeKey": "compose",
+            "sourcePortId": "video",
+            "targetNodeKey": "output",
+            "targetPortId": "videos"
+          }
+        ],
+        "metadata": {
+          "templateKey": "product-promotion-video",
+          "description": "Generate a vertical UGC product promotion from one consistent creator reference and a reusable scene script. One text splitter expands the script into scene prompts; one video node runs for each segment, then the scenes are stitched, covered, and embedded in the final video.",
+          "status": "draft",
+          "templateVersion": 1
+        }
+      },
+      "character-swap-video": {
+        "schemaVersion": 2,
+        "revision": 1,
+        "definitionHash": "2a09ecada6f0c516e5dba709d4ff246618a995b51a30d03da73c7b29c10762ea",
+        "nodes": [
+          {
+            "nodeKey": "input",
+            "type": "text_input",
+            "nodeVersion": 1,
+            "title": "Replacement and subtitle instructions",
+            "positionX": 0,
+            "positionY": 0,
+            "config": {
+              "text": "Replace the person in the reference image with the person from the character image. Preserve the reference background, composition, lighting, and style."
+            }
+          },
+          {
+            "nodeKey": "reference-image",
+            "type": "upload",
+            "nodeVersion": 1,
+            "title": "Reference image",
+            "positionX": 0,
+            "positionY": 360,
+            "config": {
+              "uploadedFiles": [],
+              "referencedArtifactIds": []
+            }
+          },
+          {
+            "nodeKey": "character-image",
+            "type": "upload",
+            "nodeVersion": 1,
+            "title": "Character image",
+            "positionX": 0,
+            "positionY": 720,
+            "config": {
+              "uploadedFiles": [],
+              "referencedArtifactIds": []
+            }
+          },
+          {
+            "nodeKey": "audio",
+            "type": "upload",
+            "nodeVersion": 1,
+            "title": "Audio track",
+            "positionX": 0,
+            "positionY": 1080,
+            "config": {
+              "uploadedFiles": [],
+              "referencedArtifactIds": []
+            }
+          },
+          {
+            "nodeKey": "replace",
+            "type": "image_generate",
+            "nodeVersion": 1,
+            "title": "Replace character in reference",
+            "positionX": 480,
+            "positionY": 260,
+            "config": {
+              "selectedProviderId": "fixture-provider",
+              "selectedModelId": "fixture-model",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid",
+              "prompt": "Replace the person in the reference image with the person from the character image. Preserve the reference background, composition, lighting, and style.",
+              "featureId": "image-edit",
+              "mode": "image-edit",
+              "requiresCharacterImageBindings": true
+            }
+          },
+          {
+            "nodeKey": "asr",
+            "type": "agent_execute",
+            "nodeVersion": 1,
+            "title": "ASR subtitles",
+            "positionX": 480,
+            "positionY": 900,
+            "config": {
+              "selectedProviderId": "fixture-provider",
+              "selectedModelId": "fixture-model",
+              "provider": "fixture-provider",
+              "model": "fixture-model",
+              "baseUrl": "https://fixture.invalid",
+              "operation": "audio_transcription",
+              "prompt": "将音频转为带时间戳的 SRT 字幕文本。"
+            }
+          },
+          {
+            "nodeKey": "subtitle",
+            "type": "file_create",
+            "nodeVersion": 1,
+            "title": "Subtitle file",
+            "positionX": 900,
+            "positionY": 900,
+            "config": {
+              "fileName": "subtitles.srt",
+              "fileFormat": "srt"
+            }
+          },
+          {
+            "nodeKey": "video",
+            "type": "video_compose",
+            "nodeVersion": 1,
+            "title": "Compose subtitled video",
+            "positionX": 900,
+            "positionY": 260,
+            "config": {
+              "outputFormat": "mp4",
+              "subtitleMode": "burn_in",
+              "fitMode": "contain"
+            }
+          },
+          {
+            "nodeKey": "output",
+            "type": "output",
+            "nodeVersion": 1,
+            "title": "Final outputs",
+            "positionX": 1360,
+            "positionY": 420,
+            "config": {
+              "displayName": "Final outputs",
+              "allowEmpty": false,
+              "requireAllSucceeded": true
+            }
+          },
+          {
+            "nodeKey": "store",
+            "type": "product_store",
+            "nodeVersion": 1,
+            "title": "Save final artifacts",
+            "positionX": 1780,
+            "positionY": 420,
+            "config": {
+              "fileName": "character-swap-video.md",
+              "persistToWorkLibrary": true,
+              "persistToKnowledgeBase": false
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edgeKey": "prompt-replace",
+            "sourceNodeKey": "input",
+            "sourcePortId": "text",
+            "targetNodeKey": "replace",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "reference-replace",
+            "sourceNodeKey": "reference-image",
+            "sourcePortId": "image",
+            "targetNodeKey": "replace",
+            "targetPortId": "referenceImage"
+          },
+          {
+            "edgeKey": "character-replace",
+            "sourceNodeKey": "character-image",
+            "sourcePortId": "image",
+            "targetNodeKey": "replace",
+            "targetPortId": "characterImage"
+          },
+          {
+            "edgeKey": "audio-asr",
+            "sourceNodeKey": "audio",
+            "sourcePortId": "audio",
+            "targetNodeKey": "asr",
+            "targetPortId": "audio"
+          },
+          {
+            "edgeKey": "replace-video",
+            "sourceNodeKey": "replace",
+            "sourcePortId": "image",
+            "targetNodeKey": "video",
+            "targetPortId": "coverImage"
+          },
+          {
+            "edgeKey": "audio-video",
+            "sourceNodeKey": "audio",
+            "sourcePortId": "audio",
+            "targetNodeKey": "video",
+            "targetPortId": "audio"
+          },
+          {
+            "edgeKey": "asr-subtitle",
+            "sourceNodeKey": "asr",
+            "sourcePortId": "text",
+            "targetNodeKey": "subtitle",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "subtitle-video",
+            "sourceNodeKey": "subtitle",
+            "sourcePortId": "asset",
+            "targetNodeKey": "video",
+            "targetPortId": "subtitle"
+          },
+          {
+            "edgeKey": "video-output",
+            "sourceNodeKey": "video",
+            "sourcePortId": "video",
+            "targetNodeKey": "output",
+            "targetPortId": "videos"
+          },
+          {
+            "edgeKey": "subtitle-output",
+            "sourceNodeKey": "subtitle",
+            "sourcePortId": "asset",
+            "targetNodeKey": "output",
+            "targetPortId": "assets"
+          },
+          {
+            "edgeKey": "asr-output",
+            "sourceNodeKey": "asr",
+            "sourcePortId": "text",
+            "targetNodeKey": "output",
+            "targetPortId": "text"
+          },
+          {
+            "edgeKey": "video-store",
+            "sourceNodeKey": "video",
+            "sourcePortId": "video",
+            "targetNodeKey": "store",
+            "targetPortId": "videos"
+          },
+          {
+            "edgeKey": "subtitle-store",
+            "sourceNodeKey": "subtitle",
+            "sourcePortId": "asset",
+            "targetNodeKey": "store",
+            "targetPortId": "assets"
+          },
+          {
+            "edgeKey": "audio-store",
+            "sourceNodeKey": "audio",
+            "sourcePortId": "audio",
+            "targetNodeKey": "store",
+            "targetPortId": "audios"
+          }
+        ],
+        "metadata": {
+          "templateKey": "character-swap-video",
+          "templateVersion": 1
+        }
+      }
+    }
+  }
+}

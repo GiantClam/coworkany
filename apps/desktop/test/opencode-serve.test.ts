@@ -6,6 +6,29 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { OpenCodeServeClient } from "../runtime/opencode-serve";
 
+test("retiring a managed daemon during pre-spawn startup prevents it from starting or restarting", async () => {
+  const runtimeDirectory = await mkdtemp(resolve(tmpdir(), "coworkany-opencode-retire-"));
+  const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");
+  const client = new OpenCodeServeClient(process.execPath, runtimeDirectory, [fixture]);
+  try {
+    const starting = client.ensureStarted(runtimeDirectory, { CHEAPBUDDY_API_KEY: "fixture-private-key" });
+    await client.retire();
+    await assert.rejects(starting, /opencode_serve_retired/u);
+    await assert.rejects(client.ensureStarted(runtimeDirectory, { CHEAPBUDDY_API_KEY: "another-fixture-key" }), /opencode_serve_retired/u);
+  } finally { await client.stop(); await rm(runtimeDirectory, { recursive: true, force: true }); }
+});
+
+test("retiring a running managed daemon permanently drops its retained credential environment", async () => {
+  const runtimeDirectory = await mkdtemp(resolve(tmpdir(), "coworkany-opencode-retire-running-"));
+  const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");
+  const client = new OpenCodeServeClient(process.execPath, runtimeDirectory, [fixture]);
+  try {
+    await client.createOrResumeSession(runtimeDirectory, undefined, { model: "cheapbuddy/deepseek/deepseek-v4.1-flash" }, { CHEAPBUDDY_API_KEY: "fixture-private-key" });
+    await client.retire();
+    await assert.rejects(client.createOrResumeSession(runtimeDirectory, undefined, { model: "cheapbuddy/glm-5.3" }, {}), /opencode_serve_retired/u);
+  } finally { await client.stop(); await rm(runtimeDirectory, { recursive: true, force: true }); }
+});
+
 test("desktop OpenCode uses the asynchronous serve-session contract", () => {
   const source = readFileSync(resolve(process.cwd(), "runtime/opencode-serve.ts"), "utf8");
   const hostSource = readFileSync(resolve(process.cwd(), "runtime/host.ts"), "utf8");
@@ -19,6 +42,7 @@ test("desktop OpenCode uses the asynchronous serve-session contract", () => {
   assert.match(source, /typeof timeoutMs === "number"/);
   assert.match(source, /this\.promptTimeoutMs \?\? false/u);
   assert.match(source, /opencode_prompt_stalled/u);
+  assert.match(source, /start-preview-server\\\.mjs\|preview:start\|render_goal_deck/u);
   assert.match(source, /runtimeEnvironmentSignature/);
   assert.match(source, /sessionCreateQueue/);
   assert.match(source, /opencode_prompt_timeout/);
@@ -32,6 +56,7 @@ test("desktop OpenCode uses the asynchronous serve-session contract", () => {
   assert.match(source, /OPENCODE_DISABLE_EXTERNAL_SKILLS: "1"/u);
   assert.match(source, /OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1"/u);
   assert.match(source, /OPENCODE_DISABLE_DEFAULT_PLUGINS: "1"/u);
+  assert.match(source, /BROWSER: "none"/u);
   assert.match(hostSource, /OPENCODE_CONFIG_CONTENT: configContent/u);
   assert.match(hostSource, /node_modules.*opencode-ai.*bin.*opencode\.exe/u);
   assert.match(hostSource, /ProgramFiles/u);
@@ -208,6 +233,24 @@ test("OpenCode Serve never replaces a persisted session after a transient lookup
     await assert.rejects(
       client.createOrResumeSession(runtimeDirectory, "lookup-error-session", { model: "configured/model" }, {}),
       /opencode_session_lookup_failed:503/u,
+    );
+  } finally {
+    await client.stop();
+    await rm(runtimeDirectory, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode Serve recovers a persisted conversation when its model differs from the active configuration", async () => {
+  const runtimeDirectory = await mkdtemp(resolve(tmpdir(), "coworkany-opencode-model-switch-"));
+  const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");
+  const client = new OpenCodeServeClient(process.execPath, runtimeDirectory, [fixture]);
+  try {
+    const provider = { id: "old-provider", source: "old-provider", model: "old-model" };
+    const environment = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: "new-provider/new-model" }) };
+    assert.equal(await client.attachSession(runtimeDirectory, "model-mismatch", provider, environment), undefined);
+    assert.deepEqual(
+      await client.createOrResumeSession(runtimeDirectory, "model-mismatch", provider, environment),
+      { sessionId: "recovered-session", recovered: true },
     );
   } finally {
     await client.stop();

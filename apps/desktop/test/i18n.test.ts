@@ -6,7 +6,7 @@ import { WORKBENCH_HOME_GROUPS, WORKBENCH_MEDIA_FEATURES, WORKBENCH_ROUTE_MANIFE
 import { splitWorkflowText, validateWorkflowDefinition } from "@coworkany/workflow-core";
 import { desktopCopy, desktopWriterCopy, detectDesktopLocale, homeGroupLabels, mediaEnglish, mediaFieldEnglish, mediaOptionEnglish, mediaPlaceholderEnglish, mediaSubmitEnglish, mediaSummaryEnglish, quickPromptsForDesktopRoute, resolveDesktopLocale } from "../src/i18n";
 import { buildLocalMediaWorkflowDefinition, buildProductPromotionWorkflowDefinition, buildWorkflowDefinition, desktopExecutionPrompt, isDesktopErrorStatus, localizeDesktopStatus, localizeRuntimeStatus, localizedSkillSystemPrompt, parseImageInputs, resolveDesktopSkillId, runtimeRepairOptions } from "../src/App";
-import { promptRequestsArtifact } from "../src/artifact-intent";
+import { chatAllowsArtifactRegistration, promptRequestsArtifact } from "../src/artifact-intent";
 
 test("desktop locale follows Windows/WebView language by default", () => {
   assert.equal(detectDesktopLocale("zh-CN"), "zh");
@@ -315,4 +315,16 @@ test("artifact intent is opt-in for conversational prompts", () => {
   assert.equal(promptRequestsArtifact("请列出合同审查时最需要关注的三项风险。"), false);
   assert.equal(promptRequestsArtifact("请生成一份合同审查备忘录并保存为 Markdown 文件。"), true);
   assert.equal(promptRequestsArtifact("Create a contract review memo and save it as a markdown file."), true);
+});
+
+test("artifact registration policy recognizes PPT actions, skills, agents, and routes", () => {
+  const prompt = "帮我整理这份内容";
+  assert.equal(chatAllowsArtifactRegistration(prompt, { actionId: "ppt_generate" }), true);
+  assert.equal(chatAllowsArtifactRegistration(prompt, { skillId: "ppt-master" }), true);
+  assert.equal(chatAllowsArtifactRegistration(prompt, { skillId: "dashi-ppt" }), true);
+  assert.equal(chatAllowsArtifactRegistration(prompt, { agentId: "executive-ppt" }), true);
+  assert.equal(chatAllowsArtifactRegistration(prompt, { agentId: "executive-presentation-ppt" }), true);
+  assert.equal(chatAllowsArtifactRegistration(prompt, { route: "/dashboard/ai?agent=executive-ppt" }), true);
+  assert.equal(chatAllowsArtifactRegistration(prompt, { route: "/dashboard/ai?agent=executive-presentation-ppt" }), true);
+  assert.equal(chatAllowsArtifactRegistration(prompt), false);
 });

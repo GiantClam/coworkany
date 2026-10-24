@@ -6,14 +6,18 @@ import { buildOnlineAgentGroups, formatWorkbenchModelLabel, isWorkbenchAssistant
 import { buildAgencyAgentGroups } from "../src/agency-agent-catalog";
 import { configuredModelOptions, isMediaProviderConfigured, preferredConfiguredModel, requiresConfiguredProviderForWorkflowAction } from "../src/provider-config";
 import { resolveDesktopRunAction, workflowActionForMediaFeature } from "../src/route-actions";
-import { conversationAgentIdFromPath } from "../src/App";
+import { conversationAgentIdFromPath, projectOpenedWorkflowDefinition } from "../src/App";
+import { migrateWorkflowDefinitionToCurrent } from "@coworkany/workflow-core";
 
 test("desktop routes consume the retained online dashboard manifest", () => {
   const paths = WORKBENCH_ROUTE_MANIFEST.map((route) => route.path);
   assert.equal(paths[0], "/dashboard");
+  assert.ok(paths.includes("/dashboard/office"));
   assert.ok(paths.includes("/dashboard/ai"));
   assert.ok(paths.includes("/dashboard/writer"));
   assert.ok(paths.includes("/dashboard/workflows"));
+  assert.ok(paths.includes("/dashboard/usage"));
+  assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/usage")?.label.zh, "用量统计");
   assert.ok(paths.includes("/dashboard/knowledge-base"));
   assert.ok(paths.includes("/dashboard/video"));
   assert.equal(paths.includes("/dashboard/works"), false);
@@ -22,6 +26,8 @@ test("desktop routes consume the retained online dashboard manifest", () => {
   assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/settings")?.placement, "footer");
   for (const excluded of ["/dashboard/billing", "/dashboard/platform-settings"]) assert.equal(paths.includes(excluded), false);
   assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/agent-platform")?.mode, "library");
+  assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/office")?.mode, "home");
+  assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/office")?.label.zh, "虚拟办公室");
   assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/writer")?.label.zh, "多平台写作");
   assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/workflows")?.label.zh, "工作流");
   assert.equal(WORKBENCH_ROUTE_MANIFEST.find((route) => route.path === "/dashboard/writer")?.description.zh, "统一生成多平台图文内容，并支持 Markdown 编辑与发布准备。");
@@ -87,19 +93,16 @@ test("desktop defaults do not silently select an Ollama text model", () => {
   assert.doesNotMatch(hostSource, /configured\s*\|\|\s*["']qwen3:8b/u);
 });
 
-test("desktop chat projects streaming runtime events into durable rich message parts", () => {
+test("desktop chat renders and persists the AI SDK message owner", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  assert.match(appSource, /activeAssistantParts=\{activeRunId \? assistantPartsRef\.current\.get\(activeRunId\) : undefined\}/);
-  assert.match(appSource, /id: `\$\{runId\}:status`, data: \{ status: "running"/);
-  assert.match(appSource, /applyWorkbenchRunEventToParts\(parts, \{[\s\S]*type: "tool_call"/);
-  assert.match(appSource, /\["toolCallId", "callId", "idempotencyKey", "nodeKey"\]/);
-  assert.match(appSource, /toolCallId/);
-  assert.match(appSource, /type: "usage"/);
-  assert.match(appSource, /const artifactPartId = `\$\{artifactRunId\}:artifact:\$\{artifactRelativePath\}`/);
-  assert.match(appSource, /const artifactPart: Extract<DesktopUIMessagePart, \{ type: "data-artifact" \}> = \{[\s\S]*?type: "data-artifact"/);
-  assert.match(appSource, /assistantPartsRef\.current\.set\(artifactRunId, \[\.\.\.currentParts\.filter\(\(part\) => !\("id" in part\) \|\| part\.id !== artifactPartId\), registeredPart\]\)/);
-  assert.match(appSource, /filter\(\(part\) => !\("id" in part\) \|\| part\.id !== `\$\{event\.runId\}:status`\)/);
-  assert.match(appSource, /type: "reasoning", delta: event\.delta, sequence, createdAt/);
+  assert.match(appSource, /const renderedUIMessages = \[\.\.\.desktopChat\.messages\]/);
+  assert.match(appSource, /const renderedUIMessages = \[\.\.\.uiMessages\]/);
+  assert.match(appSource, /const persistFinishedChatMessage = useCallback/);
+  assert.match(appSource, /const stored = desktopUIMessageStorage\(message\)/);
+  assert.match(appSource, /chatOwnedRunIdsRef\.current\.add\(runId\)/);
+  assert.doesNotMatch(appSource, /mergeDesktopUIMessageViews/);
+  assert.equal((appSource.match(/resolvePreviewSource=\{resolveDesktopPreviewSource\}/gu) ?? []).length, 4);
+  assert.doesNotMatch(appSource, /window\.open\(/u);
   assert.doesNotMatch(appSource, /const reasoningSequence = \(sequences\.get\(runId\) \?\? 0\) \+ 1/);
 });
 
@@ -112,13 +115,12 @@ test("configured provider models populate selectors and take priority over a sta
 
 test("desktop workflow and media entry points expose the configured model selector", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  const selector = /<ModelControls locale=\{locale\} model=\{model\} models=\{models\} reasoningEffort=\{reasoningEffort\} skillId=\{skillId\} showSkill=\{false\}/g;
-  assert.ok((appSource.match(selector) ?? []).length >= 1);
-  assert.match(appSource, /function DesktopWriterCloudWorkspace\([\s\S]*?const \{[^}]*model, models,[\s\S]*?<ModelControls locale=\{locale\} model=\{model\} models=\{models\}/);
+  assert.ok((appSource.match(/<WorkbenchPromptInput[^\n]*reasoningEffort=\{reasoningEffort\} onReasoningChange=\{onReasoningChange\}/g) ?? []).length >= 3);
+  assert.match(appSource, /function DesktopWriterCloudWorkspace\([\s\S]*?const \{[^}]*model, models,[\s\S]*?<WorkbenchPromptInput[^\n]*model=\{model\} onModelChange=\{onModelChange\} reasoningEffort=\{reasoningEffort\}/);
   assert.match(appSource, /<DesktopWorkflowWorkspace[\s\S]*?model=\{activeModel\} models=\{activeModels\}[\s\S]*?onModelChange=\{onModelChange\}/);
   assert.match(appSource, /const providerForWorkflowNode = \(nodeType: string, selectedProviderId\?: string\)/);
-  assert.match(appSource, /<DesktopWorkflowWorkspace[\s\S]*?modelForNode=\{\(nodeType, providerId\) => providerForWorkflowNode\(nodeType, providerId\)\.model\}[\s\S]*?modelsForNode=\{\(nodeType, providerId\) => modelOptionsForProvider\(config, providerForWorkflowNode\(nodeType, providerId\)\) \?\? \[\]\}[\s\S]*?providersForNode=\{\(nodeType\) => Object\.values\(config\.providers \?\? \{\}\)\.filter/);
-  assert.match(appSource, /<DesktopMediaWorkspace[\s\S]*?model=\{activeModel\} models=\{activeModels\}[\s\S]*?onModelChange=\{updateModel\}/);
+  assert.match(appSource, /<DesktopWorkflowWorkspace[\s\S]*?modelForNode=\{\(nodeType, providerId\) => providerForWorkflowNode\(nodeType, providerId\)\.model\}[\s\S]*?modelsForNode=\{\(nodeType, providerId\) => modelOptionsForProvider\(config, providerForWorkflowNode\(nodeType, providerId\), capabilityForWorkflowAction\(nodeType\)\) \?\? \[\]\}[\s\S]*?providersForNode=\{\(nodeType\) => Object\.values\(config\.providers \?\? \{\}\)\.filter/);
+  assert.match(appSource, /<DesktopMediaWorkspace[\s\S]*?model=\{activeModel\} models=\{activeModels\}[\s\S]*?onModelChange=\{onModelChange\}/);
   assert.match(appSource, /hostWorkflowDefinition = bindWorkflowProviderDefaults\(hostDefinitionInput, launchConfig\)/);
   assert.match(appSource, /const hostDefinitionInput = rawWorkflowDefinition/);
   assert.match(appSource, /requestedMediaAction \?\? workflowAction/);
@@ -136,7 +138,7 @@ test("Writer exposes the desktop-configured model list and keeps model changes w
   const writerSource = appSource.slice(start, end);
   assert.match(writerSource, /models=\{\(models \?\? \[\]\)\.map\(/);
   assert.match(writerSource, /model=\{model\} onModelChange=\{onModelChange\}/);
-  assert.match(writerSource, /<ModelControls locale=\{locale\} model=\{model\} models=\{models\}[\s\S]*?showSkill=\{false\} hideModel/);
+  assert.match(writerSource, /reasoningEffort=\{reasoningEffort\} onReasoningChange=\{onReasoningChange\} knowledgeBases=\{knowledgeBases\} knowledgeEnabled=\{knowledgeEnabled\} onKnowledgeToggle=\{onKnowledgeToggle\}/);
 });
 
 test("desktop workflows open the shared online directory before the local canvas builder", () => {
@@ -156,12 +158,14 @@ test("desktop workflows open the shared online directory before the local canvas
   assert.match(appSource, /window\.setTimeout\(\(\) => void workflowAutoSaveRef\.current\("auto"\), 700\)/);
   assert.match(appSource, /savedWorkflowHashRef\.current === definitionHash/);
   assert.match(appSource, /currentWorkflowIdRef\.current = saved\.id/);
+  assert.match(appSource, /workflowId=\{workflowCanvasKey \?\? "draft:workflow"\}/);
   assert.match(appSource, /onBack=\{\(\) => setWorkflowBuilderOpen\(false\)\}/);
 });
 
 test("model controls never reuse another capability profile's catalog", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  assert.match(appSource, /configuredModelOptions\(\{ model, models \}\)/u);
+  assert.match(appSource, /<WorkbenchPromptInput[^\n]*models=\{modelOptions\}/u);
+  assert.match(appSource, /<WorkbenchPromptInput[^\n]*models=\{isImage \? imageModelOptions : mediaModelOptions\}/u);
   assert.doesNotMatch(appSource, /models \?\? activeProviderModels/u);
   assert.doesNotMatch(appSource, /activeProviderModels/u);
 });
@@ -199,12 +203,31 @@ test("agent-scoped PPT routes preserve the PPT capability for provider and artif
 
 test("task center opens the task entry and restores the requested media capability", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  assert.match(appSource, /function readDesktopTaskMetadata\(detail: RunDetail\)/u);
+  assert.match(appSource, /parseDesktopTaskMetadata/u);
+  assert.match(appSource, /function readTaskMetadataFromRunDetail\(detail: RunDetail\)/u);
   assert.match(appSource, /eventType: "task_metadata"/u);
   assert.match(appSource, /const openTaskEntry = async \(run: RunRow\)/u);
   assert.match(appSource, /metadata\?\.entryPath/u);
   assert.match(appSource, /const requestedFeature = new URLSearchParams\(routeQuery\)/u);
   assert.match(appSource, /window\.location\.search/u);
+});
+
+test("dashboard home is delegated to the renderer-neutral office boundary", () => {
+  const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const homeSource = readFileSync(resolve(process.cwd(), "src/home/DesktopHome.tsx"), "utf8");
+  const officePageSource = readFileSync(resolve(process.cwd(), "src/home/DesktopVirtualOffice.tsx"), "utf8");
+  const compositionSource = readFileSync(resolve(process.cwd(), "src/virtual-office/office-composition.ts"), "utf8");
+  assert.match(appSource, /<DesktopHome\s+composition=\{officeComposition\}/u);
+  assert.match(appSource, /<DesktopVirtualOffice\s+composition=\{officeComposition\}/u);
+  assert.doesNotMatch(appSource, /from ["']pixi\.js["']/u);
+  assert.match(homeSource, /showVirtualOffice/u);
+  assert.match(officePageSource, /<DesktopHome[\s\S]*showVirtualOffice/u);
+  assert.match(homeSource, /composition\.start\(\)/u);
+  assert.match(homeSource, /composition\.stop\(\)/u);
+  assert.match(compositionSource, /createRunRecordSource/u);
+  assert.match(compositionSource, /createOfficeStore/u);
+  assert.match(compositionSource, /createRoleRunAdapter/u);
+  assert.match(compositionSource, /enabledOfficeRoles/u);
 });
 
 test("workspace model and reasoning changes persist to the selected capability profile", () => {
@@ -304,7 +327,7 @@ test("desktop sidebar owns its scroll area and shows recent assistant sessions",
   assert.match(shellSource, /visibleSessions\.slice\(0, 30\)/u);
   assert.match(shellSource, /onNewSession/u);
   assert.match(shellStyles, /\.shell \{[^}]*height: 100dvh;[^}]*overflow: hidden;/u);
-  assert.match(shellStyles, /\.wb-shell-frame \{[^}]*height: 100dvh;[^}]*overflow: hidden;/u);
+  assert.match(shellStyles, /\.wb-shell-frame \{[^}]*height: 100%;[^}]*min-height: 0;[^}]*overflow: hidden;/u);
   assert.match(shellStyles, /\.wb-sidebar-scroll \{[^}]*overflow-y: auto;/u);
   assert.match(shellStyles, /\.wb-shell-main \{[^}]*overflow-y: auto;/u);
   assert.match(appSource, /sessions=\{conversations\.map/u);
@@ -339,8 +362,8 @@ test("desktop sidebar matches the online assistant navigation hierarchy and visu
   assert.match(shellSource, /aria-expanded=\{/u);
   assert.match(shellSource, /setAssistantSessionsExpanded/u);
   assert.doesNotMatch(shellSource, /session\.updatedLabel/u);
-  assert.match(shellSource, /wb-sidebar-context-label/u);
-  assert.match(shellStyles, /\.wb-brand-mark \{[^}]*width: 40px;[^}]*height: 40px;[^}]*border-radius: 6px;/u);
+  assert.doesNotMatch(shellSource, /wb-sidebar-context-label/u);
+  assert.match(shellStyles, /\.wb-brand-mark \{[^}]*width: 40px;[^}]*height: 40px;[^}]*coworkany-icon-64\.png[^}]*contain no-repeat/u);
   assert.match(shellStyles, /\.wb-nav-item \{[^}]*min-height: 40px;[^}]*border-radius: 6px;/u);
   assert.match(shellStyles, /\.wb-nav-item-active \{[^}]*color: var\(--wb-primary[^}]*background: var\(--wb-foreground/u);
   assert.match(shellStyles, /\.wb-nav-item-active-assistant \{[^}]*color: var\(--wb-primary-foreground[^}]*background: var\(--wb-sidebar-highlight/u);
@@ -365,7 +388,7 @@ test("desktop shell keeps the cloud visual primitives and workflow state path", 
   assert.match(appSource, /WORKBENCH_THEME/);
   assert.doesNotMatch(appSource, /WorkbenchChatMessage/);
   assert.match(appSource, /homeMessages/);
-  assert.match(appSource, /showSkill=\{false\}/);
+  assert.match(appSource, /WorkbenchPromptInput[^\n]*reasoningEffort=/);
   const cloudAiEntrySource = readFileSync(resolve(process.cwd(), "../../components/ai-entry/ai-entry-workspace.tsx"), "utf8");
   const sharedMessageSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/components.tsx"), "utf8");
   assert.match(cloudAiEntrySource, /WorkbenchCloudMessageShell/);
@@ -424,10 +447,9 @@ test("desktop Agent Center includes the complete online built-in and imported ca
 test("desktop-only runtime status does not alter the cloud sidebar geometry", () => {
   const sharedSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/components.tsx"), "utf8");
   const localeSource = readFileSync(resolve(process.cwd(), "src/i18n.ts"), "utf8");
-  assert.match(sharedSource, /localLabel \? <div className="wb-sidebar-context-label"/);
+  assert.doesNotMatch(sharedSource, /localLabel/u);
   assert.match(sharedSource, /status \? <div className="wb-status"/);
-  assert.match(localeSource, /localWorkspace: "本地工作区 · FULL ACCESS"/);
-  assert.match(localeSource, /localWorkspace: "LOCAL WORKSPACE · FULL ACCESS"/);
+  assert.doesNotMatch(localeSource, /localWorkspace:/u);
 });
 
 test("local Skill preference is persisted in config while hidden from the cloud composer row", () => {
@@ -436,7 +458,7 @@ test("local Skill preference is persisted in config while hidden from the cloud 
   assert.match(appSource, /setSkillIdState\(activeConfig\.provider\.skillId/);
   assert.doesNotMatch(appSource, /默认 Skill/);
   assert.doesNotMatch(appSource, /Default Skill/);
-  assert.match(appSource, /showSkill=\{false\}/);
+  assert.doesNotMatch(appSource, /showSkill=/);
 });
 
 test("shared shell local-language controls are localized in both directions", () => {
@@ -458,7 +480,7 @@ test("desktop home uses the same cloud page shell nesting", () => {
   assert.match(appSource, /<WorkbenchPromptInput[\s\S]*onSubmit=\{\(\) => void runAgent\(\)\}/);
   assert.match(appSource, /if \(launchSelectedPath === "\/dashboard" && conversationId\) \{[\s\S]*?workbenchClient\.navigation\.go\(conversationRoute\(\{ id: conversationId, agent_id: conversationAgentId \}\)\)/u);
   assert.match(appSource, /placeholder=\{copy\.homePlaceholder\}/);
-  assert.match(appSource, /showSkill=\{false\}/);
+  assert.match(appSource, /model=\{activeModel\} onModelChange=\{updateModel\} reasoningEffort=\{reasoningEffort\}/);
   assert.doesNotMatch(appSource, /className="run-card"/);
   assert.match(styleSource, /\.workspace-home > \.recent-card, \.workspace-home > \.stats-card \{ display: none; \}/);
   assert.doesNotMatch(appSource, /<textarea value=\{prompt\}/);
@@ -507,7 +529,8 @@ test("shared prompt input follows the AI Elements header, body, footer contract"
   assert.match(source, /data-slot="prompt-input-body"/);
   assert.match(source, /data-slot="prompt-input-footer"/);
   assert.match(source, /data-slot="prompt-input-tools"/);
-  assert.match(wrapperSource, /data-slot="prompt-input-custom-tools"/);
+  assert.match(wrapperSource, /PromptInputAddMenu/);
+  assert.match(wrapperSource, /WorkbenchModelReasoningSelector/);
   assert.match(wrapperSource, /PromptInputSelect className="wb-ai-prompt-model-select"/);
   assert.match(styleSource, /\.wb-ai-prompt-context/);
   assert.match(styleSource, /\.wb-ai-prompt-footer/);
@@ -515,11 +538,10 @@ test("shared prompt input follows the AI Elements header, body, footer contract"
   assert.match(styleSource, /\.wb-ai-prompt-model-select \{ flex: 0 0 auto/);
 });
 
-test("chat keeps only message and execution-process frames", () => {
+test("chat keeps one chronological message frame without legacy execution grouping", () => {
   const styleSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/styles.css"), "utf8");
-  assert.match(styleSource, /\.wb-message-process \{[\s\S]*?border: 1px solid/);
-  assert.match(styleSource, /Keep the chat hierarchy quiet: message and execution process are the only frames/);
-  assert.match(styleSource, /\.wb-message-process \.wb-ai-process,[\s\S]*?border: 0;/);
+  assert.doesNotMatch(styleSource, /\.wb-message-process/);
+  assert.match(styleSource, /Keep chronological source and report parts quiet inside the shared message/);
   assert.match(styleSource, /\.wb-message-source,[\s\S]*?\.wb-message-report \{ padding: 0\.25rem 0; \}/);
   assert.match(styleSource, /\.wb-artifact-card \{[\s\S]*?border: 0;/);
 });
@@ -578,7 +600,7 @@ test("desktop writer and media surfaces retain the online control contract", () 
   assert.match(appSource, /WorkbenchMessageSurface messages=\{renderedUIMessages\}/);
   assert.match(appSource, /WorkbenchPromptInput/);
   assert.match(appSource, /composer-selected-agent/);
-  assert.match(appSource, /composer-knowledge-button/);
+  assert.match(appSource, /knowledgeEnabled=\{knowledgeEnabled\} onKnowledgeToggle=\{onKnowledgeToggle\}/);
   assert.match(appSource, /startNewConversation/);
   assert.match(appSource, /knowledgeContextEnabled/);
   assert.match(appSource, /attachments=\{attachments\}/);
@@ -603,7 +625,7 @@ test("desktop writer and media surfaces retain the online control contract", () 
   assert.match(appSource, /data-cloud-surface="prompt-suggestions"/);
   assert.match(desktopStyleSource, /\.writer-cloud-scroll \{[^}]*display: flex;[^}]*overflow: hidden;/);
   assert.match(desktopStyleSource, /\.writer-cloud-message-shell \{[^}]*display: flex;[^}]*flex: 1;/);
-  assert.match(appSource, /添加 Obsidian 知识库/);
+  assert.match(readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/prompt-input.tsx"), "utf8"), /知识库列表/);
   assert.match(appSource, /const userPrompt =/);
   assert.match(appSource, /const runtimePrompt =/);
   assert.match(appSource, /content: displayedUserPrompt/);
@@ -622,7 +644,11 @@ test("desktop writer and media surfaces retain the online control contract", () 
   assert.match(appSource, /本地附件（已复制到当前项目目录/);
   const sharedMessageSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/components.tsx"), "utf8");
   assert.match(sharedMessageSource, /MessageResponse/);
-  assert.match(readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/ai-elements/source.tsx"), "utf8"), /Streamdown/);
+  const aiElementsSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/ai-elements/source.tsx"), "utf8");
+  const messageAdaptersSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/ai-elements/message-adapters.tsx"), "utf8");
+  assert.match(aiElementsSource, /from "\.\/message-adapters";/);
+  assert.match(messageAdaptersSource, /MessageCore\.MessageResponse/);
+  assert.match(messageAdaptersSource, /parseIncompleteMarkdown=\{parseIncompleteMarkdown\}/);
   assert.match(sharedMessageSource, /data-cloud-surface="message"/);
   assert.equal(WORKBENCH_CHAT_QUICK_PROMPTS.length, 3);
   assert.equal(WORKBENCH_WRITER_QUICK_PROMPTS.length, 3);
@@ -760,6 +786,9 @@ test("desktop conversation history stays in the sidebar instead of above the com
   assert.equal(appSource.includes("chat-session-list-dock"), false);
   assert.match(appSource, /sessions=\{conversations\.map\(/);
   assert.doesNotMatch(conversationWorkspace, /conversation-list|conversations\.map\(/);
+  assert.doesNotMatch(conversationWorkspace, /chat-page-header/);
+  assert.match(conversationWorkspace, /viewport\.scrollHeight <= viewport\.clientHeight \+ 48\) onReachTop\?\.\(viewport\)/u);
+  assert.match(appSource, /const CONVERSATION_PAGE_SIZE = 5/u);
   assert.equal(styleSource.includes("chat-session-list-dock"), false);
   assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-scroll \{[^}]*position: absolute;[^}]*overflow: hidden;/u);
   assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-composer-dock \{[^}]*position: absolute;[^}]*bottom: 0;/u);
@@ -779,13 +808,12 @@ test("desktop image assistant restores session prompt and image artifacts withou
   assert.match(appSource, /src=\{preview\.source\}/);
 });
 
-test("writer and video title bars do not duplicate composer or form controls", () => {
+test("chat and writer workspaces omit the generic title bar while video keeps controls in its feature header", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  assert.match(appSource, /<section className="chat-workspace-section writer-cloud-workspace">[\s\S]*?<header className="chat-page-header"><div>[\s\S]*?<\/header>/);
-  assert.doesNotMatch(appSource, /chat-page-header[^\n]*workflow-header-actions[^\n]*ModelControls/);
+  assert.doesNotMatch(appSource, /chat-page-header/);
   assert.doesNotMatch(appSource, /!isImage \? <div className="workflow-header-actions">/);
   assert.match(appSource, /activeFeature\.fields\.filter\(\(field\) => field\.id !== "prompt" && field\.id !== "model"\)\.map\(\(field\) =>/);
-  assert.match(appSource, /<ModelControls locale=\{locale\} model=\{model\}/);
+  assert.match(appSource, /<WorkbenchPromptInput[^\n]*reasoningEffort=\{reasoningEffort\}/);
   assert.doesNotMatch(appSource, /workflow-process-evidence/);
   assert.doesNotMatch(appSource, /<WorkbenchPlan title=\{locale === "zh" \? "执行计划"/);
   assert.doesNotMatch(appSource, /<WorkbenchTask title=\{locale === "zh" \? "工作流任务"/);
@@ -834,7 +862,7 @@ test("desktop settings keep Vault embeddings local unless the user explicitly se
 test("desktop settings automatically persist config changes without requiring the save button", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
   assert.match(appSource, /const settingsConfigSaveTimerRef = useRef<number \| null>\(null\)/);
-  assert.match(appSource, /function persistSettingsConfig\(nextConfig: DesktopConfig, immediate = false\)/);
+  assert.match(appSource, /function persistSettingsConfig\(nextConfig: DesktopConfig, immediate = false, strict = false\)/);
   assert.match(appSource, /settingsConfigSaveQueueRef\.current = settingsConfigSaveQueueRef\.current/);
   assert.match(appSource, /window\.setTimeout\(\(\) => \{[\s\S]*?void write\(\);[\s\S]*?\}, 450\)/);
   assert.match(appSource, /设置已自动保存到本机 config\.json/);
@@ -897,7 +925,7 @@ test("media workflow nodes remain visible with a localized configuration-require
   assert.match(appSource, /requiresProviderForNode=\{\(nodeType\) => requiresConfiguredProviderForWorkflowAction\(nodeType\)\}/);
   assert.match(canvasSource, /Configuration required/);
   assert.match(canvasSource, /需要配置 Provider/);
-  assert.match(appSource, /openWorkflowProviderSettings/);
+  assert.match(appSource, /setSettingsOpen\(true\)/);
   assert.match(appSource, /providerConfiguredForNode=\{\(nodeType\) => isMediaProviderConfigured\(providerForCapability\(config, capabilityForWorkflowAction\(nodeType\)\)\) \|\|/);
   assert.match(canvasSource, /!providerConfiguredForNode\(node\.type\) && requiresProviderForNode\(node\.type\)/);
 });
@@ -950,7 +978,7 @@ test("desktop asset and task routes mirror the cloud library interaction contrac
   assert.match(appSource, /onArtifactRemove\(item\.id\)/);
   assert.match(appSource, /confirmingRemove/);
   assert.match(appSource, /removeArtifact = async/);
-  assert.match(appSource, /role=\"alert\">\{actionError\}/);
+  assert.match(appSource, /role="alert">\{actionError\}/);
   assert.match(appSource, /setArtifactCount\(\(current\) => Math\.max\(0, current - 1\)\)/);
   assert.match(styleSource, /\.asset-library-grid/);
   assert.match(styleSource, /\.asset-library-card-action-danger/);
@@ -965,11 +993,11 @@ test("desktop chat keeps the message surface full-height behind a floating compo
   const styleSource = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
   assert.match(styleSource, /\.workspace\.workspace-immersive:has\(\.chat-canvas\) \{ height: 100%; min-height: 0; \}/);
   assert.match(styleSource, /\.chat-canvas \{ min-height: 0; height: 100%;/);
-  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-scroll \{ position: absolute; inset: 0;/);
-  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column \{ display: flex; height: 100%;/);
-  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-composer-dock \{ position: absolute;/);
-  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column > \.wb-ai-message-surface \.ai-elements-conversation-content \{ padding-bottom: calc\(1rem \+ var\(--chat-composer-clearance\)\);/);
-  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column > \.wb-ai-message-surface \.ai-elements-conversation-scroll-button \{ bottom: calc\(var\(--chat-composer-clearance\) - 0\.5rem\);/);
+  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-scroll \{[^}]*position: absolute;[^}]*inset: 0;/);
+  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column \{[^}]*display: flex;[^}]*height: 100%;/);
+  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-composer-dock \{[^}]*position: absolute;/);
+  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column > \.wb-ai-message-surface \.ai-elements-conversation-content \{[^}]*padding-bottom: calc\(1rem \+ var\(--chat-composer-clearance\)\);/);
+  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column > \.wb-ai-message-surface \.ai-elements-conversation-scroll-button \{[^}]*bottom: calc\(var\(--chat-composer-clearance\) - 0\.5rem\);/);
   assert.match(appSource, /new ResizeObserver\(updateComposerClearance\)/);
   assert.match(appSource, /section\.style\.setProperty\("--chat-composer-clearance"/);
 });
@@ -981,7 +1009,9 @@ test("ordinary chat, writer and PPT routes stay on the OpenCode session path", (
   assert.match(appSource, /usesOpenCodeConversation/);
   assert.match(appSource, /createSessionRecoverySnapshot\(priorConversationHistory/);
   assert.match(appSource, /recovered === true/);
-  assert.match(appSource, /if \(conversationId && resolvedChatReady && !attachments\.length && !knowledgeEnabled && prompt\.trim\(\)\)/);
+  assert.match(appSource, /void desktopChat\.sendMessage\(createDesktopChatUserMessage/);
+  assert.match(appSource, /knowledgeEnabled && onPrepareExecutionPrompt/);
+  assert.match(appSource, /executionPrompt: runtimePrompt/);
   assert.match(appSource, /conversationId=\{conversationIdFromPath\(activePath\)\}/);
   assert.match(appSource, /chatReady=\{Boolean\(conversationIdFromPath\(activePath\)\)\}/);
   assert.match(appSource, /const reconcileRuns = async \(\) =>/);
@@ -1023,8 +1053,10 @@ test("desktop conversation history and retry flow consume the injected Workbench
   assert.match(appSource, /before: cursor/);
   assert.match(appSource, /onReachTop=\{onReachTop\}/);
   const conversationSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/ai-elements/source.tsx"), "utf8");
-  assert.match(conversationSource, /StickToBottom/);
-  assert.match(conversationSource, /ConversationScrollBridge/);
+  const conversationAdapterSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/ai-elements/message-adapters.tsx"), "utf8");
+  assert.match(conversationSource, /from "\.\/message-adapters";/);
+  assert.match(conversationAdapterSource, /useStickToBottomContext/);
+  assert.match(conversationAdapterSource, /function ConversationBridge/);
   assert.match(appSource, /opencode_session_id: conversation\.opencodeSessionId \?\? null/);
   assert.match(appSource, /const existingSessionId = conversations\.find\(\(item\) => item\.id === conversationId\)\?\.opencode_session_id/);
   assert.match(appSource, /workbenchClient\.conversations\.messages\(run\.conversation_id\)/);
@@ -1046,11 +1078,12 @@ test("desktop conversations isolate async history and background run events by s
   assert.match(appSource, /const isVisibleRoute = Boolean\(event\?\.runId && desktopRunIsVisible\(runContext, activePathRef\.current, activeConversationRef\.current, workflowCanvasKeyRef\.current\)\)/u);
   assert.match(appSource, /const isDisplayedRun = runContext\?\.kind === "conversation"/u);
   assert.match(appSource, /const isVisibleEvent = isVisibleRoute && isDisplayedRun/u);
-  assert.match(appSource, /if \(isVisibleEvent\) setToolEvents/u);
+  assert.match(appSource, /const isChatOwnedEvent = Boolean\(event\?\.runId && chatOwnedRunIdsRef\.current\.has\(event\.runId\)\)/u);
+  assert.match(appSource, /if \(isVisibleEvent && !isChatOwnedEvent\) setToolEvents/u);
   assert.match(appSource, /activeRunsByConversationRef\.current\.get\(conversationId\) === event\.runId/u);
   assert.match(appSource, /if \(isVisibleEvent\) setActiveRunId\(conversationId \? activeRunsByConversationRef\.current\.get\(conversationId\) \?\? null : null\)/u);
   assert.match(appSource, /activeRunsByConversationRef\.current\.get\(currentConversationId\) === runId\) activeRunsByConversationRef\.current\.delete\(currentConversationId\)/u);
-  assert.match(appSource, /runContextsRef\.current\.delete\(runId\);\n        setActiveRunId\(null\)/u);
+  assert.match(appSource, /runContextsRef\.current\.delete\(runId\);\n\s{8}setActiveRunId\(null\)/u);
 });
 
 test("desktop exposes Full Access compatibility and the Agent approval protocol without leaking API keys", () => {
@@ -1081,7 +1114,7 @@ test("task center exposes persisted node, event and usage evidence", () => {
   assert.match(appSource, /run-evidence-panel/);
   assert.match(appSource, /payloadPreview/);
   assert.match(storageSource, /pub fn inspect_run\(/);
-  assert.match(storageSource, /RunDetail \{ pub run: RunRow, pub nodes:/);
+  assert.match(storageSource, /RunDetail \{\s*pub run: RunRow,\s*pub nodes:/u);
   assert.match(tauriSource, /fn inspect_run\(/);
 });
 
@@ -1161,7 +1194,8 @@ test("desktop tears down asynchronously attached Tauri listeners under React Str
 test("desktop keeps persisted chat messages in chronological order without projecting duplicates", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
   assert.doesNotMatch(appSource, /assistantCreatedAtRef\.current\.set\(runId, userMessageCreatedAt\)/);
-  assert.match(appSource, /baseMessages\.some\(\(message\) => message\.role === "assistant" && message\.content === assistantText\)/);
+  assert.doesNotMatch(appSource, /baseMessages\.some\(\(message\) => message\.role === "assistant" && message\.content === assistantText\)/);
+  assert.match(appSource, /updateVisibleConversationMessages\(conversationId, \(current\) => \[\.\.\.current\.filter/);
 });
 
 test("desktop workflow builder exposes completed output in the run status surface", () => {
@@ -1176,7 +1210,6 @@ test("desktop workflow builder exposes completed output in the run status surfac
 
 test("desktop workflow builder keeps the Canvas full-screen with movable side panels and top run controls", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  const uploadSource = readFileSync(resolve(process.cwd(), "src/local-file-upload.ts"), "utf8");
   const desktopStyles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
   const modernSurface = appSource.match(/function DesktopWorkflowBuilderSurface[\s\S]*?function DesktopWorkflowWorkspace/)?.[0] ?? "";
   const canvasSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/workflow-canvas.tsx"), "utf8");
@@ -1273,7 +1306,7 @@ test("desktop workflow actions use the current canvas definition and do not requ
 
 test("desktop workflow palette appends repeated node types from the latest canvas state", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  const addNodeSource = appSource.match(/const addNode = \(type: WorkflowAction[\s\S]*?\n  \};/)?.[0] ?? "";
+  const addNodeSource = appSource.match(/const addNode = \(type: WorkflowAction[\s\S]*?\n\s{2}\};/)?.[0] ?? "";
   assert.match(addNodeSource, /const current = localDefinitionRef\.current/);
   assert.match(addNodeSource, /createUniqueWorkflowNodeKey\(type, current\.nodes\)/);
   assert.match(addNodeSource, /title: nextNodeTitle\(type, current\.nodes\)/);
@@ -1282,7 +1315,7 @@ test("desktop workflow palette appends repeated node types from the latest canva
   assert.doesNotMatch(addNodeSource, /type === "output"\) \{ setSelectedNodeKey/);
   assert.match(addNodeSource, /if \(type !== "output"\) onWorkflowAction\(type\)/);
   assert.doesNotMatch(addNodeSource, /commit\(\{ \.\.\.localDefinition, nodes: \[\.\.\.localDefinition\.nodes, node\] \}\)/);
-  const duplicateNodeSource = appSource.match(/const duplicateNode = \(nodeKey: string\)[\s\S]*?\n  \};/)?.[0] ?? "";
+  const duplicateNodeSource = appSource.match(/const duplicateNode = \(nodeKey: string\)[\s\S]*?\n\s{2}\};/)?.[0] ?? "";
   assert.match(duplicateNodeSource, /const current = localDefinitionRef\.current/);
   assert.match(duplicateNodeSource, /const source = current\.nodes\.find/);
   assert.match(duplicateNodeSource, /title: nextNodeTitle\(source\.type as WorkflowAction, current\.nodes\)/);
@@ -1303,15 +1336,16 @@ test("workflow node titles are editable and persist on blur or Enter", () => {
 
 test("desktop workflows persist the edited Canvas and restore the exact task snapshot with node outputs", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const metadataSource = readFileSync(resolve(process.cwd(), "src/desktop-task-metadata.ts"), "utf8");
   assert.ok(appSource.includes("workflowRestoreRequestRef"));
-  assert.ok(appSource.includes("workflowDefinition?: WorkflowDefinitionEnvelope"));
+  assert.ok(appSource.includes("type DesktopTaskMetadata"));
   assert.ok(appSource.includes("const workflowDefinitionSnapshot = isWorkflowRun"));
   assert.ok(appSource.includes("workflowDefinition: workflowDefinitionSnapshot"));
   assert.ok(appSource.includes("metadata?.workflowId"));
   assert.ok(appSource.includes("metadata?.workflowDefinition"));
   assert.ok(appSource.includes("const snapshotWorkflow = saved ??"));
   assert.ok(appSource.includes("openWorkflowCanvas(definition, snapshotWorkflow)"));
-  assert.ok(appSource.includes("workflowTitle?: string"));
+  assert.match(metadataSource, /workflowTitle\?: string/u);
   assert.ok(appSource.includes("workflowTitle: savedWorkflowForRun.name"));
   assert.ok(appSource.includes("async function restoreLatestWorkflowRun"));
   assert.ok(appSource.includes("void restoreLatestWorkflowRun(workflow, definition)"));
@@ -1334,7 +1368,7 @@ test("desktop workflow editor keeps its draft out of the AI composer state", () 
   const workflowSurface = appSource.match(/function DesktopWorkflowWorkspace[\s\S]*?function DesktopMediaWorkspaceBody/)?.[0] ?? "";
   assert.match(appSource, /const \[workflowPrompt, setWorkflowPrompt\] = useState\(""\)/);
   assert.match(appSource, /setWorkflowPrompt\(nextPrompt\)/);
-  assert.match(appSource, /setWorkflowPrompt\(\"\"\)/);
+  assert.match(appSource, /setWorkflowPrompt\(""\)/);
   assert.match(workflowSurface, /workflowEditorPrompt/);
   assert.match(workflowSurface, /setWorkflowEditorPrompt\(value\)/);
   assert.doesNotMatch(workflowSurface, /onPromptChange\(value\)/);
@@ -1346,7 +1380,7 @@ test("desktop workflow recovery actions are hidden after a successful run", () =
   const builderSource = appSource.match(/function DesktopWorkflowBuilderSurface[\s\S]*?function DesktopWorkflowWorkspace/)?.[0] ?? "";
   assert.match(builderSource, /const canContinue = \["failed", "cancelled", "interrupted"\]\.includes\(terminalRun\)/);
   assert.match(builderSource, /\{canContinue \? <button className="ghost" type="button" onClick=\{\(\) => props\.onRerun\(localDefinition\)\}>\{copy\.rerun\}<\/button> : null\}/);
-  assert.match(builderSource, /\{canContinue \? <button className="ghost" type="button" onClick=\{\(\) => props\.onContinue\}>\{copy\.continue\}<\/button> : null\}/);
+  assert.match(builderSource, /\{canContinue \? <button className="ghost" type="button" onClick=\{\(\) => props\.onContinue\?\.\(\)\}>\{copy\.continue\}<\/button> : null\}/);
   assert.doesNotMatch(builderSource, /\["failed", "cancelled", "interrupted", "succeeded"\]\.includes\(terminalRun\)/);
 });
 
@@ -1356,7 +1390,7 @@ test("desktop workflow recovery actions execute in the workflow canvas without n
   assert.match(appSource, /onRerun=\{rerunWorkflow\}/);
   assert.match(appSource, /const continueWorkflow = onContinue/);
   assert.match(appSource, /onContinue=\{continueWorkflow\}/);
-  assert.match(appSource, /workflowLastRunsRef\.current\.get\(workflowKey\)\?\.runId/);
+  assert.match(appSource, /const tracking = activeTracking \?\? \(workflowKey \? workflowLastRunsRef\.current\.get\(workflowKey\) : undefined\)/);
   assert.match(appSource, /new URLSearchParams\(activePathRef\.current\.split\("\?", 2\)\[1\] \?\? ""\)/);
   assert.match(appSource, /await prepareRunRetry\(latest, \{ workflowOnly: true \}\)/);
   assert.match(appSource, /const setRetryStatus = workflowOnly \? setWorkflowRunStatus : setRunStatus/);
@@ -1365,6 +1399,19 @@ test("desktop workflow recovery actions execute in the workflow canvas without n
   assert.match(appSource, /const executableRecoveryDefinitionHash = workflowRetry \? hashWorkflowDefinition\(hostWorkflowDefinition\) : undefined/);
   assert.match(appSource, /recoveryDefinitionHash: executableRecoveryDefinitionHash/);
   assert.doesNotMatch(appSource, /本地运行环境未就绪，请先在设置中修复后再运行/);
+});
+
+test("workflow AI adopts the canonical persisted revision and ignores canceled replies", () => {
+  const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  assert.match(appSource, /onEnsureWorkflow: \(definition: WorkflowDefinitionEnvelope\) => Promise<string \| \{ id: string; definition: WorkflowDefinitionEnvelope \} \| null>/u);
+  assert.match(appSource, /historyRef\.current\.syncCurrent\(reconciled\)/u);
+  assert.match(appSource, /const requestedDefinition = localDefinitionRef\.current;[\s\S]*?await onEnsureWorkflow\(requestedDefinition\)[\s\S]*?currentDefinition\.definitionHash !== requestedDefinition\.definitionHash[\s\S]*?setAiInput\(request\)/u);
+  assert.match(appSource, /const aiCancelledSourceUserIdsRef = useRef\(new Set<string>\(\)\)/u);
+  assert.match(appSource, /aiCancelledSourceUserIdsRef\.current\.add\(latestUser\.id\)/u);
+  assert.match(appSource, /aiCancelledSourceUserIdsRef\.current\.has\(sourceUserId\)/u);
+  assert.match(appSource, /onRetry=\{async \(message\) => \{[\s\S]*?aiCancelledSourceUserIdsRef\.current\.delete\(sourceUser\.id\)[\s\S]*?workflowAiChat\.regenerate\(\{ messageId: message\.id \}\)/u);
+  assert.match(appSource, /Request cancelled/);
+  assert.doesNotMatch(appSource, /handleAssistantResponse\(desktopUIMessageText\(assistant\)[\s\S]*?aiCancelledSourceUserIdsRef\.current\.has/u);
 });
 
 test("desktop workflow persistence actions expose click progress and completion state", () => {
@@ -1382,7 +1429,7 @@ test("desktop workflow persistence actions expose click progress and completion 
 
 test("desktop workflow runs do not claim an AI or Agent conversation run", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  const runSource = appSource.match(/async function runAgent[\s\S]*?\n  async function cancelActiveRun/)?.[0] ?? "";
+  const runSource = appSource.match(/async function runAgent[\s\S]*?\n\s{2}async function cancelActiveRun/)?.[0] ?? "";
   assert.match(runSource, /const isWorkflowRun = launchSelectedPath === "\/dashboard\/workflows" \|\| isWorkflowDefinition\(workflowOverride\)/);
   assert.match(runSource, /if \(isWorkflowRun(?: && workflowKey)?\) \{/);
   assert.match(runSource, /else if \(runIsVisible\(\)\) setActiveRunId\(runId\)/);
@@ -1396,9 +1443,12 @@ test("desktop workflow runs do not claim an AI or Agent conversation run", () =>
 test("desktop workflow builder preserves workflow history and keeps local media interaction opt-in", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
   const canvasSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/workflow-canvas.tsx"), "utf8");
-  assert.match(appSource, /historyRef = useRef<\{ past: WorkflowDefinitionEnvelope\[\]; future: WorkflowDefinitionEnvelope\[\] \}>/);
-  assert.match(appSource, /historyRef\.current\.past = \[\.\.\.historyRef\.current\.past\.slice\(-49\), previous\]/);
-  assert.match(appSource, /historyCoalesceRef\.current = historyKey \? \{ key: historyKey, until: now \+ 500 \}/);
+  assert.match(appSource, /import \{[^}]*createWorkflowHistory[^}]*type WorkflowHistoryState[^}]*\} from "\.\/workflow-history"/u);
+  assert.match(appSource, /historyRef = useRef\(createWorkflowHistory\(localDefinition\)\)/u);
+  assert.doesNotMatch(appSource, /historyRef\.current\.past\s*=|historyRef\.current\.future\s*=/u);
+  assert.match(appSource, /historyRef\.current\.commit\(current, historyKey \?/u);
+  assert.match(appSource, /const nextState = historyRef\.current\.undo\(\)/u);
+  assert.match(appSource, /const nextState = historyRef\.current\.redo\(\)/u);
   assert.match(appSource, /canUndo=\{historyState\.canUndo\}/);
   assert.match(appSource, /data-node-media="true"/);
   assert.doesNotMatch(appSource, /FileReader/);
@@ -1409,13 +1459,87 @@ test("desktop workflow builder preserves workflow history and keeps local media 
   assert.match(canvasSource, /data-node-media='true'/);
 });
 
-test("desktop WebView CSP permits only local Blob media previews", () => {
+test("workflow AI operations share one atomic global history with manual canvas edits", () => {
+  const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const workspaceStart = appSource.indexOf("function DesktopWorkflowWorkspace(");
+  const workspaceEnd = appSource.indexOf("function DesktopMediaWorkspaceBody(", workspaceStart);
+  assert.ok(workspaceStart >= 0 && workspaceEnd > workspaceStart, "workflow workspace source must be present");
+  const workspaceSource = appSource.slice(workspaceStart, workspaceEnd);
+  const controllerSource = readFileSync(resolve(process.cwd(), "src/workflow-ai-controller.ts"), "utf8");
+
+  // Manual edits and the AI controller both enter the one commit() boundary.
+  // Therefore a multi-command assistant operation group creates one snapshot.
+  assert.match(workspaceSource, /const commit = \(next: WorkflowDefinitionEnvelope, historyKey\?: string\)/u);
+  assert.match(workspaceSource, /historyRef\.current\.commit\(current, historyKey \?/u);
+  assert.doesNotMatch(workspaceSource, /historyRef\.current\.past\s*=|historyRef\.current\.future\s*=/u);
+  assert.match(workspaceSource, /onDefinitionChange: \(nextDefinition\) => commit\(nextDefinition\)/u);
+  assert.match(workspaceSource, /const updateNodeConfig = \(nodeKey: string, key: string, value: WorkflowParameterValue\)/u);
+  assert.match(workspaceSource, /commit\(\{ \.\.\.current, nodes: current\.nodes\.map/u);
+  assert.match(controllerSource, /await input\.client\.workflows\.applyAiOperation\(/u);
+  assert.match(controllerSource, /definition = candidate;[\s\S]*?input\.onDefinitionChange\(definition\)/u);
+  assert.equal((controllerSource.match(/input\.onDefinitionChange\(definition\)/gu) ?? []).length, 1);
+
+  // Undo/redo are canvas-level controls, not assistant-local history controls.
+  assert.match(workspaceSource, /const undoWorkflow = \(\) =>/u);
+  assert.match(workspaceSource, /const redoWorkflow = \(\) =>/u);
+  assert.match(workspaceSource, /historyRef\.current\.undo\(\)/u);
+  assert.match(workspaceSource, /historyRef\.current\.redo\(\)/u);
+  assert.match(workspaceSource, /onUndo=\{undoWorkflow\} onRedo=\{redoWorkflow\}/u);
+  assert.match(workspaceSource, /canUndo=\{historyState\.canUndo\} canRedo=\{historyState\.canRedo\}/u);
+});
+
+test("opening an existing ordinary workflow preserves its graph without an implicit repair", () => {
+  const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const openStart = appSource.indexOf("function openWorkflowCanvas(");
+  const openEnd = appSource.indexOf("\n  function applyWorkflowRunDetail", openStart);
+  assert.ok(openStart >= 0 && openEnd > openStart, "workflow open path must be present");
+  const openSource = appSource.slice(openStart, openEnd);
+  assert.match(appSource, /const readable = options\.migrate\s*\?\s*migrateWorkflowDefinitionToCurrent\(definition as Parameters<typeof migrateWorkflowDefinitionToCurrent>\[0\]\)/u);
+  assert.match(openSource, /const normalizedDefinition = definition/u);
+  assert.match(openSource, /const persistedSaveShape = projectOpenedWorkflowDefinition\(/u);
+  assert.match(openSource, /savedWorkflowHashRef\.current = saved \? hashWorkflowDefinition\(persistedSaveShape\) : null/u);
+  assert.match(openSource, /setWorkflowDefinition\(normalizedDefinition\)/u);
+  assert.doesNotMatch(openSource, /buildWorkflowDefinition\(/u);
+  assert.doesNotMatch(openSource, /setWorkflowAction\("writer"\)/u);
+
+  const existing = {
+    schemaVersion: 2 as const,
+    revision: 7,
+    definitionHash: "",
+    nodes: [
+      { nodeKey: "input", type: "text_input" as const, nodeVersion: 1, title: "Input", positionX: 0, positionY: 0, config: { text: "keep" } },
+      { nodeKey: "legacy-video", type: "video_generate" as const, nodeVersion: 1, title: "Existing video", positionX: 420, positionY: 0, config: { prompt: "keep this graph" } },
+      { nodeKey: "output", type: "output" as const, nodeVersion: 1, title: "Output", positionX: 840, positionY: 0, config: {} },
+    ],
+    edges: [
+      { edgeKey: "input-video", sourceNodeKey: "input", sourcePortId: "text", targetNodeKey: "legacy-video", targetPortId: "text" },
+      { edgeKey: "video-output", sourceNodeKey: "legacy-video", sourcePortId: "video", targetNodeKey: "output", targetPortId: "video" },
+    ],
+  };
+  const migrated = migrateWorkflowDefinitionToCurrent(existing);
+  assert.deepEqual(migrated.nodes.map((node) => [node.nodeKey, node.type]), [["input", "text_input"], ["legacy-video", "video_generate"], ["output", "output"]]);
+  assert.deepEqual(migrated.edges.map((edge) => [edge.edgeKey, edge.sourceNodeKey, edge.targetNodeKey]), [["input-video", "input", "legacy-video"], ["video-output", "legacy-video", "output"]]);
+  assert.equal(migrated.nodes.find((node) => node.nodeKey === "legacy-video")?.config.prompt, "keep this graph");
+});
+
+test("opening a saved workflow projects metadata without mutating or persisting the source", () => {
+  const source: Parameters<typeof projectOpenedWorkflowDefinition>[0] = { schemaVersion: 2, revision: 1, definitionHash: "source-hash", nodes: [], edges: [] };
+  const projected = projectOpenedWorkflowDefinition(source, { description: "", status: "live" });
+  assert.equal(source.metadata, undefined);
+  assert.equal(projected.metadata?.description, "");
+  assert.equal(projected.metadata?.status, "live");
+  assert.deepEqual(projected.nodes, source.nodes);
+  assert.deepEqual(projected.edges, source.edges);
+});
+
+test("desktop WebView CSP permits Blob media and only loopback web previews", () => {
   const tauriConfig = JSON.parse(readFileSync(resolve(process.cwd(), "src-tauri/tauri.conf.json"), "utf8")) as { app: { security: { csp: string } } };
   const csp = tauriConfig.app.security.csp;
   assert.match(csp, /img-src 'self' blob:/);
   assert.match(csp, /media-src 'self' blob:/);
-  assert.match(csp, /frame-src 'self' blob:/);
-  assert.doesNotMatch(csp, /https:\/\//);
+  assert.match(csp, /frame-src 'self' blob: http:\/\/127\.0\.0\.1:\*/);
+  assert.match(csp, /https:\/\/localhost:\*/);
+  assert.doesNotMatch(csp, /https:\/\/\*|https:\/\/example|frame-src[^;]*https:\/\/(?!127\.0\.0\.1|localhost|\[::1\])/u);
 });
 
 test("local qualified models keep their OpenCode provider prefix", () => {

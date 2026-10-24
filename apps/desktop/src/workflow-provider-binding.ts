@@ -54,7 +54,7 @@ export function bindWorkflowProviderDefaults(definition: WorkflowDefinitionEnvel
       const selectedProfile = selectedProviderId ? config.providers?.[selectedProviderId] : undefined;
       const runningHubCapability = runningHubWorkflowCapabilityForNode(node);
       const provider = selectedProfile && (supportsProviderCapability(selectedProfile, capability) || (runningHubCapability && supportsRunningHubWorkflowCapability(selectedProfile, runningHubCapability)))
-        ? providerForId(config, selectedProviderId)
+        ? providerForId(config, selectedProviderId, capability)
         : providerForCapability(config, capability);
       const workflowCapability = runningHubCapability;
       const registeredWorkflows = isRunningHubProvider(provider) && workflowCapability
@@ -66,6 +66,7 @@ export function bindWorkflowProviderDefaults(definition: WorkflowDefinitionEnvel
       const configuredModels = registeredWorkflows.length
         ? registeredWorkflows.map((workflow) => workflow.remoteWorkflowId)
         : configuredModelOptions(provider);
+      const hasConfiguredCatalog = registeredWorkflows.length > 0 || provider.models !== undefined || provider.capabilityModels?.[capability] !== undefined;
       const selectedNodeModel = typeof nodeConfig.selectedModelId === "string" && nodeConfig.selectedModelId.trim()
         ? nodeConfig.selectedModelId.trim()
         : typeof nodeConfig.model === "string" ? nodeConfig.model.trim() : "";
@@ -75,7 +76,7 @@ export function bindWorkflowProviderDefaults(definition: WorkflowDefinitionEnvel
       // rather than replacing it with the profile's first model at run time.
       // Imported/stale model IDs remain rejected whenever the profile has an
       // explicit model catalog.
-      const selectedConfiguredModel = selectedNodeModel && (!configuredModels.length || configuredModels.includes(selectedNodeModel))
+      const selectedConfiguredModel = selectedNodeModel && (!hasConfiguredCatalog || configuredModels.includes(selectedNodeModel))
         ? selectedNodeModel
         : undefined;
       // Media feature tabs can select a music model that is not the profile's

@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::io::{self, BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -192,12 +192,12 @@ pub(crate) fn opencode_executable(app: &AppHandle) -> Result<Option<String>, Str
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
     // App-managed Runtime paths must win over stale paths persisted by an
     // older install. Configured paths remain a compatibility fallback.
-    let private = [data.join("runtime").join("opencode").join(crate::platform::runtime_executable("opencode"))];
+    let private = opencode_executable_candidates(&data.join("runtime").join("opencode"));
     let packaged = [
-        resource.join("dist-runtime").join("runtime").join("opencode").join(crate::platform::runtime_executable("opencode")),
-        resource.join("_up_").join("dist-runtime").join("runtime").join("opencode").join(crate::platform::runtime_executable("opencode")),
-        resource.join("runtime").join("opencode").join(crate::platform::runtime_executable("opencode")),
-    ];
+        resource.join("dist-runtime").join("runtime").join("opencode"),
+        resource.join("_up_").join("dist-runtime").join("runtime").join("opencode"),
+        resource.join("runtime").join("opencode"),
+    ].into_iter().flat_map(|directory| opencode_executable_candidates(&directory)).collect::<Vec<_>>();
     let configured = configured_runtime_path(app, "opencodePath").into_iter().flat_map(crate::resolve_windows_command_shim);
     Ok(crate::ordered_runtime_candidates(private, packaged, configured, std::iter::empty())
         .into_iter()
@@ -205,6 +205,11 @@ pub(crate) fn opencode_executable(app: &AppHandle) -> Result<Option<String>, Str
         .and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path))
         .or_else(|| system_executable("opencode"))
         .map(|path| path.to_string_lossy().into_owned()))
+}
+
+fn opencode_executable_candidates(directory: &Path) -> [PathBuf; 2] {
+    let executable = crate::platform::runtime_executable("opencode");
+    [directory.join("bin").join(executable), directory.join(executable)]
 }
 
 fn system_executable(command: &str) -> Option<PathBuf> {
@@ -254,7 +259,16 @@ pub(crate) fn python_executable(app: &AppHandle) -> Result<Option<String>, Strin
     let configured = configured_runtime_path(app, "pythonPath")
         .filter(|path| is_app_managed_python_path(path, &data, &resource))
         .into_iter();
-    for path in crate::ordered_runtime_candidates(private, bundled, configured, std::iter::empty()) {
+    let managed = crate::ordered_runtime_candidates(private, bundled, configured, std::iter::empty());
+    #[cfg(target_os = "macos")]
+    let candidates = macos_python_candidates(
+        cfg!(debug_assertions),
+        managed,
+        system_executable(crate::platform::runtime_executable("python")),
+    );
+    #[cfg(not(target_os = "macos"))]
+    let candidates = managed;
+    for path in candidates {
         if !path.is_file() { continue; }
         match probe_python(&path) {
             Ok(()) => {
@@ -267,7 +281,11 @@ pub(crate) fn python_executable(app: &AppHandle) -> Result<Option<String>, Strin
     }
     #[cfg(target_os = "macos")]
     {
-        crate::logs::append(&data, "runtime-probe", "python_system_fallback_disabled platform=macos");
+        if cfg!(debug_assertions) {
+            crate::logs::append(&data, "runtime-probe", "python_development_system_unavailable platform=macos");
+        } else {
+            crate::logs::append(&data, "runtime-probe", "python_system_fallback_disabled platform=macos");
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -280,6 +298,10 @@ pub(crate) fn python_executable(app: &AppHandle) -> Result<Option<String>, Strin
         }
     }
     Ok(None)
+}
+
+fn macos_python_candidates(development: bool, managed: Vec<PathBuf>, system: Option<PathBuf>) -> Vec<PathBuf> {
+    if development { system.into_iter().collect() } else { managed }
 }
 
 fn is_app_managed_python_path(path: &std::path::Path, data: &std::path::Path, resource: &std::path::Path) -> bool {
@@ -679,12 +701,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bundled_opencode_bin_layout_is_checked_before_package_root() {
+        let root = PathBuf::from("/runtime/opencode");
+        assert_eq!(
+            opencode_executable_candidates(&root),
+            [root.join("bin").join(crate::platform::runtime_executable("opencode")), root.join(crate::platform::runtime_executable("opencode"))],
+        );
+    }
+
+    #[test]
     fn debug_runtime_resolves_the_current_source_bundle_and_skill_directory() {
         let host = development_runtime_file("host.mjs").expect("source host bundle missing");
         let expected = std::fs::canonicalize(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("dist-runtime").join("host.mjs")).unwrap();
         assert_eq!(std::fs::canonicalize(host).unwrap(), expected);
         let skills = development_runtime_directory_from_manifest().expect("source runtime directory missing").join("skills");
         assert_eq!(select_skills_directory([skills.clone()]), Some(skills));
+    }
+
+    #[test]
+    fn development_macos_uses_only_trusted_system_python_before_startup_probe() {
+        let managed = vec![PathBuf::from("resource/runtime/python/python3")];
+        let system = PathBuf::from("/Library/Frameworks/Python.framework/Versions/3.12/bin/python3");
+
+        assert_eq!(macos_python_candidates(true, managed.clone(), Some(system.clone())), vec![system]);
+        assert!(macos_python_candidates(true, managed.clone(), None).is_empty());
+        assert_eq!(macos_python_candidates(false, managed.clone(), None), managed);
     }
 
     #[test]

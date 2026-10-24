@@ -49,3 +49,13 @@ test("reasoning snapshots do not duplicate in the process part", () => {
   parts = applyWorkbenchRunEventToParts(parts, { type: "reasoning", delta: "先判断用户需求。", sequence: 2 });
   assert.equal(parts.find((part) => part.type === "reasoning")?.text, "先判断用户需求。");
 });
+
+test("preview events merge by stable session identity", () => {
+  let parts: WorkbenchMessagePart[] = [];
+  parts = applyWorkbenchRunEventToParts(parts, { type: "preview", preview: { kind: "ppt", title: "Deck", previewSessionId: "session-1", engine: "ppt-master", status: "loading" }, sequence: 1 });
+  parts = applyWorkbenchRunEventToParts(parts, { type: "preview", preview: { kind: "ppt", title: "Deck", previewSessionId: "session-1", engine: "ppt-master", status: "ready", url: "http://127.0.0.1:6060/" }, sequence: 2 });
+  const previews = parts.filter((part) => part.type === "preview");
+  assert.equal(previews.length, 1);
+  assert.equal(previews[0]?.id, "preview:session-1");
+  assert.equal(previews[0]?.type === "preview" ? previews[0].preview.url : undefined, "http://127.0.0.1:6060/");
+});

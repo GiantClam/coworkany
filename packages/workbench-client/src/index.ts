@@ -1,4 +1,5 @@
 import type { DesktopUIMessage } from "./uimessage";
+import type { MetricsQueryFilters, MetricsQueryResult, RunMetrics, RunMetricSource } from "./run-metrics";
 import type { WorkbenchQuestionClient, WorkbenchQuestionEvent } from "./questions";
 import type { WorkflowAiOperationGroup } from "./workflow-ai";
 import type { WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
@@ -31,6 +32,20 @@ export type WorkbenchMessagePartBase = {
   readonly createdAt?: string;
 };
 
+export type WorkbenchPreviewData = {
+  readonly kind: "web" | "ppt" | "image" | "video" | "audio" | "document";
+  readonly title: string;
+  readonly url?: string;
+  readonly relativePath?: string;
+  readonly artifactId?: string;
+  readonly mimeType?: string;
+  readonly previewSessionId?: string;
+  readonly engine?: "ppt-master" | "dashi-ppt" | "generic-web";
+  readonly interactive?: boolean;
+  readonly status?: "loading" | "ready" | "unavailable";
+  readonly error?: string;
+};
+
 export type WorkbenchMessagePart =
   | (WorkbenchMessagePartBase & { readonly type: "text"; readonly text: string })
   | (WorkbenchMessagePartBase & { readonly type: "reasoning"; readonly text: string; readonly status: "running" | "completed" | "failed" })
@@ -45,6 +60,7 @@ export type WorkbenchMessagePart =
   | (WorkbenchMessagePartBase & { readonly type: "artifact"; readonly artifact: WorkbenchArtifact })
   | (WorkbenchMessagePartBase & { readonly type: "source"; readonly title: string; readonly href?: string; readonly excerpt?: string })
   | (WorkbenchMessagePartBase & { readonly type: "media"; readonly media: { readonly artifactId: string; readonly kind: "image" | "video" | "audio" | "document"; readonly mimeType: string; readonly title: string; readonly relativePath?: string; readonly previewable?: boolean } })
+  | (WorkbenchMessagePartBase & { readonly type: "preview"; readonly preview: WorkbenchPreviewData })
   | (WorkbenchMessagePartBase & { readonly type: "report"; readonly title: string; readonly body?: string; readonly artifact?: WorkbenchArtifact });
 
 export interface WorkbenchMessage {
@@ -95,6 +111,15 @@ export interface WorkbenchRunDetail {
   readonly usage: readonly { readonly provider?: string | null; readonly model: string; readonly inputTokens?: number | null; readonly outputTokens?: number | null; readonly providerCost?: number | null; readonly estimatedCost?: number | null; readonly createdAt: string }[];
 }
 
+export interface WorkbenchRunAttemptSummary {
+  readonly runId: string;
+  readonly nodeKey: string;
+  readonly idempotencyKey: string;
+  readonly status: "queued" | "running" | "submitted" | "download_failed";
+  readonly providerTaskId: string;
+  readonly updatedAt: string;
+}
+
 export interface WorkbenchArtifact {
   readonly id: string;
   readonly relativePath: string;
@@ -108,12 +133,17 @@ export interface WorkbenchArtifact {
 
 export interface WorkbenchUsage {
   readonly runId: string;
+  readonly usageId?: string;
   readonly provider?: string;
   readonly model: string;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
   readonly providerCost?: number;
   readonly estimatedCost?: number;
+  readonly aggregation?: "delta" | "snapshot";
+  readonly scope?: "step" | "run";
 }
 
 export interface WorkbenchWorkflowDefinition {
@@ -154,6 +184,7 @@ export type WorkbenchRunEvent = WorkbenchRunEventMetadata & (
   | { readonly type: "status"; readonly status: WorkbenchRunStatus }
   | { readonly type: "source"; readonly source: { readonly id: string; readonly title: string; readonly href?: string; readonly excerpt?: string } }
   | { readonly type: "media"; readonly media: { readonly artifactId: string; readonly kind: "image" | "video" | "audio" | "document"; readonly mimeType: string; readonly title: string; readonly relativePath?: string; readonly previewable?: boolean } }
+  | { readonly type: "preview"; readonly preview: WorkbenchPreviewData }
 );
 
 export interface WorkbenchRunRequest {
@@ -164,6 +195,8 @@ export interface WorkbenchRunRequest {
   readonly model?: string;
   readonly skillId?: string;
   readonly reasoningEffort?: string;
+  readonly source?: RunMetricSource;
+  readonly assistantMessageId?: string;
 }
 
 export interface FileActionsAdapter {
@@ -235,13 +268,21 @@ export interface WorkbenchClient {
     readonly cancel: (runId: string) => Promise<void>;
     readonly emergencyStop: (runId: string) => Promise<void>;
     readonly subscribe: (runId: string, onEvent: (event: WorkbenchRunEvent) => void) => () => void;
+    readonly recoverableAttempts?: () => Promise<readonly WorkbenchRunAttemptSummary[]>;
   };
   readonly usage: {
     readonly list: (conversationId?: string) => Promise<readonly WorkbenchUsage[]>;
   };
+  readonly metrics?: {
+    readonly getRun: (runId: string) => Promise<RunMetrics>;
+    readonly query: (filters: MetricsQueryFilters) => Promise<MetricsQueryResult>;
+  };
 }
 
 export * from "./message-parts";
+export { advanceAssistantTurn, beginAssistantTurn } from "./assistant-turn";
+export type { AssistantTurnSeed, SequencedRunEvent } from "./assistant-turn";
 export * from "./questions";
+export * from "./run-metrics";
 export * from "./uimessage";
 export * from "./workflow-ai";

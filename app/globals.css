@@ -1550,6 +1550,93 @@
     color: #8a8a8a;
   }
 
+  .compact-ai-composer {
+    min-height: 0;
+  }
+
+  .compact-ai-composer-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: end;
+    gap: 8px;
+    min-height: 44px;
+  }
+
+  .ai-entry-composer-shell {
+    padding: 5px 8px;
+  }
+
+  .ai-entry-context-rail {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+    white-space: nowrap;
+  }
+
+  .ai-entry-context-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  .composer-add {
+    position: relative;
+  }
+
+  .composer-add-count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: #111;
+    font-size: 9px;
+    line-height: 15px;
+    text-align: center;
+  }
+
+  .compact-ai-composer .wb-ai-prompt-body {
+    min-width: 0;
+  }
+
+  .compact-ai-composer .wb-ai-prompt-textarea {
+    min-height: 24px;
+    max-height: 72px;
+    padding: 0;
+    line-height: 24px;
+    overflow-y: hidden;
+  }
+
+  .compact-ai-composer .wb-ai-prompt-submit,
+  .compact-ai-composer .wb-ai-prompt-stop,
+  .compact-ai-composer .wb-ai-model-reasoning-trigger,
+  .compact-ai-composer .composer-add {
+    height: 40px;
+  }
+
+  .compact-ai-composer .wb-ai-prompt-submit,
+  .compact-ai-composer .wb-ai-prompt-stop {
+    width: 40px;
+    padding: 0;
+  }
+
+  @media (max-width: 640px) {
+    .compact-ai-composer-row {
+      grid-template-columns: auto minmax(0, 1fr) auto auto;
+    }
+
+    .compact-ai-composer .wb-ai-model-reasoning-trigger {
+      max-width: 42px;
+      overflow: hidden;
+      padding-inline: 8px;
+    }
+
+    .compact-ai-composer .wb-ai-model-reasoning-summary-full {
+      display: none;
+    }
+  }
+
   .send-button {
     height: 44px;
     border: 1px solid color-mix(in srgb, var(--primary) 78%, #111 22%);
@@ -3226,4 +3313,12 @@
     opacity: 1;
     transform: translateY(-2px);
   }
+}
+
+.ai-entry-composer-shell {
+  padding: 5px 8px !important;
+}
+
+.ai-entry-composer-shell .compact-ai-composer-row {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
 }

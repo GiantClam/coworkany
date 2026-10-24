@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { configuredModelOptions, configuredProviderEntries, isDevelopmentRunningHubWorkflowId, modelOptionsForProvider, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, supportsProviderCapability, usableRunningHubWorkflowId, type DesktopProviderConfig } from "../src/provider-config";
+import { configuredModelOptions, configuredProviderEntries, configuredTextModelOptions, configuredTextModelSelectionId, isDevelopmentRunningHubWorkflowId, modelOptionsForProvider, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, selectConfiguredTextModel, supportsProviderCapability, usableRunningHubWorkflowId, type DesktopProviderConfig } from "../src/provider-config";
 
 const text: DesktopProviderConfig = { id: "text", model: "text/model", baseUrl: "https://text.test/v1" };
 const image: DesktopProviderConfig = { id: "image", model: "image/model", baseUrl: "https://image.test/v1" };
@@ -132,6 +132,42 @@ test("provider imports reject malformed profiles", () => {
   assert.throws(() => parseProviderImport({ providers: { broken: { models: [42] } } }), /provider_import_models_invalid/);
   assert.throws(() => parseProviderImport({ providers: { broken: { workflows: [{}] } } }), /provider_import_workflows_invalid/);
   assert.throws(() => parseProviderImport({ providers: { image }, defaults: { image: "missing" } }), /provider_import_defaults_invalid/);
+});
+
+test("text model catalog includes every configured text provider and keeps provider identity", () => {
+  const config = {
+    provider: { ...text, models: ["shared/model", "legacy/model"] },
+    providers: {
+      "provider-a": { ...text, id: "provider-a", models: ["shared/model", "a/model"] },
+      "provider-b": { ...text, id: "provider-b", models: ["b/model"] },
+      vision: { ...image, id: "vision", source: "openai-compatible", model: "gpt-image-2", capabilities: ["image"] as const },
+    },
+    defaults: { text: "provider-a" },
+  };
+  const options = configuredTextModelOptions(config);
+  assert.deepEqual(options.map(({ providerId, modelId }) => [providerId, modelId]), [
+    ["provider-a", "shared/model"],
+    ["provider-a", "a/model"],
+    ["provider-b", "b/model"],
+    ["text", "shared/model"],
+    ["text", "legacy/model"],
+  ]);
+  assert.notEqual(configuredTextModelSelectionId("provider-a", "shared/model"), configuredTextModelSelectionId("text", "shared/model"));
+});
+
+test("selecting a text model updates both its provider model and text default", () => {
+  const config = {
+    provider: text,
+    providers: {
+      first: { ...text, id: "first", model: "first/old", models: ["first/old", "first/new"] },
+      second: { ...text, id: "second", model: "second/model", models: ["second/model"] },
+    },
+    defaults: { text: "first" },
+  };
+  const updated = selectConfiguredTextModel(config, configuredTextModelSelectionId("second", "second/model"));
+  assert.equal(updated.defaults.text, "second");
+  assert.equal(updated.providers.second.model, "second/model");
+  assert.equal(selectConfiguredTextModel(config, configuredTextModelSelectionId("second", "unknown/model")), config);
 });
 
 test("capability defaults recover from an existing incompatible profile", () => {

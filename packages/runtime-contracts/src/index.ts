@@ -44,10 +44,15 @@ export interface ArtifactRef {
 }
 
 export interface UsageRecord {
+  readonly usageId?: string;
   readonly model: string;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
   readonly estimatedCost?: number;
+  readonly aggregation?: "delta" | "snapshot";
+  readonly scope?: "step" | "run";
 }
 
 export type {

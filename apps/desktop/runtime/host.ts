@@ -4,7 +4,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import { buildOpenCodeCommand, createOpenCodeEventParser, type OpenCodeRuntimeEvent } from "@coworkany/runtime-contracts/opencode";
-import { createBailianImageAdapter, createBailianVideoAdapter, createHttpMediaAdapter, createMiniMaxAudioAdapter, createMiniMaxVideoAdapter, createOpenAICompatibleImageAdapter, createRunningHubAdapter, createRunningHubAiAppAdapter, createRunningHubWorkflowAdapter, downloadMediaOutputs, IMAGE_GENERATION_REQUEST_TIMEOUT_MS, listMiniMaxVoices, runMediaJob, uploadRunningHubMediaAsset, type MediaProviderId, type MediaProviderAdapter } from "@coworkany/media-runtime";
+import { createBailianImageAdapter, createBailianVideoAdapter, createCheapBuddyVideoAdapter, createCheapBuddyMediaFetch, createHttpMediaAdapter, createMiniMaxAudioAdapter, createMiniMaxVideoAdapter, createOpenAICompatibleImageAdapter, createRunningHubAdapter, createRunningHubAiAppAdapter, createRunningHubWorkflowAdapter, downloadMediaOutputs, IMAGE_GENERATION_REQUEST_TIMEOUT_MS, listMiniMaxVoices, runMediaJob, uploadRunningHubMediaAsset, type MediaProviderId, type MediaProviderAdapter } from "@coworkany/media-runtime";
 import { executeWorkflow, migrateWorkflowDefinitionToCurrent, splitWorkflowText as splitText, type WorkflowArtifactPort, type WorkflowCapabilityPort, type WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
 import { OpenCodeServeClient } from "./opencode-serve";
 import { createRpcReader, writeRpcResponse, writeRpcServiceRequest } from "./rpc";
@@ -12,6 +12,11 @@ import { createDesktopWorkflowPorts } from "./workflow-ports";
 import { buildMediaCapabilityInput } from "./media-input";
 import { assertVideoMediaCapability, resolveVideoMediaCapabilities } from "./media-capabilities";
 import { discoverProviderModels } from "../src/provider-model-discovery";
+import { CHEAPBUDDY } from "../src/cheapbuddy";
+import type { CheapBuddyAccountAction } from "../src/cheapbuddy-contract";
+import { normalizeCapabilityModels, type DesktopProviderConfig, type ProviderCapability } from "../src/provider-config";
+import { CheapBuddyAccountService } from "./cheapbuddy-account";
+import { ManagedProviderRuntime, createRedactedLogWriter, managedProviderFailure, qualifiedOpenCodeModel, resolveProviderCredentials } from "./provider-credentials";
 import type { RunningHubWorkflowRegistration } from "../src/runninghub-workflow";
 import { migrateLegacyRunningHubWorkflows } from "../src/runninghub-workflow";
 import { detectMediaStreams, runFfmpegMediaProcess } from "./media-process";
@@ -20,8 +25,35 @@ import { detectMediaStreams, runFfmpegMediaProcess } from "./media-process";
 import * as chatAttachmentExtractor from "../../../lib/chat-attachments/extract.ts";
 import { promptRequestsArtifact } from "../src/artifact-intent";
 
-type HostCommand = { readonly version: 1; readonly requestId: string; readonly type: "chat.run" | "workflow.ai" | "workflow.run" | "run.cancel" | "run.emergency_stop" | "run.retry" | "media.resume" | "media.voices" | "provider.models" | "health" | "session.create" | "session.attach" | "session.prompt" | "permission.respond" | "question.list" | "question.reply" | "question.reject" | "attachment.extract" | "knowledge.index" | "knowledge.search"; readonly runId?: string; readonly sessionId?: string; readonly payload?: Record<string, unknown> };
-type ProviderConfig = { readonly id?: string; readonly source?: string; readonly model?: string; readonly baseUrl?: string; readonly apiKey?: string; readonly reasoningEffort?: string; readonly timeout?: number | false; readonly chunkTimeout?: number | false; readonly endpoint?: string; readonly queryEndpoint?: string; readonly workflowId?: string; readonly digitalHumanWorkflowId?: string; readonly videoEnhanceWorkflowId?: string; readonly workflows?: readonly RunningHubWorkflowRegistration[] };
+type HostCommand = { readonly version: 1; readonly requestId: string; readonly type: "chat.run" | "workflow.run" | "run.cancel" | "run.emergency_stop" | "run.retry" | "media.resume" | "media.voices" | "provider.models" | "cheapbuddy.account" | "health" | "session.create" | "session.attach" | "session.prompt" | "permission.respond" | "question.list" | "question.reply" | "question.reject" | "attachment.extract" | "knowledge.index" | "knowledge.search"; readonly runId?: string; readonly sessionId?: string; readonly payload?: Record<string, unknown> };
+type ProviderConfig = DesktopProviderConfig;
+let cheapBuddyAccountService: CheapBuddyAccountService | undefined;
+const managedProviderRuntime = new ManagedProviderRuntime();
+
+function cheapBuddyAccounts() {
+  return cheapBuddyAccountService ??= new CheapBuddyAccountService({ workspacePath: process.env.OPENCODE_RUNTIME_DIR?.trim() || dirname(defaultWorkspacePath()) });
+}
+
+async function resolveHostProvider(provider: ProviderConfig | undefined) {
+  const generation = managedProviderRuntime.capture(provider);
+  managedProviderRuntime.assertCurrent(generation);
+  const resolved = await resolveProviderCredentials(provider, reference => cheapBuddyAccounts().resolveApiKey(reference));
+  managedProviderRuntime.assertCurrent(generation);
+  managedProviderRuntime.remember(resolved);
+  return resolved;
+}
+
+function openCodeProvider(provider: ProviderConfig | undefined): ProviderConfig {
+  if (provider?.source !== CHEAPBUDDY.id || !provider.model?.trim()) return provider ?? {};
+  const model = provider.model.replace(/^cheapbuddy\//u, "");
+  return { ...provider, model: `${CHEAPBUDDY.id}/${model}` };
+}
+
+function sessionProvider(provider: ProviderConfig | undefined): ProviderConfig | undefined {
+  if (!provider?.credentialRef) return provider;
+  const { apiKey: _key, ...safe } = provider;
+  return safe;
+}
 const active = new Map<string, ReturnType<typeof spawn>>();
 const workflowControllers = new Map<string, AbortController>();
 const sessionRunControllers = new Map<string, AbortController>();
@@ -199,6 +231,7 @@ function defaultOpenCodeExecutable() {
 }
 const configuredOpenCodeExecutable = defaultOpenCodeExecutable();
 const serveClients = new Map<string, OpenCodeServeClient>();
+const managedServeClientKeys = new Set<string>();
 
 function runtimeEnvironmentSignature(environment: Record<string, string | undefined>) {
   return JSON.stringify(Object.entries(environment)
@@ -206,10 +239,12 @@ function runtimeEnvironmentSignature(environment: Record<string, string | undefi
     .sort(([left], [right]) => left.localeCompare(right)));
 }
 
-function serveClientFor(workspacePath: string, environment: Record<string, string | undefined>) {
+function serveClientFor(workspacePath: string, environment: Record<string, string | undefined>, generation?: number) {
+  managedProviderRuntime.assertCurrent(generation);
   const key = createHash("sha256").update(workspacePath).update("\u0000").update(runtimeEnvironmentSignature(environment)).digest("hex").slice(0, 24);
+  if (generation !== undefined) managedServeClientKeys.add(key);
   const existing = serveClients.get(key);
-  if (existing) return existing;
+  if (existing) { managedProviderRuntime.trackClient(existing, generation); return existing; }
   const executableIsScript = /\.(?:mjs|cjs|js)$/iu.test(configuredOpenCodeExecutable);
   const client = new OpenCodeServeClient(
     executableIsScript ? process.execPath : configuredOpenCodeExecutable,
@@ -217,6 +252,7 @@ function serveClientFor(workspacePath: string, environment: Record<string, strin
     executableIsScript ? [configuredOpenCodeExecutable] : [],
   );
   serveClients.set(key, client);
+  managedProviderRuntime.trackClient(client, generation);
   return client;
 }
 
@@ -230,11 +266,12 @@ async function shutdownHost() {
 process.once("SIGTERM", () => { void shutdownHost(); });
 process.once("SIGINT", () => { void shutdownHost(); });
 
-function respond(command: HostCommand, data: unknown) { writeRpcResponse(process.stdout, { version: 1, requestId: command.requestId, ok: true, data }); }
-function fail(command: HostCommand, code: string, message: string) { writeRpcResponse(process.stdout, { version: 1, requestId: command.requestId, ok: false, error: { code, message, retryable: false } }); }
+function respond(command: HostCommand, data: unknown) { writeRpcResponse(process.stdout, { version: 1, requestId: command.requestId, ok: true, data: managedProviderRuntime.redact(data) }); }
+function fail(command: HostCommand, code: string, message: string) { writeRpcResponse(process.stdout, { version: 1, requestId: command.requestId, ok: false, error: { code, message: managedProviderRuntime.redactText(message), retryable: false } }); }
+function safeHostError(error: unknown, limit: number): string { return managedProviderRuntime.redactText(error instanceof Error ? error.message : String(error)).slice(0, limit); }
 
 function diagnosticLog(event: string, details: Record<string, unknown>, runId?: string) {
-  process.stderr.write(`${JSON.stringify({ timestamp: new Date().toISOString(), component: "workflow-host", event, ...(runId ? { runId } : {}), ...details })}\n`);
+  process.stderr.write(`${JSON.stringify(managedProviderRuntime.redact({ timestamp: new Date().toISOString(), component: "workflow-host", event, ...(runId ? { runId } : {}), ...details }))}\n`);
 }
 
 function providerDiagnosticSummary(provider: ProviderConfig | undefined) {
@@ -272,7 +309,7 @@ function requestService(method: DesktopServiceMethod, payload: Record<string, un
     serviceRequests.set(requestId, { resolve, reject });
     signal?.addEventListener("abort", () => { serviceRequests.delete(requestId); reject(new Error("service_request_cancelled")); }, { once: true });
   });
-  writeRpcServiceRequest(process.stdout, { version: 1, requestId, type: "service_request", method, payload });
+  writeRpcServiceRequest(process.stdout, { version: 1, requestId, type: "service_request", method, payload: method.startsWith("workflow.") ? managedProviderRuntime.redact(payload) : payload });
   return response;
 }
 
@@ -308,11 +345,12 @@ async function extractAttachment(command: HostCommand) {
 
 function selectedAgentId(value: unknown) {
   const agentId = typeof value === "string" ? value.trim() : "";
-  return /^agency-[a-z0-9_-]{1,180}$/u.test(agentId) ? agentId : undefined;
+  return agentId === "workflow-ai" || /^agency-[a-z0-9_-]{1,180}$/u.test(agentId) ? agentId : undefined;
 }
 
 async function preparedAgentName(configDirectory: string, agentId?: string) {
   if (!agentId) return undefined;
+  if (agentId === "workflow-ai") return agentId;
   try {
     const source = await readFile(join(configDirectory, "agents", `${agentId}.md`), "utf8");
     const match = source.match(/^\s*name:\s*(.+?)\s*$/imu);
@@ -373,7 +411,16 @@ function fileArtifactMimeType(relative: string) {
                       : extension === "mp4" ? "video/mp4"
                         : extension === "webm" ? "video/webm"
                           : extension === "pptx" ? "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                            : "application/octet-stream";
+                            : extension === "ppt" ? "application/vnd.ms-powerpoint"
+                              : extension === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                : extension === "doc" ? "application/msword"
+                                  : extension === "xlsx" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                    : extension === "xls" ? "application/vnd.ms-excel"
+                                      : extension === "odt" ? "application/vnd.oasis.opendocument.text"
+                                        : extension === "odp" ? "application/vnd.oasis.opendocument.presentation"
+                                          : extension === "ods" ? "application/vnd.oasis.opendocument.spreadsheet"
+                                            : extension === "rtf" ? "application/rtf"
+                                              : "application/octet-stream";
 }
 
 function artifactWorkspaceRoots(workspacePath: string) {
@@ -637,12 +684,13 @@ async function runVideoCompose(
   return { artifacts: [artifact], asset: artifact, video: [artifact], status: "succeeded" };
 }
 
-async function emitFinalFileArtifacts(command: HostCommand, runId: string, workspacePath: string, events: readonly OpenCodeRuntimeEvent[], allowArtifacts: boolean) {
+async function emitFinalFileArtifacts(command: HostCommand, runId: string, workspacePath: string, events: readonly OpenCodeRuntimeEvent[], allowArtifacts: boolean, pptxOnly = false) {
   if (!allowArtifacts) return;
   // Emit only after the model turn has completed. Repeated writes are
   // collapsed to one card per path, and metadata describes the final
   // on-disk version instead of an intermediate tool step.
-  for (const artifact of localFileArtifacts(workspacePath, events, runId)) {
+  const artifacts = localFileArtifacts(workspacePath, events, runId).filter((artifact) => !pptxOnly || artifact.relativePath.toLowerCase().endsWith(".pptx"));
+  for (const artifact of artifacts) {
     const { workspacePath: artifactWorkspacePath, relativePath: relative, mimeType, bytes } = artifact;
     let registration: Record<string, unknown> | undefined;
     try {
@@ -670,43 +718,54 @@ async function emitFinalFileArtifacts(command: HostCommand, runId: string, works
   }
 }
 
-async function runOpenCode(command: HostCommand, session?: { readonly workspacePath: string; readonly sessionId?: string; readonly provider?: ProviderConfig; readonly allowArtifacts?: boolean; readonly client?: OpenCodeServeClient }, options: { readonly respond?: boolean; readonly signal?: AbortSignal } = {}) {
+async function runOpenCode(command: HostCommand, session?: { readonly workspacePath: string; readonly sessionId?: string; readonly provider?: ProviderConfig; readonly allowArtifacts?: boolean; readonly client?: OpenCodeServeClient }, options: { readonly respond?: boolean; readonly signal?: AbortSignal; readonly managedGeneration?: number } = {}) {
   const prompt = typeof command.payload?.prompt === "string" ? command.payload.prompt : "";
   if (!prompt.trim()) return fail(command, "invalid_prompt", "prompt is required");
   const runId = command.runId ?? randomUUID();
   const modelHint = typeof command.payload?.model === "string" ? command.payload.model : undefined;
   const skillId = typeof command.payload?.skillId === "string" ? command.payload.skillId : undefined;
+  const pptSkill = skillId?.trim().toLowerCase() === "ppt-master" || skillId?.trim().toLowerCase() === "dashi-ppt";
   const agentId = selectedAgentId(command.payload?.agentId);
   const userPromptForArtifactIntent = prompt.replace(/\n\n(?:请使用本地 |Use the local )[\s\S]*$/u, "");
-  const allowArtifacts = typeof command.payload?.allowArtifacts === "boolean" ? command.payload.allowArtifacts : session?.allowArtifacts ?? promptRequestsArtifact(userPromptForArtifactIntent);
-  const provider = readProvider(command.payload?.provider);
-  const activeProvider = provider ?? session?.provider;
+  const allowArtifacts = pptSkill || (typeof command.payload?.allowArtifacts === "boolean" ? command.payload.allowArtifacts : session?.allowArtifacts ?? promptRequestsArtifact(userPromptForArtifactIntent));
+  const requestedProvider = readProvider(command.payload?.provider) ?? session?.provider;
+  const generation = options.managedGeneration ?? managedProviderRuntime.capture(requestedProvider);
+  let provider: ProviderConfig | undefined;
+  try { managedProviderRuntime.assertCurrent(generation); provider = await resolveHostProvider(requestedProvider); managedProviderRuntime.assertCurrent(generation); }
+  catch (error) { return fail(command, "provider_credentials_unavailable", error instanceof Error ? error.message : "cheapbuddy_sign_in_required"); }
+  const activeProvider = provider;
   if (!(activeProvider?.model?.trim() || modelHint?.trim())) return fail(command, "text_provider_model_required", "Configure a text Provider and model before sending.");
   const executable = typeof command.payload?.executable === "string" ? command.payload.executable : defaultOpenCodeExecutable();
   const workspacePath = session?.workspacePath ?? (workspacePathFromPayload(command.payload?.workspacePath) || process.cwd());
   const configDirectory = await prepareSkillWorkspace(workspacePath);
   const agentName = await preparedAgentName(configDirectory, agentId);
-  const environment = await createOpenCodeEnvironment(configDirectory, provider, modelHint, agentId);
+  const environment = withOpenCodeWorkspaceGitBoundary(await createOpenCodeEnvironment(configDirectory, provider, modelHint, agentId), workspacePath);
+  managedProviderRuntime.assertCurrent(generation);
   const persistentSession = session?.sessionId ? session as { readonly workspacePath: string; readonly sessionId: string; readonly provider?: ProviderConfig; readonly agentName?: string } : undefined;
   if (persistentSession?.sessionId) {
-    const client = session?.client ?? serveClientFor(workspacePath, environment);
-    if (!sessions.has(persistentSession.sessionId)) sessions.set(persistentSession.sessionId, { conversationId: "", workspacePath, sessionId: persistentSession.sessionId, provider, agentName, allowArtifacts, client });
+    const client = session?.client ?? serveClientFor(workspacePath, environment, generation);
+    managedProviderRuntime.trackClient(client, generation);
+    if (!sessions.has(persistentSession.sessionId)) sessions.set(persistentSession.sessionId, { conversationId: "", workspacePath, sessionId: persistentSession.sessionId, provider: sessionProvider(provider), agentName, allowArtifacts, client });
     if (options.respond !== false) respond(command, { runId });
     const events: OpenCodeRuntimeEvent[] = [];
-    await client.prompt(persistentSession.sessionId, workspacePath, runId, prompt, provider ?? persistentSession.provider ?? {}, (event) => { const enriched = enrichUsageEvent(event, provider ?? persistentSession.provider, modelHint); events.push(enriched); emit(command, enriched); }, options.signal, persistentSession.agentName ?? agentName, async () => emitFinalFileArtifacts(command, runId, workspacePath, events, allowArtifacts), skillId);
+    managedProviderRuntime.assertCurrent(generation);
+    await client.prompt(persistentSession.sessionId, workspacePath, runId, prompt, openCodeProvider(provider), (event) => { const enriched = managedProviderRuntime.redact(enrichUsageEvent(event, provider, modelHint)); events.push(enriched); emit(command, enriched); }, options.signal, persistentSession.agentName ?? agentName, async () => emitFinalFileArtifacts(command, runId, workspacePath, events, allowArtifacts, pptSkill), skillId);
     return events;
   }
-  const child = spawn(executable, buildOpenCodeCommand({ modelHint }).args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, cwd: workspacePath, env: environment });
+  managedProviderRuntime.assertCurrent(generation);
+  const child = spawn(executable, buildOpenCodeCommand({ modelHint: qualifiedOpenCodeModel(provider, modelHint) }).args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, cwd: workspacePath, env: environment });
+  const releaseManagedRun = managedProviderRuntime.trackCancellation(() => { if (!child.killed) child.kill(); }, generation);
   active.set(runId, child);
   const parser = createOpenCodeEventParser(runId);
   const events: OpenCodeRuntimeEvent[] = [];
-  child.stdout.on("data", (chunk: Buffer) => { for (const event of parser.push(chunk.toString("utf8"))) { const enriched = enrichUsageEvent(event, provider, modelHint); events.push(enriched); emit(command, enriched); } });
-  child.stderr.on("data", (chunk: Buffer) => process.stderr.write(`[opencode:${runId}] ${chunk.toString("utf8")}`));
+  const diagnosticWriter = createRedactedLogWriter(value => managedProviderRuntime.redactText(value), value => process.stderr.write(`[opencode:${runId}] ${value}`));
+  child.stdout.on("data", (chunk: Buffer) => { for (const event of parser.push(chunk.toString("utf8"))) { const enriched = managedProviderRuntime.redact(enrichUsageEvent(event, provider, modelHint)); events.push(enriched); emit(command, enriched); } });
+  child.stderr.on("data", (chunk: Buffer) => diagnosticWriter.write(chunk.toString("utf8")));
   const result = new Promise<readonly OpenCodeRuntimeEvent[]>((resolve) => {
     const abort = () => { if (!child.killed) child.kill(); };
     options.signal?.addEventListener("abort", abort, { once: true });
-    child.on("error", (error) => { const event: OpenCodeRuntimeEvent = { event: "runtime_error", code: "opencode_spawn_failed", message: error.message.slice(0, 1024), retryable: true, runId }; events.push(event); emit(command, event); });
-    child.on("close", (code) => { options.signal?.removeEventListener("abort", abort); for (const event of parser.finish()) if (code === 0 || event.event !== "done") { const enriched = enrichUsageEvent(event, provider, modelHint); events.push(enriched); emit(command, enriched); } active.delete(runId); if (code !== 0) { const event: OpenCodeRuntimeEvent = { event: "runtime_error", code: options.signal?.aborted ? "opencode_aborted" : "opencode_exit", message: options.signal?.aborted ? "OpenCode run cancelled." : `OpenCode exited with code ${code ?? "unknown"}`, retryable: !options.signal?.aborted, runId }; events.push(event); emit(command, event); } resolve(events); });
+    child.on("error", (error) => { const event: OpenCodeRuntimeEvent = { event: "runtime_error", code: "opencode_spawn_failed", message: safeHostError(error, 1024), retryable: true, runId }; events.push(event); emit(command, event); });
+    child.on("close", (code) => { diagnosticWriter.flush(); releaseManagedRun(); options.signal?.removeEventListener("abort", abort); for (const event of parser.finish()) if (code === 0 || event.event !== "done") { const enriched = managedProviderRuntime.redact(enrichUsageEvent(event, provider, modelHint)); events.push(enriched); emit(command, enriched); } active.delete(runId); if (code !== 0) { const cancelled = options.signal?.aborted || !managedProviderRuntime.current(generation); const event: OpenCodeRuntimeEvent = { event: "runtime_error", code: cancelled ? "opencode_aborted" : "opencode_exit", message: cancelled ? "OpenCode run cancelled." : `OpenCode exited with code ${code ?? "unknown"}`, retryable: !cancelled, runId }; events.push(event); emit(command, event); } resolve(events); });
   });
   child.stdin.end(prompt);
   if (options.respond !== false) respond(command, { runId });
@@ -745,15 +804,19 @@ function isDeepSeekV4Flash(provider: ProviderConfig | undefined, model: string |
 
 /** Plain workflow text nodes must not enter the tool-enabled build agent. */
 async function runDirectTextCapability(command: HostCommand, executorId: string, config: Record<string, unknown>, inputs: Record<string, unknown>, signal?: AbortSignal) {
-  const provider = readProvider(command.payload?.provider);
-  const baseUrl = typeof config.baseUrl === "string" ? config.baseUrl : provider?.baseUrl ?? "";
+  const requestedProvider = readProvider(command.payload?.provider);
+  const generation = managedProviderRuntime.capture(requestedProvider);
+  const provider = await resolveHostProvider(requestedProvider);
+  managedProviderRuntime.assertCurrent(generation);
+  const managed = Boolean(provider?.credentialRef);
+  const baseUrl = managed ? CHEAPBUDDY.apiBaseUrl : typeof config.baseUrl === "string" ? config.baseUrl : provider?.baseUrl ?? "";
   if (!baseUrl) throw new Error("text_provider_configuration_required");
   const model = typeof config.model === "string" ? config.model : provider?.model ?? "";
   if (!model) throw new Error("text_provider_model_required");
   const prompt = [typeof config.prompt === "string" ? config.prompt : "", typeof config.script === "string" ? config.script : "", typeof config.text === "string" ? config.text : "", typeof inputs.text === "string" ? inputs.text : ""].filter(Boolean).join("\n\n").trim();
   if (!prompt) throw new Error("text_prompt_required");
   const defaultTextEndpoint = `/${["chat", "completions"].join("/")}`;
-  const endpoint = typeof config.endpoint === "string" && config.endpoint.trim() ? config.endpoint : provider?.endpoint || defaultTextEndpoint;
+  const endpoint = managed ? defaultTextEndpoint : typeof config.endpoint === "string" && config.endpoint.trim() ? config.endpoint : provider?.endpoint || defaultTextEndpoint;
   const response = await fetch(providerRequestUrl(baseUrl, endpoint), {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json", ...(provider?.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {}) },
@@ -771,6 +834,7 @@ async function runDirectTextCapability(command: HostCommand, executorId: string,
   let payload: Record<string, unknown> = {};
   try { payload = raw ? JSON.parse(raw) as Record<string, unknown> : {}; } catch { /* preserve a bounded transport error below */ }
   if (!response.ok) {
+    if (managed) throw new Error(`cheapbuddy_text_http_${response.status}`);
     const error = payload.error && typeof payload.error === "object" ? payload.error as Record<string, unknown> : {};
     const detail = typeof error.message === "string" ? error.message.slice(0, 180) : `HTTP ${response.status}`;
     throw new Error(`text_provider_http_${response.status}:${detail}`);
@@ -792,7 +856,7 @@ function splitWorkflowNodeText(config: Record<string, unknown>, inputs: Record<s
   try {
     normalized = splitText(raw, separator, delimiter, trim, pattern);
   } catch (error) {
-    throw new Error(`text_split_invalid_regex:${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`text_split_invalid_regex:${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
   const index = Number.isInteger(config.segmentIndex) ? Number(config.segmentIndex) : 0;
   return { text: normalized[index] ?? "", texts: normalized };
@@ -904,12 +968,14 @@ function readProvider(value: unknown): ProviderConfig | undefined {
     ...(typeof record.model === "string" ? { model: record.model } : {}),
     ...(typeof record.baseUrl === "string" ? { baseUrl: record.baseUrl } : {}),
     ...(typeof record.apiKey === "string" ? { apiKey: record.apiKey } : {}),
+    ...(typeof record.credentialRef === "string" ? { credentialRef: record.credentialRef } : {}),
+    ...(normalizeCapabilityModels(record.capabilityModels) ? { capabilityModels: normalizeCapabilityModels(record.capabilityModels) } : {}),
     ...(typeof record.reasoningEffort === "string" ? { reasoningEffort: record.reasoningEffort } : {}),
     ...(record.timeout === false || (typeof record.timeout === "number" && Number.isFinite(record.timeout) && record.timeout >= 0) ? { timeout: record.timeout } : {}),
     ...(record.chunkTimeout === false || (typeof record.chunkTimeout === "number" && Number.isFinite(record.chunkTimeout) && record.chunkTimeout >= 0) ? { chunkTimeout: record.chunkTimeout } : {}),
     ...(typeof record.endpoint === "string" ? { endpoint: record.endpoint } : {}),
     ...(typeof record.queryEndpoint === "string" ? { queryEndpoint: record.queryEndpoint } : {}),
-    ...(Array.isArray(record.capabilities) ? { capabilities: record.capabilities.filter((value): value is string => typeof value === "string") } : {}),
+    ...(Array.isArray(record.capabilities) ? { capabilities: record.capabilities.filter((value): value is ProviderCapability => typeof value === "string" && ["text", "image", "video", "audio"].includes(value)) } : {}),
     ...(typeof record.workflowId === "string" ? { workflowId: record.workflowId } : {}),
     ...(typeof record.digitalHumanWorkflowId === "string" ? { digitalHumanWorkflowId: record.digitalHumanWorkflowId } : {}),
     ...(typeof record.videoEnhanceWorkflowId === "string" ? { videoEnhanceWorkflowId: record.videoEnhanceWorkflowId } : {}),
@@ -974,8 +1040,20 @@ function withPrivatePython(environment: NodeJS.ProcessEnv) {
   return privateEnvironment;
 }
 
+function withOpenCodeWorkspaceGitBoundary(environment: NodeJS.ProcessEnv, workspacePath: string) {
+  // OpenCode 1.17's snapshot service lists paths relative to the Git worktree
+  // but stages them with the session directory as cwd. When a CoworkAny
+  // workspace is nested inside the CoworkAny repository, that turns
+  // `output/file.json` into `<repo-relative>/output/file.json` and Git adds the
+  // workspace prefix a second time. Stop Git discovery at the workspace's
+  // parent so a nested workspace is treated as its own project; a `.git`
+  // directory inside the workspace is still discovered before the ceiling.
+  return { ...environment, GIT_CEILING_DIRECTORIES: dirname(resolve(workspacePath)) };
+}
+
 function selectedModel(provider: ProviderConfig | undefined, modelHint: string | undefined) {
   const configured = (provider?.model || modelHint || "").trim();
+  if (provider?.source === CHEAPBUDDY.id) return { providerId: CHEAPBUDDY.id, modelId: configured.replace(/^cheapbuddy\//u, "") };
   const slash = configured.indexOf("/");
   const source = provider?.source?.trim() || provider?.id || "local";
   return {
@@ -1002,11 +1080,25 @@ function deepSeekVariant(model: string, reasoningEffort: string | undefined) {
 }
 
 function openCodeModelDefinition(provider: ProviderConfig | undefined, model: string) {
+  const source = provider?.source?.trim().toLowerCase();
+  const context = model === "doubao-seed-2-1-pro-260915"
+      ? 1_024_000
+      : source === "deepseek" && model.startsWith("deepseek-v4")
+        ? 1_048_576
+        : model === "grok-4.7"
+          ? 500_000
+          : 200_000;
+  const output = model === "doubao-seed-2-1-pro-260915" ? 256_000 : model === "grok-4.7" ? 500_000 : 393_216;
+  const base = {
+    name: model,
+    limit: { context, output },
+    ...(model === "doubao-seed-2-1-pro-260915" ? { modalities: { input: ["text", "image"], output: ["text"] } } : {}),
+  };
   const variant = deepSeekVariant(model, provider?.reasoningEffort);
-  if (!variant) return { name: model };
+  if (!variant) return base;
   const thinking = variant === "none" ? "disabled" : "enabled";
   return {
-    name: model,
+    ...base,
     // DeepSeek's OpenAI-compatible API places thinking in
     // `reasoning_content`. Declaring the capability lets OpenCode preserve
     // that typed part during streaming and history replay instead of treating
@@ -1040,6 +1132,13 @@ async function writeOpenCodeConfig(configDirectory: string, provider: ProviderCo
     // flags still keep user-level Skill paths out of this runtime.
     skills: { paths: [join(configDirectory, "skills")] },
     ...(model ? { model: `${selected.providerId}/${model}` } : {}),
+    agent: {
+      "workflow-ai": {
+        mode: "primary",
+        description: "Authors a CoworkAny workflow from the active workflow context.",
+        permission: { "*": "deny", skill: "allow" },
+      },
+    },
     permission: permissionMode === "ask" ? {
       "*": "allow",
       bash: "ask", edit: "ask", task: "ask", external_directory: "ask",
@@ -1219,6 +1318,19 @@ async function runWorkflow(command: HostCommand) {
   respond(command, { runId });
   const normalizedDefinition = migrateWorkflowDefinitionToCurrent(definition as WorkflowDefinitionEnvelope);
   const controller = new AbortController(); workflowControllers.set(runId, controller);
+  const workflowGeneration = managedProviderRuntime.snapshot();
+  let releaseManagedWorkflow: (() => void) | undefined;
+  const guardManagedWorkflow = (provider: ProviderConfig | undefined) => {
+    if (managedProviderRuntime.capture(provider) === undefined) return;
+    managedProviderRuntime.assertCurrent(workflowGeneration);
+    releaseManagedWorkflow ??= managedProviderRuntime.trackCancellation(() => controller.abort(), workflowGeneration);
+  };
+  const guardManagedMedia = (config: Record<string, unknown>) => {
+    const media = readProvider(command.payload?.media);
+    const text = readProvider(command.payload?.provider);
+    const selected = typeof config.provider === "string" ? config.provider : media?.id ?? text?.id ?? "";
+    guardManagedWorkflow(providerProfiles[selected] ?? media ?? text);
+  };
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
   const capability: WorkflowCapabilityPort = { execute: async ({ executorId, nodeKey, config, inputs }, signal) => {
       if (executorId === "text_input") return { text: typeof config.text === "string" ? config.text : "" };
@@ -1304,7 +1416,10 @@ async function runWorkflow(command: HostCommand) {
         return { artifacts: [artifact], ...(executorId === "video_process" ? { video: [artifact], videos: [artifact] } : { audio: [artifact], audios: [artifact] }) };
       }
       if (executorId === "video_compose") return runVideoCompose(command, runId, nodeKey, config, inputs, workspacePath, artifactPort, signal);
-      if (["image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate"].includes(executorId)) return runMediaCapability(command, runId, nodeKey, executorId, config, inputs, workspacePath, signal);
+      if (["image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate"].includes(executorId)) {
+        guardManagedMedia(config);
+        return runMediaCapability(command, runId, nodeKey, executorId, config, inputs, workspacePath, signal);
+      }
       if (executorId === "agent_execute" && config.operation === "audio_transcription") return runRunningHubAudioTranscription(command, runId, nodeKey, config, inputs, workspacePath, signal);
       if (["writer", "llm_generate"].includes(executorId)) {
         const configuredTextProvider = readProvider(command.payload?.provider);
@@ -1312,17 +1427,23 @@ async function runWorkflow(command: HostCommand) {
         // direct text Provider is configured; real configured Providers use
         // the deterministic host-mediated request path.
         if (typeof config.baseUrl === "string" || configuredTextProvider?.baseUrl) {
+          guardManagedWorkflow(configuredTextProvider);
           return runDirectTextCapability({ ...command, runId: `${runId}:${nodeKey}` }, executorId, config, inputs, signal);
         }
       }
       const prompt = [typeof config.prompt === "string" ? config.prompt : "", typeof config.script === "string" ? config.script : "", typeof config.text === "string" ? config.text : "", typeof inputs.text === "string" ? inputs.text : ""].filter(Boolean).join("\n\n");
       const nodeCommand: HostCommand = { ...command, runId: `${runId}:${nodeKey}`, payload: { ...(command.payload ?? {}), prompt, ...(executorId === "ppt_generate" ? { skillId: "ppt-master" } : {}) } };
-      const workflowProvider = readProvider(command.payload?.provider);
+      const requestedWorkflowProvider = readProvider(command.payload?.provider);
+      guardManagedWorkflow(requestedWorkflowProvider);
+      const generation = managedProviderRuntime.capture(requestedWorkflowProvider) === undefined ? undefined : workflowGeneration;
+      const workflowProvider = await resolveHostProvider(requestedWorkflowProvider);
       const workflowConfigDirectory = await prepareSkillWorkspace(workspacePath);
-      const workflowEnvironment = await createOpenCodeEnvironment(workflowConfigDirectory, workflowProvider, workflowProvider?.model);
-      const client = serveClientFor(workspacePath, workflowEnvironment);
-      const { sessionId: workflowSessionId } = await client.createOrResumeSession(workspacePath, undefined, workflowProvider ?? {}, workflowEnvironment);
-      const events = await runOpenCode(nodeCommand, { workspacePath, sessionId: workflowSessionId, provider: workflowProvider, client }, { respond: false, signal });
+      const workflowEnvironment = withOpenCodeWorkspaceGitBoundary(await createOpenCodeEnvironment(workflowConfigDirectory, workflowProvider, workflowProvider?.model), workspacePath);
+      managedProviderRuntime.assertCurrent(generation);
+      const client = serveClientFor(workspacePath, workflowEnvironment, generation);
+      const { sessionId: workflowSessionId } = await client.createOrResumeSession(workspacePath, undefined, openCodeProvider(workflowProvider), workflowEnvironment);
+      managedProviderRuntime.assertCurrent(generation);
+      const events = await runOpenCode(nodeCommand, { workspacePath, sessionId: workflowSessionId, provider: workflowProvider, client }, { respond: false, signal, managedGeneration: generation });
       const runtimeError = (events ?? []).find((event) => event.event === "runtime_error");
       if (runtimeError?.event === "runtime_error") throw new Error(runtimeError.message);
       const text = (events ?? []).filter((event): event is Extract<OpenCodeRuntimeEvent, { event: "text_delta" }> => event.event === "text_delta").map((event) => event.delta).join("");
@@ -1330,6 +1451,7 @@ async function runWorkflow(command: HostCommand) {
       return { text, ...(artifacts.length ? { artifacts, ...(executorId === "ppt_generate" ? { ppt: artifacts } : {}) } : {}) };
     }, resume: async ({ executorId, nodeKey, config, inputs, providerTaskId }, signal) => {
       if (["image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate"].includes(executorId)) {
+        guardManagedMedia(config);
         return runMediaCapability(command, runId, nodeKey, executorId, config, inputs, workspacePath, signal, providerTaskId);
       }
       if (executorId === "video_compose") return runVideoCompose(command, runId, nodeKey, config, inputs, workspacePath, artifactPort, signal);
@@ -1340,11 +1462,13 @@ async function runWorkflow(command: HostCommand) {
   const artifactPort: WorkflowArtifactPort = ports.artifacts;
   const recoveryDefinitionHash = typeof command.payload?.recoveryDefinitionHash === "string" && command.payload.recoveryDefinitionHash.trim() ? command.payload.recoveryDefinitionHash.trim() : undefined;
   try { result = await executeWorkflow(normalizedDefinition, { runId, signal: controller.signal, recovering: readWorkflowRecovery(command.payload?.recovering), ...(recoveryDefinitionHash ? { recoveryDefinitionHash } : {}), ...(command.payload?.completed && typeof command.payload.completed === "object" ? { completed: command.payload.completed as Record<string, Record<string, unknown>> } : {}), ports }); } catch (error) {
+    releaseManagedWorkflow?.();
     workflowControllers.delete(runId);
-    diagnosticLog("workflow_run_error", { stage: "execute_workflow", error: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240) }, runId);
+    diagnosticLog("workflow_run_error", { stage: "execute_workflow", error: safeHostError(error, 240) }, runId);
     emit(command, { event: "runtime_error", code: "workflow_invalid", message: error instanceof Error ? error.message : String(error), retryable: false, runId });
     return;
   }
+  releaseManagedWorkflow?.();
   workflowControllers.delete(runId);
   for (const [nodeKey, output] of Object.entries(result.outputs)) {
     const artifacts = Array.isArray(output.artifacts) ? output.artifacts : output.artifact ? [output.artifact] : [];
@@ -1477,7 +1601,12 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   const providerProfiles = readProviderMap(command.payload?.providers);
   const provider = typeof config.provider === "string" ? config.provider : typeof configuredMedia?.id === "string" ? configuredMedia.id : typeof textProvider?.id === "string" ? textProvider.id : "";
   const configuredMediaProfile = providerProfiles[provider] ?? readProvider(configuredMedia);
-  const profile = configuredMediaProfile ?? readProvider(textProvider);
+  const requestedProfile = configuredMediaProfile ?? readProvider(textProvider);
+  const generation = managedProviderRuntime.capture(requestedProfile);
+  const profile = await resolveHostProvider(requestedProfile);
+  managedProviderRuntime.assertCurrent(generation);
+  const cheapBuddy = profile?.source === CHEAPBUDDY.id;
+  if (cheapBuddy && !["image_generate", "video_generate"].includes(executorId)) throw new Error(`cheapbuddy_media_capability_unsupported:${executorId}`);
   diagnosticLog("workflow_provider_resolution", {
     nodeKey,
     executorId,
@@ -1493,7 +1622,7 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   // Image nodes are rebound from the desktop `defaults.image` profile before
   // reaching the host. Keep legacy node fields only as a fallback when an
   // older caller does not send the provider profile map at all.
-  const baseUrl = imageCapability && configuredMediaProfile
+  const baseUrl = cheapBuddy ? CHEAPBUDDY.apiBaseUrl : imageCapability && configuredMediaProfile
     ? profile?.baseUrl ?? ""
     : (typeof config.baseUrl === "string" ? config.baseUrl : profile?.baseUrl ?? "");
   if (!provider || !baseUrl) {
@@ -1501,12 +1630,12 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
     const error = new Error(`provider_configuration_required:${executorId}`); (error as Error & { code?: string }).code = "provider_configuration_required"; throw error;
   }
   const defaultEndpoints: Record<string, string> = { image_generate: "/images/generations", video_generate: "/videos/generations", digital_human: "/videos/generations", music_generate: "/audio/generations", voice_synthesis: "/audio/speech", voice_clone: "/voice_clone", audio_generate: "/audio/generations" };
-  const configuredEndpoint = typeof config.endpoint === "string" && config.endpoint.trim()
+  const configuredEndpoint = cheapBuddy ? (imageCapability ? "/images/generations" : "/videos") : typeof config.endpoint === "string" && config.endpoint.trim()
     ? config.endpoint.trim()
     : profile?.endpoint?.trim();
   const endpoint = configuredEndpoint ?? defaultEndpoints[executorId] ?? "";
   if (!endpoint) throw new Error(`provider_endpoint_required:${executorId}`);
-  const apiKey = imageCapability && configuredMediaProfile
+  const apiKey = cheapBuddy ? profile?.apiKey : imageCapability && configuredMediaProfile
     ? profile?.apiKey
     : (typeof config.apiKey === "string" ? config.apiKey : profile?.apiKey ?? (typeof command.payload?.apiKey === "string" ? command.payload.apiKey : undefined));
   const providerKind = (profile?.source ?? provider).toLowerCase();
@@ -1569,7 +1698,9 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   const registeredWorkflowAdapter = providerKind.includes("runninghub") && registeredWorkflow && (registeredWorkflow.capability === "image" || registeredWorkflow.capability === "video" || registeredWorkflow.capability === "digital_human" || registeredWorkflow.capability === "video_enhance" || registeredWorkflow.capability === "audio")
     ? createRunningHubWorkflowAdapter({ ...providerOptions, workflowId: registeredWorkflow.remoteWorkflowId, bindings: registeredWorkflow.nodeBindings, queryPath: typeof config.queryEndpoint === "string" ? config.queryEndpoint : profile?.queryEndpoint ?? "/openapi/v2/query" })
     : undefined;
-  const adapter: MediaProviderAdapter = registeredWorkflowAdapter ?? (dashScopeProvider && executorId === "image_generate"
+  const adapter: MediaProviderAdapter = registeredWorkflowAdapter ?? (cheapBuddy && executorId === "video_generate"
+    ? createCheapBuddyVideoAdapter(providerOptions)
+    : dashScopeProvider && executorId === "image_generate"
     ? createBailianImageAdapter(providerOptions)
     : dashScopeProvider && (executorId === "video_generate" || executorId === "digital_human")
       ? createBailianVideoAdapter(providerOptions)
@@ -1666,21 +1797,23 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   emit(command, { event: "tool_event", tool: `media:${executorId}`, phase: "started", message: JSON.stringify({ provider, model: modelId, executorId, nodeKey, idempotencyKey, status: "queued" }), runId });
   let task: Awaited<ReturnType<typeof runMediaJob>>;
   try {
+    managedProviderRuntime.assertCurrent(generation);
     task = await retryTransientMediaJob(() => runMediaJob(adapter, { provider: provider as MediaProviderId, modelId, input: { ...providerInput, ...(executorId === "voice_clone" ? { featureId: "voice-clone" } : {}) }, idempotencyKey }, cancellation, {
       pollIntervalMs: 1000,
       timeoutMs: 30 * 60 * 1000,
       ...(resumeProviderTaskId ? { initialTask: { providerTaskId: resumeProviderTaskId, status: "queued", outputs: [] } } : {}),
       onSubmitted: async (submitted) => emit(command, { event: "tool_event", tool: `media:${executorId}`, phase: "started", message: JSON.stringify({ provider, model: modelId, executorId, nodeKey, providerTaskId: submitted.providerTaskId, idempotencyKey, status: submitted.status === "succeeded" ? "submitted" : submitted.status }), runId }),
-      onUpdate: async (updated) => emit(command, { event: "tool_event", tool: `media:${executorId}`, phase: "progress", message: JSON.stringify({ provider, model: modelId, executorId, nodeKey, providerTaskId: updated.providerTaskId, idempotencyKey, status: updated.status === "succeeded" ? "submitted" : updated.status, providerStatus: updated.providerStatus, ...(updated.error ? { error: updated.error } : {}) }), runId }),
+      onUpdate: async (updated) => emit(command, { event: "tool_event", tool: `media:${executorId}`, phase: "progress", message: JSON.stringify({ provider, model: modelId, executorId, nodeKey, providerTaskId: updated.providerTaskId, idempotencyKey, status: updated.status === "succeeded" ? "submitted" : updated.status, providerStatus: updated.providerStatus, ...(updated.error ? { error: cheapBuddy ? "cheapbuddy_media_task_failed" : updated.error } : {}) }), runId }),
     }));
   } catch (error) {
     const status = signal?.aborted || (error instanceof Error && error.message === "media_cancelled") ? "cancelled" : "failed";
-    emit(command, { event: "tool_event", tool: `media:${executorId}`, phase: "failed", message: JSON.stringify({ provider, model: modelId, executorId, nodeKey, providerTaskId: resumeProviderTaskId, idempotencyKey, status, stage: "provider_request", error: error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180) }), runId });
-    throw error;
+    const failure = cheapBuddy ? managedProviderFailure(error, "media") : error;
+    emit(command, { event: "tool_event", tool: `media:${executorId}`, phase: "failed", message: JSON.stringify({ provider, model: modelId, executorId, nodeKey, providerTaskId: resumeProviderTaskId, idempotencyKey, status, stage: "provider_request", error: safeHostError(failure, 180) }), runId });
+    throw failure;
   }
   if (task.status !== "succeeded") {
-    const detail = task.error ? `:${task.error}` : "";
-    emit(command, { event: "tool_event", tool: `media:${executorId}`, phase: "failed", message: JSON.stringify({ provider, model: modelId, executorId, nodeKey, providerTaskId: task.providerTaskId, idempotencyKey, status: task.status, ...(task.providerStatus ? { providerStatus: task.providerStatus } : {}), ...(task.error ? { error: task.error } : {}) }), runId });
+    const detail = !cheapBuddy && task.error ? `:${task.error}` : "";
+    emit(command, { event: "tool_event", tool: `media:${executorId}`, phase: "failed", message: JSON.stringify({ provider, model: modelId, executorId, nodeKey, providerTaskId: task.providerTaskId, idempotencyKey, status: task.status, ...(task.providerStatus ? { providerStatus: task.providerStatus } : {}), ...(task.error ? { error: cheapBuddy ? "cheapbuddy_media_task_failed" : task.error } : {}) }), runId });
     throw new Error(`media_task_${task.status}${detail}`);
   }
   const outputDirectory = join(workspacePath, "artifacts", runId.replace(/[^a-zA-Z0-9_-]/g, "_"), nodeKey.replace(/[^a-zA-Z0-9_-]/g, "_"));
@@ -1693,14 +1826,18 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   if (tempDirectory && (tempDirectory === workspaceRoot || !tempDirectory.startsWith(`${workspaceRoot}${sep}`))) throw new Error("media_temp_path_escape");
   let artifacts: Awaited<ReturnType<typeof downloadMediaOutputs>>;
   try {
-    const mediaDownloadFetch = providerKind.includes("minimax") && apiKey
+    managedProviderRuntime.assertCurrent(generation);
+    const mediaDownloadFetch = cheapBuddy && apiKey
+      ? createCheapBuddyMediaFetch(baseUrl, apiKey, fetch)
+      : providerKind.includes("minimax") && apiKey
       ? (input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, headers: { ...(init?.headers ?? {}), authorization: `Bearer ${apiKey}` } })
       : fetch;
     artifacts = await downloadMediaOutputs(task, outputDirectory, { filenamePrefix: executorId, fetchImpl: mediaDownloadFetch, ...(tempDirectory ? { tempDirectory } : {}) });
     if (!artifacts.length && executorId !== "voice_clone") throw new Error("media_outputs_not_downloadable");
   } catch (error) {
-    emit(command, { event: "tool_event", tool: `media:${executorId}`, phase: "failed", message: JSON.stringify({ provider, model: modelId, executorId, nodeKey, providerTaskId: task.providerTaskId, idempotencyKey, status: "download_failed", stage: "result_download", error: error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180) }), runId });
-    throw error;
+    const failure = cheapBuddy ? managedProviderFailure(error, "download") : error;
+    emit(command, { event: "tool_event", tool: `media:${executorId}`, phase: "failed", message: JSON.stringify({ provider, model: modelId, executorId, nodeKey, providerTaskId: task.providerTaskId, idempotencyKey, status: "download_failed", stage: "result_download", error: safeHostError(failure, 180) }), runId });
+    throw failure;
   }
   const persistedArtifacts = artifacts.map((artifact) => ({
     ...artifact,
@@ -1748,17 +1885,26 @@ async function resumeMediaRun(command: HostCommand) {
   const config = command.payload?.config && typeof command.payload.config === "object" ? command.payload.config as Record<string, unknown> : {};
   if (!providerTaskId) return fail(command, "media_resume_task_missing", "providerTaskId is required");
   respond(command, { runId, resumed: true, providerTaskId });
+  const media = readProvider(command.payload?.media);
+  const text = readProvider(command.payload?.provider);
+  const profiles = readProviderMap(command.payload?.providers);
+  const selected = typeof config.provider === "string" ? config.provider : media?.id ?? text?.id ?? "";
+  const generation = managedProviderRuntime.capture(profiles[selected] ?? media ?? text);
+  const controller = new AbortController();
+  let releaseManagedRun: (() => void) | undefined;
   try {
+    releaseManagedRun = managedProviderRuntime.trackCancellation(() => controller.abort(), generation);
     const workspacePath = workspacePathFromPayload(command.payload?.workspacePath) || process.cwd();
-    const result = await runMediaCapability(command, runId, nodeKey, executorId, config, {}, workspacePath, undefined, providerTaskId);
+    const result = await runMediaCapability(command, runId, nodeKey, executorId, config, {}, workspacePath, controller.signal, providerTaskId);
+    managedProviderRuntime.assertCurrent(generation);
     for (const artifact of Array.isArray(result.artifacts) ? result.artifacts : []) emit(command, { event: "tool_event", tool: `artifact:${nodeKey}`, phase: "completed", message: JSON.stringify(artifact), runId });
     emit(command, { event: "done", runId });
   } catch (error) {
     emit(command, { event: "runtime_error", code: "media_resume_failed", message: error instanceof Error ? error.message : String(error), retryable: true, runId });
-  }
+  } finally { releaseManagedRun?.(); }
 }
 
-function emit(command: HostCommand, event: OpenCodeRuntimeEvent) { writeRpcResponse(process.stdout, { version: 1, requestId: command.requestId, ok: true, data: { event } }); }
+function emit(command: HostCommand, event: OpenCodeRuntimeEvent) { writeRpcResponse(process.stdout, { version: 1, requestId: command.requestId, ok: true, data: { event: managedProviderRuntime.redact(event) } }); }
 
 async function stopRun(command: HostCommand, emergency: boolean) {
   const runId = String(command.runId ?? command.payload?.runId ?? "");
@@ -1792,55 +1938,61 @@ const hostReader = createRpcReader(process.stdin, (raw) => {
   const command = raw as unknown as HostCommand;
   if (!command.requestId || !command.type) return;
   if (command.type === "health") return respond(command, { status: "ok", capabilities: ["opencode", "opencode-serve", "persistent-sessions", "streaming", "artifacts", "full-access"] });
+  if (command.type === "cheapbuddy.account") {
+    const action = command.payload?.action;
+    if (typeof action !== "string" || !["status", "login", "verify", "refresh", "logout"].includes(action)) return fail(command, "cheapbuddy_action_invalid", "Unknown CheapBuddy account action");
+    return void (async () => {
+      let accountChange: number | undefined;
+      try {
+        if (action === "logout" || action === "login") {
+          const invalidation = managedProviderRuntime.invalidate();
+          for (const [id, session] of sessions) {
+            if (!session.provider?.credentialRef) continue;
+            sessions.delete(id);
+          }
+          for (const key of managedServeClientKeys) serveClients.delete(key);
+          managedServeClientKeys.clear();
+          accountChange = await invalidation;
+          managedProviderRuntime.assertAccountChange(accountChange);
+        }
+        const state = await cheapBuddyAccounts().handle(action as CheapBuddyAccountAction, command.payload);
+        if (accountChange !== undefined) managedProviderRuntime.assertAccountChange(accountChange);
+        respond(command, { state });
+      } catch (error) { fail(command, "cheapbuddy_account_failed", error instanceof Error ? error.message : "CheapBuddy account request failed"); }
+      finally { if (accountChange !== undefined) managedProviderRuntime.finishAccountChange(accountChange); }
+    })();
+  }
   if (command.type === "provider.models") {
     const provider = readProvider(command.payload?.provider);
     if (!provider) return fail(command, "invalid_provider", "provider configuration is required");
     const capability = typeof command.payload?.capability === "string" && ["text", "image", "video", "audio"].includes(command.payload.capability)
       ? command.payload.capability as "text" | "image" | "video" | "audio"
       : undefined;
-    return void discoverProviderModels({ ...provider, ...(capability ? { capability } : {}) })
-      .then(result => respond(command, result))
+    const generation = managedProviderRuntime.capture(provider);
+    return void resolveHostProvider(provider).then(resolved => discoverProviderModels({ ...resolved, ...(capability ? { capability } : {}) }))
+      .then(result => { managedProviderRuntime.assertCurrent(generation); respond(command, result); })
       .catch(error => fail(command, "provider_model_list_failed", error instanceof Error ? error.message : String(error)));
   }
   if (command.type === "attachment.extract") return void extractAttachment(command);
-  if (command.type === "workflow.ai") {
-    const runId = typeof command.runId === "string" ? command.runId : typeof command.payload?.runId === "string" ? command.payload.runId : randomUUID();
-    const prompt = typeof command.payload?.prompt === "string" ? command.payload.prompt.trim() : "";
-    if (!prompt) return fail(command, "invalid_prompt", "prompt is required");
-    if (consumePendingCancellation(runId)) {
-      respond(command, { runId, cancelled: true });
-      return emit(command, { event: "runtime_error", code: "workflow_ai_aborted", message: "Workflow AI request cancelled before it started.", retryable: false, runId });
-    }
-    const controller = new AbortController();
-    sessionRunControllers.set(runId, controller);
-    respond(command, { runId, transport: "direct-provider", tools: [] });
-    return void runDirectTextCapability(
-      { ...command, runId },
-      "workflow_ai",
-      { prompt, ...(typeof command.payload?.model === "string" ? { model: command.payload.model } : {}) },
-      {},
-      controller.signal,
-    ).then(() => emit(command, { event: "done", runId })).catch((error) => {
-      emit(command, { event: "runtime_error", code: controller.signal.aborted ? "workflow_ai_aborted" : "workflow_ai_request_failed", message: error instanceof Error ? error.message : String(error), retryable: !controller.signal.aborted, runId });
-    }).finally(() => {
-      if (sessionRunControllers.get(runId) === controller) sessionRunControllers.delete(runId);
-    });
-  }
   if (command.type === "session.create") {
     const conversationId = typeof command.payload?.conversationId === "string" ? command.payload.conversationId : "";
     const workspacePath = workspacePathFromPayload(command.payload?.workspacePath);
     if (!conversationId || !workspacePath) return fail(command, "invalid_session", "conversationId and workspacePath are required");
     const provider = readProvider(command.payload?.provider);
+    const generation = managedProviderRuntime.capture(provider);
     return void (async () => {
       try {
+        const configured = await resolveHostProvider(provider);
         const agentId = selectedAgentId(command.payload?.agentId);
         const allowArtifacts = command.payload?.allowArtifacts === true;
         const configDirectory = await prepareSkillWorkspace(workspacePath);
         const agentName = await preparedAgentName(configDirectory, agentId);
-        const environment = await createOpenCodeEnvironment(configDirectory, provider, typeof command.payload?.model === "string" ? command.payload.model : provider?.model, agentId);
-        const client = serveClientFor(workspacePath, environment);
-        const { sessionId, recovered } = await client.createOrResumeSession(workspacePath, typeof command.payload?.sessionId === "string" ? command.payload.sessionId : undefined, provider ?? {}, environment);
-        sessions.set(sessionId, { conversationId, workspacePath, sessionId, provider, agentName, allowArtifacts, client });
+        const environment = withOpenCodeWorkspaceGitBoundary(await createOpenCodeEnvironment(configDirectory, configured, typeof command.payload?.model === "string" ? command.payload.model : configured?.model, agentId), workspacePath);
+        managedProviderRuntime.assertCurrent(generation);
+        const client = serveClientFor(workspacePath, environment, generation);
+        const { sessionId, recovered } = await client.createOrResumeSession(workspacePath, typeof command.payload?.sessionId === "string" ? command.payload.sessionId : undefined, openCodeProvider(configured), environment);
+        managedProviderRuntime.assertCurrent(generation);
+        sessions.set(sessionId, { conversationId, workspacePath, sessionId, provider: sessionProvider(configured), agentName, allowArtifacts, client });
         respond(command, { conversationId, sessionId, workspacePath, transport: "opencode-serve", fullAccess: true, permissionMode: "full", allowArtifacts, recovered });
       } catch (error) { fail(command, "opencode_session_unavailable", error instanceof Error ? error.message : String(error)); }
     })();
@@ -1851,17 +2003,21 @@ const hostReader = createRpcReader(process.stdin, (raw) => {
     const requestedSessionId = typeof command.payload?.sessionId === "string" ? command.payload.sessionId : "";
     if (!conversationId || !workspacePath || !requestedSessionId) return fail(command, "invalid_session", "conversationId, workspacePath and sessionId are required");
     const provider = readProvider(command.payload?.provider);
+    const generation = managedProviderRuntime.capture(provider);
     return void (async () => {
       try {
+        const configured = await resolveHostProvider(provider);
         const agentId = selectedAgentId(command.payload?.agentId);
         const allowArtifacts = command.payload?.allowArtifacts === true;
         const configDirectory = await prepareSkillWorkspace(workspacePath);
         const agentName = await preparedAgentName(configDirectory, agentId);
-        const environment = await createOpenCodeEnvironment(configDirectory, provider, typeof command.payload?.model === "string" ? command.payload.model : provider?.model, agentId);
-        const client = serveClientFor(workspacePath, environment);
-        const attached = await client.attachSession(workspacePath, requestedSessionId, provider ?? {}, environment);
+        const environment = withOpenCodeWorkspaceGitBoundary(await createOpenCodeEnvironment(configDirectory, configured, typeof command.payload?.model === "string" ? command.payload.model : configured?.model, agentId), workspacePath);
+        managedProviderRuntime.assertCurrent(generation);
+        const client = serveClientFor(workspacePath, environment, generation);
+        const attached = await client.attachSession(workspacePath, requestedSessionId, openCodeProvider(configured), environment);
+        managedProviderRuntime.assertCurrent(generation);
         if (!attached) return respond(command, { conversationId, sessionId: requestedSessionId, attached: false });
-        sessions.set(requestedSessionId, { conversationId, workspacePath, sessionId: requestedSessionId, provider, agentName, allowArtifacts, client });
+        sessions.set(requestedSessionId, { conversationId, workspacePath, sessionId: requestedSessionId, provider: sessionProvider(configured), agentName, allowArtifacts, client });
         respond(command, { conversationId, sessionId: requestedSessionId, attached: true });
       } catch (error) { fail(command, "opencode_session_attach_failed", error instanceof Error ? error.message : String(error)); }
     })();
@@ -1880,7 +2036,7 @@ const hostReader = createRpcReader(process.stdin, (raw) => {
     }
     const controller = new AbortController();
     sessionRunControllers.set(runId, controller);
-    return void runOpenCode({ ...command, runId }, session, { signal: controller.signal }).finally(() => {
+    return void runOpenCode({ ...command, runId }, session, { signal: controller.signal }).catch(error => fail(command, "opencode_prompt_failed", error instanceof Error ? error.message : String(error))).finally(() => {
       if (sessionRunControllers.get(runId) === controller) sessionRunControllers.delete(runId);
     });
   }
@@ -1915,7 +2071,7 @@ const hostReader = createRpcReader(process.stdin, (raw) => {
       const retryCommand = { ...command, type: "session.prompt" as const, sessionId: retrySessionId, runId: command.runId ?? randomUUID() };
       const controller = new AbortController();
       sessionRunControllers.set(retryCommand.runId!, controller);
-      return void runOpenCode(retryCommand, sessions.get(retrySessionId), { signal: controller.signal }).finally(() => {
+      return void runOpenCode(retryCommand, sessions.get(retrySessionId), { signal: controller.signal }).catch(error => fail(command, "opencode_prompt_failed", error instanceof Error ? error.message : String(error))).finally(() => {
         if (sessionRunControllers.get(retryCommand.runId!) === controller) sessionRunControllers.delete(retryCommand.runId!);
       });
     }
@@ -1925,7 +2081,7 @@ const hostReader = createRpcReader(process.stdin, (raw) => {
   if (command.type === "media.resume") return void resumeMediaRun(command);
   if (command.type === "media.voices") return void listMediaVoices(command);
   if (command.type === "workflow.run") return void runWorkflow(command);
-  if (command.type === "chat.run") return void runOpenCode(command);
+  if (command.type === "chat.run") return void runOpenCode(command).catch(error => fail(command, "opencode_prompt_failed", error instanceof Error ? error.message : String(error)));
   if (command.type === "knowledge.index") {
     const vaultPath = typeof command.payload?.vaultPath === "string" ? command.payload.vaultPath : "";
     const indexPath = typeof command.payload?.indexPath === "string" ? command.payload.indexPath : "";
@@ -1944,5 +2100,5 @@ const hostReader = createRpcReader(process.stdin, (raw) => {
   }
   if (command.type === "run.cancel" || command.type === "run.emergency_stop") return void stopRun(command, command.type === "run.emergency_stop" || command.payload?.emergency === true);
   fail(command, "unknown_method", `Unsupported method: ${command.type}`);
-}, (error) => process.stderr.write(`[workflow-host] ${error.message}\n`));
+}, (error) => process.stderr.write(`[workflow-host] ${managedProviderRuntime.redactText(error.message)}\n`));
 hostReader.once("close", () => { void shutdownHost(); });

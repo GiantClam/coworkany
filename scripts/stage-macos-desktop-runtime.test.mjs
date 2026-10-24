@@ -6,6 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { missingMacOSRuntimeInputs, resolveMacOSRuntimeInputs } from "./resolve-macos-runtime-inputs.mjs";
+import { shouldBundlePythonRuntimeItem } from "./desktop-python-runtime.mjs";
 
 async function executable(path) {
   await writeFile(path, "binary");
@@ -73,4 +74,13 @@ test("reports all missing inputs with their environment variable names", () => {
     "ffmpeg=COWORKANY_MAC_STATIC_FFMPEG_PATH or COWORKANY_MAC_FFMPEG_PATH",
     "ffprobe=COWORKANY_MAC_STATIC_FFPROBE_PATH or COWORKANY_MAC_FFPROBE_PATH",
   ]);
+});
+
+test("portable Python staging omits developer bytecode and editable path hooks", () => {
+  assert.equal(shouldBundlePythonRuntimeItem("/runtime/python/__pycache__/module.pyc"), false);
+  assert.equal(shouldBundlePythonRuntimeItem("/runtime/python/module.pyc"), false);
+  assert.equal(shouldBundlePythonRuntimeItem("/runtime/python/lib/site-packages/_editable_impl_claw_bench.pth"), false);
+  assert.equal(shouldBundlePythonRuntimeItem("/runtime/python/lib/site-packages/__editable__.sample-1.0.pth"), false);
+  assert.equal(shouldBundlePythonRuntimeItem("/runtime/python/lib/site-packages/typing_extensions.pth"), true);
+  assert.equal(shouldBundlePythonRuntimeItem("/runtime/python/lib/site-packages/module.py"), true);
 });

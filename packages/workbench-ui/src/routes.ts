@@ -57,6 +57,7 @@ export const WORKBENCH_HOME_COPY = {
 /** Canonical retained dashboard routes. SaaS and Tauri adapters consume this manifest. */
 export const WORKBENCH_ROUTE_MANIFEST: readonly WorkbenchRoute[] = [
   { path: "/dashboard", label: { zh: "首页", en: "Home" }, description: { zh: "工作台按能力统一组织。顾问负责策略与增长，写作负责多平台内容生产，图片助手负责图片生成与画布精修。", en: "A capability-oriented AI marketing workspace for strategy, writing, image generation, and execution." }, mode: "home", glyph: "⌂" },
+  { path: "/dashboard/office", label: { zh: "虚拟办公室", en: "Virtual Office" }, description: { zh: "查看角色状态、任务繁忙程度和最近成果", en: "Inspect role status, workload, and recent work" }, mode: "home", section: { zh: "工作空间", en: "Workspace" }, glyph: "⌂" },
   // Keep the visible copy identical to the online AI-entry surface. OpenCode
   // remains the desktop transport, but it is an implementation detail rather
   // than a different user-facing route description.
@@ -76,6 +77,7 @@ export const WORKBENCH_ROUTE_MANIFEST: readonly WorkbenchRoute[] = [
   { path: "/dashboard/agent-platform", label: { zh: "智能体中心", en: "Agent Center" }, description: { zh: "搜索已安装的本地智能体与 Skills，并启动本地对话", en: "Search installed local agents and Skills, then start a local conversation" }, mode: "library", section: { zh: "平台中台", en: "Platform" }, glyph: "◈" },
   { path: "/dashboard/workflows", label: { zh: "工作流", en: "Workflows" }, description: { zh: "编排内容、媒体、PPT 与 Obsidian 节点", en: "Compose content, media, PPT, and Obsidian nodes" }, mode: "workflow", section: { zh: "平台中台", en: "Platform" }, glyph: "⌘" },
   { path: "/dashboard/tasks", label: { zh: "任务中心", en: "Task Center" }, description: { zh: "查看本地任务、运行事件和恢复状态", en: "Inspect local runs, events, and recovery state" }, mode: "library", section: { zh: "资源入口", en: "Resources" }, glyph: "≡" },
+  { path: "/dashboard/usage", label: { zh: "用量统计", en: "Usage analytics" }, description: { zh: "查看模型、工具调用与 Token 消耗", en: "Inspect model, tool, and token usage" }, mode: "library", section: { zh: "资源入口", en: "Resources" }, glyph: "◫" },
   { path: "/dashboard/assets", label: { zh: "资产库", en: "Asset Library" }, description: { zh: "查看项目目录中的本地产物", en: "Browse local project artifacts" }, mode: "library", section: { zh: "资源入口", en: "Resources" }, glyph: "▱" },
   { path: "/dashboard/knowledge-base", label: { zh: "知识库", en: "Knowledge Base" }, description: { zh: "使用 Obsidian Vault 建立本地知识检索", en: "Search a local Obsidian Vault" }, mode: "library", section: { zh: "资源入口", en: "Resources" }, glyph: "⌑" },
   { path: "/dashboard/video", label: { zh: "视频生成 Agent", en: "Video generation agent" }, description: { zh: "生成视频、数字人、音乐、语音与通用音频", en: "Generate video, digital human, music, voice, and audio" }, mode: "workflow", glyph: "▶", placement: "hidden" },

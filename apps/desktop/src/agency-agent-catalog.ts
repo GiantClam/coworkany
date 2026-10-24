@@ -1,4 +1,4 @@
-import type { WorkbenchAgentDirectoryCard, WorkbenchAgentDirectoryGroup } from "@coworkany/workbench-ui";
+import type { WorkbenchAgentDirectoryCard, WorkbenchAgentDirectoryGroup } from "@coworkany/workbench-ui/desktop";
 import { DESKTOP_AGENCY_AGENT_CATALOG } from "./generated-agency-agent-catalog";
 
 const categoryLabels: Record<string, { zh: string; en: string }> = {

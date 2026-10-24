@@ -140,13 +140,16 @@ function capabilityValues(value: Record<string, unknown>): readonly string[] {
 
 function modelSupportsCapability(item: unknown, provider: ProviderModelDiscoveryInput, endpoint: string): boolean {
   const capability = provider.capability;
-  if (!capability || capability === "text") return true;
-  const expected = DASHSCOPE_CAPABILITY[capability];
+  if (!capability) return true;
   const declared = item && typeof item === "object" ? capabilityValues(item as Record<string, unknown>) : [];
   if (declared.length) {
+    if (capability === "text") return declared.some((value) => ["TG", "TEXT", "TEXT_GENERATION", "CHAT", "CHAT_COMPLETIONS"].includes(value));
     if (capability === "audio") return declared.some((value) => ["TTS", "ASR", "AUDIO", "MUSIC", "REALTIME-TEXT-TO-SPEECH", "REALTIME-ASR"].includes(value));
-    return declared.includes(expected);
+    if (capability === "image") return declared.some((value) => ["IG", "IMAGE", "IMAGE_GENERATION", "TEXT_TO_IMAGE", "IMAGE_EDIT", "VARIATION"].includes(value));
+    return declared.some((value) => ["VG", "VIDEO", "VIDEO_GENERATION", "TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "REFERENCE_TO_VIDEO"].includes(value));
   }
+  if (capability === "text") return true;
+  const expected = DASHSCOPE_CAPABILITY[capability];
   // PPTOKEN exposes OpenAI-compatible model records without modality metadata.
   // Its image catalog uses the stable gpt-image-* naming convention, so keep
   // those models discoverable without allowing ordinary text models through.
@@ -192,7 +195,7 @@ export function normalizeProviderModelResponse(value: unknown, provider: Pick<De
   return models;
 }
 
-function normalizeProviderModelsForCapability(value: unknown, provider: ProviderModelDiscoveryInput, endpoint: string): readonly string[] {
+export function normalizeProviderModelsForCapability(value: unknown, provider: ProviderModelDiscoveryInput, endpoint: string): readonly string[] {
   const models: string[] = [];
   for (const item of modelItems(value)) {
     if (!modelSupportsCapability(item, provider, endpoint)) continue;

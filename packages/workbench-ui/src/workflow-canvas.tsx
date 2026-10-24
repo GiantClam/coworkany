@@ -24,6 +24,9 @@ import {
 } from "@coworkany/workflow-core";
 import { Canvas, Connection, Controls, Edge, Node, Panel, Toolbar } from "./ai-elements/index";
 import { getWorkbenchTaskStatusLabel, normalizeWorkbenchTaskStatus } from "./task-status";
+import { WORKFLOW_PALETTE_DRAG_EVENT, WORKFLOW_PALETTE_DROP_EVENT } from "./workflow-canvas-events";
+
+export { WORKFLOW_PALETTE_DRAG_EVENT, WORKFLOW_PALETTE_DROP_EVENT } from "./workflow-canvas-events";
 
 export type WorkflowCanvasNode = Omit<WorkflowDefinitionNodeV2, "type" | "nodeVersion"> & {
   type: WorkflowNodeType | string;
@@ -38,8 +41,6 @@ export type WorkflowCanvasExecutionSnapshot = {
 };
 
 /** Pointer-event bridge used by the desktop node palette. HTML5 drag events are unreliable in native WebViews. */
-export const WORKFLOW_PALETTE_DRAG_EVENT = "coworkany:workflow-palette-drag-start";
-export const WORKFLOW_PALETTE_DROP_EVENT = "coworkany:workflow-palette-drop";
 type WorkflowPaletteDragDetail = { type: string; pointerId: number; startClientX?: number; startClientY?: number };
 export type WorkflowCanvasProps = {
   className?: string;
@@ -882,6 +883,7 @@ export function WorkflowCanvas({
                     {!fixedNode && onDeleteNode ? <button type="button" data-node-no-drag="true" onClick={(event) => { event.stopPropagation(); onDeleteNode(node.nodeKey); }} aria-label={locale === "zh" ? "删除节点" : "Delete node"}><Trash2 size={13} /></button> : null}
                   </div>
                   {execution ? <span className="shared-workflow-status" style={{ background: tone[1], color: tone[2] }}><i style={{ background: tone[2] }} /><span>{statusLabel(locale, execution.status)}</span></span> : null}
+                  {node.config.needsConfig === true ? <span className="shared-workflow-config-warning" role="status" title={locale === "zh" ? "此节点保留在工作流中；运行前需要配置 Provider 和模型。" : "This node is preserved; configure a Provider and model before running."}>{locale === "zh" ? "需要配置" : "Needs setup"}</span> : null}
                 </header>
                 {(inputPorts.length || outputPorts.length) ? <div className="shared-workflow-node-port-summary" title={`${inputPorts.map((port) => port.id).join(", ")} → ${outputPorts.map((port) => port.id).join(", ")}`}><span>{inputPorts.length ? `${locale === "zh" ? "输入" : "In"} ${inputPorts.map((port) => port.valueKind).join(" · ")}` : locale === "zh" ? "无输入" : "No input"}</span><span>{outputPorts.length ? `${locale === "zh" ? "输出" : "Out"} ${outputPorts.map((port) => port.valueKind).join(" · ")}` : locale === "zh" ? "无输出" : "No output"}</span></div> : null}
                 <div className="shared-workflow-node-body">

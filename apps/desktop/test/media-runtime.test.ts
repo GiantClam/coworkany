@@ -152,7 +152,7 @@ test("desktop video capabilities select shared MiniMax, Bailian and RunningHub c
   assert.match(host, /imageTransport: pptokenImageProvider \? "curl"/);
   assert.match(host, /stage: "provider_request"/);
   assert.match(host, /stage: "result_download"/);
-  assert.match(host, /const mediaDownloadFetch = providerKind\.includes\("minimax"\) && apiKey/);
+  assert.match(host, /const mediaDownloadFetch = cheapBuddy && apiKey[\s\S]*?createCheapBuddyMediaFetch\(baseUrl, apiKey, fetch\)[\s\S]*?providerKind\.includes\("minimax"\) && apiKey/);
   assert.match(host, /join\(dirname\(process\.execPath\), "\.\.", "media", executableName\)/);
   assert.match(host, /fontsdir=/);
   assert.match(host, /inputs\.coverImage/);

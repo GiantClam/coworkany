@@ -1,0 +1,15 @@
+{
+  "name": "@coworkany/website",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 3101",
+    "build": "node scripts/prepare-assets.mjs && next build && node scripts/verify-export.mjs",
+    "lint": "eslint app components worker scripts *.mjs --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test worker/*.test.ts",
+    "test:smoke": "node scripts/smoke.mjs",
+    "preview": "wrangler dev --port 8788",
+    "deploy": "pnpm build && wrangler deploy"
+  }
+}

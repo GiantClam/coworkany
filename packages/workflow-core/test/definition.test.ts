@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { canonicalizeWorkflowDefinition, canonicalizeWorkflowDefinitionJson, compileWorkflowPlan, hashWorkflowDefinition, migrateLegacyWorkflowDefinition, migrateWorkflowDefinitionToCurrent, parseWorkflowDefinitionEnvelope, validateWorkflowDefinition, validateWorkflowPortDefinition, WorkflowDefinitionValidationError } from "../src";
+import { canonicalizeWorkflowDefinition, canonicalizeWorkflowDefinitionJson, compileWorkflowPlan, hashWorkflowDefinition, migrateLegacyWorkflowDefinition, migrateWorkflowDefinitionToCurrent, parseWorkflowDefinitionEnvelope, validateWorkflowDefinition, validateWorkflowPortDefinition, WorkflowDefinitionValidationError, type WorkflowDefinitionEnvelope } from "../src";
 
 test("migrates legacy nodes and creates a stable definition hash", () => {
   const current = migrateLegacyWorkflowDefinition({ nodes: [{ nodeKey: "a", type: "text_input", config: { text: "hello" } }, { nodeKey: "b", type: "writer" }], edges: [{ sourceNodeKey: "a", targetNodeKey: "b", inputName: "text" }] });
@@ -79,6 +79,37 @@ test("rejects cycles before workflow execution", () => {
 test("compiles a deterministic dependency order", () => {
   const definition = migrateLegacyWorkflowDefinition({ nodes: [{ nodeKey: "b", type: "writer" }, { nodeKey: "a", type: "text_input" }, { nodeKey: "c", type: "output" }], edges: [{ sourceNodeKey: "a", targetNodeKey: "b", inputName: "text" }, { sourceNodeKey: "b", targetNodeKey: "c", inputName: "text" }] });
   assert.deepEqual(compileWorkflowPlan(definition).steps.map((step) => step.nodeKey), ["a", "b", "c"]);
+});
+
+test("compiles foreach and collect as one controlled iteration step", () => {
+  const base: WorkflowDefinitionEnvelope = {
+    schemaVersion: 2, revision: 1, definitionHash: "",
+    nodes: [
+      { nodeKey: "input", type: "text_input", nodeVersion: 1, title: "Input", positionX: 0, positionY: 0, config: {} },
+      { nodeKey: "split", type: "text_split", nodeVersion: 1, title: "Split", positionX: 1, positionY: 0, config: {} },
+      { nodeKey: "foreach", type: "foreach", nodeVersion: 1, title: "For Each", positionX: 2, positionY: 0, config: { inputPortId: "text", collectNodeKey: "collect", maxIterations: 8 } },
+      { nodeKey: "writer", type: "writer", nodeVersion: 1, title: "Writer", positionX: 3, positionY: 0, config: {} },
+      { nodeKey: "collect", type: "collect", nodeVersion: 1, title: "Collect", positionX: 4, positionY: 0, config: {} },
+      { nodeKey: "output", type: "output", nodeVersion: 1, title: "Output", positionX: 5, positionY: 0, config: {} },
+    ],
+    edges: [
+      { edgeKey: "input-split", sourceNodeKey: "input", sourcePortId: "text", targetNodeKey: "split", targetPortId: "text" },
+      { edgeKey: "split-foreach", sourceNodeKey: "split", sourcePortId: "texts", targetNodeKey: "foreach", targetPortId: "items.text" },
+      { edgeKey: "foreach-writer", sourceNodeKey: "foreach", sourcePortId: "item.text", targetNodeKey: "writer", targetPortId: "text" },
+      { edgeKey: "writer-collect", sourceNodeKey: "writer", sourcePortId: "text", targetNodeKey: "collect", targetPortId: "items.text" },
+      { edgeKey: "collect-output", sourceNodeKey: "collect", sourcePortId: "text", targetNodeKey: "output", targetPortId: "text" },
+    ],
+  };
+  const definition = { ...base, definitionHash: hashWorkflowDefinition(base) };
+  const plan = compileWorkflowPlan(definition);
+  assert.deepEqual(plan.steps.map((step) => step.kind), ["node", "node", "foreach", "node"]);
+  const loop = plan.steps.find((step) => step.kind === "foreach");
+  assert.equal(loop?.kind, "foreach");
+  if (loop?.kind === "foreach") {
+    assert.equal(loop.collectNodeKey, "collect");
+    assert.deepEqual(loop.bodyNodeKeys, ["writer"]);
+    assert.equal(loop.maxIterations, 8);
+  }
 });
 
 test("canonical hash ignores revision and nested config key ordering", () => {

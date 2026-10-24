@@ -1,5 +1,7 @@
 import type { ChatTransport, UIMessage, UIMessageChunk, UIMessagePart } from "ai";
-import type { WorkbenchArtifact, WorkbenchMessage, WorkbenchMessagePart, WorkbenchRunEvent, WorkbenchUsage } from "./index";
+import { advanceAssistantTurn } from "./assistant-turn";
+import type { WorkbenchArtifact, WorkbenchMessage, WorkbenchMessagePart, WorkbenchPreviewData, WorkbenchRunEvent, WorkbenchUsage } from "./index";
+import type { RunMetrics } from "./run-metrics";
 
 export type DesktopRunStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled";
 
@@ -16,6 +18,10 @@ export type DesktopMessageMetadata = {
   readonly modelLocked?: boolean;
   readonly branchOf?: string;
   readonly runStatus?: DesktopRunStatus;
+  readonly partOccurrences?: Readonly<Record<string, { readonly sequence: number; readonly createdAt?: string }>>;
+  readonly executionPrompt?: string;
+  readonly skillId?: string;
+  readonly allowArtifacts?: boolean;
 };
 
 export type DesktopTaskData = {
@@ -43,6 +49,7 @@ export type DesktopMediaData = {
 };
 
 export type DesktopArtifactData = WorkbenchArtifact;
+export type DesktopPreviewData = WorkbenchPreviewData;
 
 /** Associates generated media with the Writer article it belongs to. */
 export type DesktopWriterAssetData = {
@@ -55,23 +62,23 @@ export type DesktopDataParts = {
   workflow: DesktopWorkflowData;
   media: DesktopMediaData;
   artifact: DesktopArtifactData;
+  preview: DesktopPreviewData;
   writerAsset: DesktopWriterAssetData;
   status: { readonly status: DesktopRunStatus; readonly message?: string };
   attachment: { readonly attachmentId: string; readonly name: string; readonly mediaType: string; readonly uri?: string; readonly status: "queued" | "uploading" | "ready" | "failed" };
   warning: { readonly code: string; readonly message: string };
   usage: WorkbenchUsage;
+  runMetrics: RunMetrics;
   report: { readonly title: string; readonly body?: string; readonly artifactId?: string };
 };
 
-export type DesktopTools = {};
+export type DesktopTools = Record<string, never>;
 export type DesktopUIMessage = UIMessage<DesktopMessageMetadata, DesktopDataParts, DesktopTools>;
 export type DesktopUIMessagePart = UIMessagePart<DesktopDataParts, DesktopTools>;
 export type DesktopUIMessageChunk = UIMessageChunk<DesktopMessageMetadata, DesktopDataParts>;
 
 const PART_ID_KEY = "partId";
 const SEQUENCE_KEY = "sequence";
-const TERMINAL_STATUS = new Set<DesktopRunStatus>(["completed", "failed", "cancelled"]);
-
 function now() {
   return new Date().toISOString();
 }
@@ -119,7 +126,7 @@ function eventPart(event: WorkbenchRunEvent): DesktopUIMessagePart | undefined {
     case "tool":
       return dataPart("status", `tool:${event.tool}`, { status: statusFromWorkbench(event.phase), message: event.message });
     case "usage":
-      return dataPart("usage", `usage:${event.usage.runId}`, event.usage);
+      return dataPart("usage", `usage:${event.usage.usageId ?? event.sequence ?? event.usage.runId}`, event.usage);
     case "artifact":
       return dataPart("artifact", `artifact:${event.artifact.id}`, event.artifact);
     case "status":
@@ -130,8 +137,14 @@ function eventPart(event: WorkbenchRunEvent): DesktopUIMessagePart | undefined {
         : { type: "source-document", sourceId: event.source.id, mediaType: "text/plain", title: event.source.title };
     case "media":
       return dataPart("media", `media:${event.media.artifactId}`, event.media);
+    case "preview":
+      return dataPart("preview", previewPartId(event.preview), event.preview);
   }
   void createdAt;
+}
+
+function previewPartId(preview: WorkbenchPreviewData) {
+  return `preview:${preview.previewSessionId ?? preview.artifactId ?? preview.relativePath ?? preview.title}`;
 }
 
 function partIdentity(part: DesktopUIMessagePart): string | undefined {
@@ -144,10 +157,6 @@ function partIdentity(part: DesktopUIMessagePart): string | undefined {
 function partSequence(part: DesktopUIMessagePart) {
   if ((part.type === "text" || part.type === "reasoning") && part.providerMetadata?.coworkany?.[SEQUENCE_KEY]) return Number(part.providerMetadata.coworkany[SEQUENCE_KEY]);
   return undefined;
-}
-
-function isTerminalTool(part: DesktopUIMessagePart) {
-  return part.type === "dynamic-tool" && (part.state === "output-available" || part.state === "output-error" || part.state === "output-denied");
 }
 
 export function mergeStreamingText(previous: string, incoming: string) {
@@ -167,48 +176,19 @@ export function mergeStreamingText(previous: string, incoming: string) {
   return isFullSnapshot ? incoming : `${previous}${incoming}`;
 }
 
-function mergePart(parts: readonly DesktopUIMessagePart[], incoming: DesktopUIMessagePart): DesktopUIMessagePart[] {
-  const identity = partIdentity(incoming);
-  const index = identity === undefined ? -1 : parts.findIndex((part) => partIdentity(part) === identity);
-  if (index < 0) return [...parts, incoming];
-  const current = parts[index];
-  if (isTerminalTool(current) && incoming.type === "dynamic-tool" && !isTerminalTool(incoming)) return [...parts];
-  if (incoming.type === "text" && current.type === "text") {
-    const nextText = mergeStreamingText(current.text, incoming.text);
-    const next = { ...current, ...incoming, text: nextText };
-    return parts.map((part, partIndex) => partIndex === index ? next : part);
-  }
-  if (incoming.type === "reasoning" && current.type === "reasoning") {
-    const nextText = mergeStreamingText(current.text, incoming.text);
-    const next = { ...current, ...incoming, text: nextText };
-    return parts.map((part, partIndex) => partIndex === index ? next : part);
-  }
-  return parts.map((part, partIndex) => partIndex === index ? { ...part, ...incoming } as DesktopUIMessagePart : part);
-}
-
 /** Apply one host event to a UIMessage part list without introducing a second UI protocol. */
 export function applyDesktopUIMessageRunEventToParts(parts: readonly DesktopUIMessagePart[], event: WorkbenchRunEvent): DesktopUIMessagePart[] {
   if (event.type === "text" || event.type === "reasoning") {
-    const incoming = eventPart(event);
-    if (incoming && (incoming.type === "text" || incoming.type === "reasoning")) {
-      const identity = partIdentity(incoming);
-      const index = identity === undefined ? -1 : parts.findIndex((part) => partIdentity(part) === identity);
-      if (index < 0) return [...parts, incoming];
-      const current = parts[index];
-      if (current.type === incoming.type) {
-        const next = { ...current, ...incoming, text: `${current.text}${incoming.text}` };
-        return parts.map((part, partIndex) => partIndex === index ? next : part);
-      }
+    const current = parts.at(-1);
+    if (current?.type === event.type && current.state === "streaming") {
+      const next = { ...current, text: `${current.text}${event.delta}` };
+      return parts.map((part, partIndex) => partIndex === parts.length - 1 ? next : part);
     }
   }
   const lastSequence = parts.reduce((highest, part) => Math.max(highest, partSequence(part) ?? -1), -1);
   const seed = createDesktopUIMessage({ id: "desktop-run-parts", role: "assistant", conversationId: "" });
-  const updated = applyWorkbenchRunEventToUIMessage({ ...seed, parts: [...parts], metadata: { conversationId: "", createdAt: seed.metadata?.createdAt ?? now(), updatedAt: now(), lastSequence } }, event);
+  const updated = advanceAssistantTurn({ ...seed, parts: [...parts], metadata: { conversationId: "", createdAt: seed.metadata?.createdAt ?? now(), updatedAt: now(), ...(lastSequence < 0 ? {} : { lastSequence }) } }, event);
   return updated.parts;
-}
-
-function sortedParts(parts: readonly DesktopUIMessagePart[]) {
-  return [...parts].sort((left, right) => (partSequence(left) ?? Number.MAX_SAFE_INTEGER) - (partSequence(right) ?? Number.MAX_SAFE_INTEGER));
 }
 
 export function createDesktopUIMessage(input: {
@@ -262,6 +242,7 @@ function workbenchPartToUIMessagePart(part: WorkbenchMessagePart): DesktopUIMess
   if (part.type === "status") return dataPart("status", part.id, { status: statusFromWorkbench(part.status), message: part.message });
   if (part.type === "usage") return dataPart("usage", part.id, part.usage);
   if (part.type === "artifact") return dataPart("artifact", part.id, part.artifact);
+  if (part.type === "preview") return dataPart("preview", part.id, part.preview);
   if (part.type === "source") return part.href ? { type: "source-url", sourceId: part.id, url: part.href, title: part.title } : { type: "source-document", sourceId: part.id, mediaType: "text/plain", title: part.title };
   if (part.type === "report") return dataPart("report", part.id, { title: part.title, body: part.body, artifactId: part.artifact?.id });
   return undefined;
@@ -280,26 +261,7 @@ export function workbenchMessageToDesktopUIMessage(message: WorkbenchMessage): D
 }
 
 export function applyWorkbenchRunEventToUIMessage(message: DesktopUIMessage, event: WorkbenchRunEvent): DesktopUIMessage {
-  const sequence = event.sequence;
-  const previousSequence = message.metadata?.lastSequence;
-  if (sequence !== undefined && previousSequence !== undefined && sequence <= previousSequence) return message;
-  const incoming = eventPart(event);
-  if (!incoming) return message;
-  const parts = sortedParts(mergePart(message.parts, incoming));
-  const status = event.type === "status" ? statusFromWorkbench(event.status) : undefined;
-  const updatedAt = event.createdAt ?? now();
-  return {
-    ...message,
-    parts,
-    metadata: {
-      ...message.metadata,
-      conversationId: message.metadata?.conversationId ?? "",
-      createdAt: message.metadata?.createdAt ?? updatedAt,
-      updatedAt,
-      ...(sequence === undefined ? {} : { lastSequence: Math.max(previousSequence ?? -1, sequence) }),
-      ...(status ? { runStatus: status } : {}),
-    },
-  };
+  return advanceAssistantTurn(message, event);
 }
 
 export function desktopUIMessageText(message: DesktopUIMessage) {
@@ -327,7 +289,8 @@ function normalizeDesktopUIMessagePart(part: unknown): unknown {
   const value = part as { type?: unknown; text?: unknown; thinking?: unknown; state?: unknown };
   if (value.type !== "thinking" && !(value.type === "reasoning" && typeof value.text !== "string" && typeof value.thinking === "string")) return part;
   const text = typeof value.text === "string" ? value.text : typeof value.thinking === "string" ? value.thinking : "";
-  const { thinking: _thinking, ...rest } = value;
+  const rest = { ...value };
+  delete rest.thinking;
   return { ...rest, type: "reasoning", text, state: value.state === "streaming" ? "streaming" : "done" };
 }
 
@@ -355,6 +318,7 @@ export function desktopUIMessageToWorkbenchParts(message: DesktopUIMessage): Wor
     else if (part.type === "source-url") output.push({ id: part.sourceId, type: "source", title: part.title ?? part.url, href: part.url });
     else if (part.type === "source-document") output.push({ id: part.sourceId, type: "source", title: part.title });
     else if (part.type === "data-media") output.push({ id: part.id ?? `media:${index}`, type: "media", media: part.data });
+    else if (part.type === "data-preview") output.push({ id: part.id ?? `preview:${index}`, type: "preview", preview: part.data });
   });
   return output;
 }
@@ -366,6 +330,10 @@ export function workbenchEventToUIMessageChunks(event: WorkbenchRunEvent): Deskt
   if (!part) return [];
   if (part.type === "dynamic-tool") {
     if (part.state === "input-available") return [{ type: "tool-input-available", toolCallId: part.toolCallId, toolName: part.toolName, input: part.input, dynamic: true }];
+    if (part.state === "approval-requested") return [
+      { type: "tool-input-available", toolCallId: part.toolCallId, toolName: part.toolName, input: part.input, dynamic: true },
+      { type: "tool-approval-request", approvalId: part.approval?.id ?? `approval:${part.toolCallId}`, toolCallId: part.toolCallId },
+    ];
     if (part.state === "output-available") return [{ type: "tool-output-available", toolCallId: part.toolCallId, output: part.output, dynamic: true }];
     if (part.state === "output-error") return [{ type: "tool-output-error", toolCallId: part.toolCallId, errorText: part.errorText, dynamic: true }];
   }
@@ -437,28 +405,42 @@ export type DesktopRunTransportAdapter = {
 
 /** Adapts the existing Tauri/OpenCode run lifecycle to the AI SDK ChatTransport stream. */
 export function createDesktopRunTransport(adapter: DesktopRunTransportAdapter) {
-  let transport: DesktopChatTransport;
-  transport = new DesktopChatTransport(async ({ chatId, messages, abortSignal }) => {
+  const transport = new DesktopChatTransport(async ({ chatId, messages, abortSignal }) => {
     const message = messages.at(-1);
     if (!message || message.role !== "user") throw new Error("desktop_transport_requires_user_message");
     const { runId } = await adapter.start({ chatId, message, prompt: desktopUIMessageText(message), abortSignal });
+    const assistantCreatedAt = now();
     let controller: ReadableStreamDefaultController<DesktopUIMessageChunk> | undefined;
+    // `finish` can run synchronously from an already-aborted stream before the
+    // subscription is assigned; keep this mutable closure slot intentional.
+    // eslint-disable-next-line prefer-const
     let dispose: (() => void) | undefined;
     let settled = false;
-    let textOpen = false;
-    let reasoningOpen = false;
+    let openTextId: string | undefined;
+    let openReasoningId: string | undefined;
+    let arrivalSequence = 0;
     let unregisterStop: () => void = () => undefined;
     const buffered: DesktopUIMessageChunk[] = [];
     const closeController = () => {
       if (controller) controller.close();
     };
+    const closeOpenSegments = () => {
+      if (openTextId) {
+        push({ type: "text-end", id: openTextId });
+        openTextId = undefined;
+      }
+      if (openReasoningId) {
+        push({ type: "reasoning-end", id: openReasoningId });
+        openReasoningId = undefined;
+      }
+    };
     const finish = (options: { readonly finishReason?: "stop" | "error" | "other"; readonly abortReason?: string } = {}) => {
       if (settled) return;
       if (options.abortReason) {
+        closeOpenSegments();
         push({ type: "abort", reason: options.abortReason });
       } else {
-        if (textOpen) push({ type: "text-end", id: "text:assistant" });
-        if (reasoningOpen) push({ type: "reasoning-end", id: "reasoning:assistant" });
+        closeOpenSegments();
         push({ type: "finish", finishReason: options.finishReason ?? "stop" });
       }
       settled = true;
@@ -488,21 +470,64 @@ export function createDesktopRunTransport(adapter: DesktopRunTransportAdapter) {
         onAbort();
       },
     });
-    push({ type: "start", messageId: `assistant-${runId}` });
+    push({
+      type: "start",
+      messageId: `assistant-${runId}`,
+      messageMetadata: {
+        conversationId: chatId,
+        runId,
+        createdAt: assistantCreatedAt,
+        updatedAt: assistantCreatedAt,
+        runStatus: "running",
+        ...(message.metadata?.providerId ? { providerId: message.metadata.providerId } : {}),
+        ...(message.metadata?.modelId ? { modelId: message.metadata.modelId } : {}),
+      },
+    });
     dispose = adapter.subscribe(runId, (event) => {
       if (settled) return;
-      if (event.type === "text" && !textOpen) {
-        textOpen = true;
-        push({ type: "text-start", id: "text:assistant" });
+      const sequence = event.sequence ?? arrivalSequence + 1;
+      arrivalSequence = Math.max(arrivalSequence, sequence);
+      const normalized = { ...event, sequence, createdAt: event.createdAt ?? now() } as WorkbenchRunEvent;
+      if (normalized.type === "text") {
+        if (openReasoningId) {
+          push({ type: "reasoning-end", id: openReasoningId });
+          openReasoningId = undefined;
+        }
+        if (!openTextId) {
+          openTextId = `text:${sequence}`;
+          push({ type: "text-start", id: openTextId });
+        }
+        push({ type: "text-delta", id: openTextId, delta: normalized.delta });
+      } else if (normalized.type === "reasoning") {
+        if (openTextId) {
+          push({ type: "text-end", id: openTextId });
+          openTextId = undefined;
+        }
+        if (!openReasoningId) {
+          openReasoningId = `reasoning:${sequence}`;
+          push({ type: "reasoning-start", id: openReasoningId });
+        }
+        push({ type: "reasoning-delta", id: openReasoningId, delta: normalized.delta });
+      } else {
+        closeOpenSegments();
+        workbenchEventToUIMessageChunks(normalized).forEach(push);
       }
-      if (event.type === "reasoning" && !reasoningOpen) {
-        reasoningOpen = true;
-        push({ type: "reasoning-start", id: "reasoning:assistant" });
-      }
-      workbenchEventToUIMessageChunks(event).forEach(push);
-      if (event.type === "status" && ["succeeded", "completed"].includes(event.status)) finish();
-      else if (event.type === "status" && ["failed", "interrupted"].includes(event.status)) finish({ finishReason: "error" });
-      else if (event.type === "status" && event.status === "cancelled") finish({ abortReason: "desktop_run_cancelled" });
+      push({
+        type: "message-metadata",
+        messageMetadata: {
+          conversationId: chatId,
+          runId,
+          createdAt: assistantCreatedAt,
+          updatedAt: normalized.createdAt ?? now(),
+          lastSequence: sequence,
+          runStatus: normalized.type === "status" ? statusFromWorkbench(normalized.status) : "running",
+          ...(message.metadata?.providerId ? { providerId: message.metadata.providerId } : {}),
+          ...(message.metadata?.modelId ? { modelId: message.metadata.modelId } : {}),
+        },
+      });
+      if (normalized.type === "status" && ["succeeded", "completed"].includes(normalized.status)) finish();
+      else if (normalized.type === "status" && ["failed", "interrupted"].includes(normalized.status)) finish({ finishReason: "error" });
+      else if (normalized.type === "status" && normalized.status === "cancelled") finish({ abortReason: "desktop_run_cancelled" });
     });
     unregisterStop = transport.registerActiveStop(stopRun);
     abortSignal?.addEventListener("abort", onAbort, { once: true });

@@ -31,7 +31,6 @@
 :root[data-desktop-platform="macos"] .wb-sidebar-nav { gap: 4px; }
 :root[data-desktop-platform="macos"] .wb-nav-item { min-height: 36px; border-radius: 7px; }
 :root[data-desktop-platform="macos"] .wb-nav-section { margin-top: 12px; font-weight: 600; letter-spacing: .06em; }
-:root[data-desktop-platform="macos"] .wb-sidebar-context-label { letter-spacing: .04em; }
 
 /* Flatten stacked page insets and keep a consistent title scale. */
 :root[data-desktop-platform="macos"] .workspace:not(.workspace-immersive):not(.workspace-home) { padding: 20px var(--desktop-page-gutter) 28px; }

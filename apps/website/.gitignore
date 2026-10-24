@@ -1,0 +1,5 @@
+.next/
+out/
+public/
+.wrangler/
+*.tsbuildinfo

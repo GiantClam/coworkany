@@ -1,17 +1,9 @@
 "use client";
 
-import React, { useMemo, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
+import React, { useMemo, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { PanelRightClose, Sparkles } from "lucide-react";
 import type { DesktopUIMessage, WorkflowAiContext } from "@coworkany/workbench-client";
 import {
-  ModelSelector,
-  ModelSelectorContent,
-  ModelSelectorEmpty,
-  ModelSelectorGroup,
-  ModelSelectorInput,
-  ModelSelectorItem,
-  ModelSelectorList,
-  ModelSelectorTrigger,
   PromptInput,
   PromptInputBody,
   PromptInputFooter,
@@ -20,9 +12,9 @@ import {
   PromptInputTools,
   Suggestion,
   Suggestions,
-  type ModelOption,
 } from "./ai-elements";
-import { WorkbenchMessageSurface } from "./workbench-message-surface";
+import { WorkbenchMessageSurface, type WorkbenchMessageSurfaceProps } from "./workbench-message-surface";
+import { WorkbenchModelSelector, type WorkbenchModelOption } from "./prompt-input";
 
 export type WorkflowAiSidebarProps = {
   readonly open: boolean;
@@ -30,7 +22,8 @@ export type WorkflowAiSidebarProps = {
   readonly minWidth?: number;
   readonly maxWidth?: number;
   readonly messages: readonly DesktopUIMessage[];
-  readonly providerOptions: readonly ModelOption[];
+  readonly providerOptions: readonly WorkbenchModelOption[];
+  readonly selectedProviderOptionId?: string;
   readonly context: WorkflowAiContext;
   readonly locale: "zh" | "en";
   readonly status: "ready" | "streaming" | "error";
@@ -38,11 +31,16 @@ export type WorkflowAiSidebarProps = {
   readonly onOpenChange: (open: boolean) => void;
   readonly onWidthChange: (width: number) => void;
   readonly onInputChange: (value: string) => void;
+  readonly onProviderOptionChange?: (optionId: string) => void;
   readonly onSubmit: (text: string) => void | Promise<void>;
   readonly onStop: () => void;
   readonly onRetry: (message: DesktopUIMessage) => void | Promise<void>;
   readonly onApprove: (toolCallId: string) => void | Promise<void>;
   readonly onReject: (toolCallId: string) => void | Promise<void>;
+  readonly resolvePreviewSource?: WorkbenchMessageSurfaceProps["resolvePreviewSource"];
+  readonly onPreviewDownload?: WorkbenchMessageSurfaceProps["onPreviewDownload"];
+  readonly onPreviewExport?: WorkbenchMessageSurfaceProps["onPreviewExport"];
+  readonly onPreviewOpenExternal?: WorkbenchMessageSurfaceProps["onPreviewOpenExternal"];
 };
 
 const DEFAULT_MIN_WIDTH = 320;
@@ -52,25 +50,16 @@ function clampWidth(width: number, minWidth: number, maxWidth: number) {
   return Math.min(Math.max(width, minWidth), maxWidth);
 }
 
-function ProviderCandidates({ options, locale }: { readonly options: readonly ModelOption[]; readonly locale: "zh" | "en" }) {
-  const [open, setOpen] = useState(false);
-  return <ModelSelector open={open} onOpenChange={setOpen}>
-    <ModelSelectorTrigger asChild>
-      <button type="button" className="workflow-ai-provider-trigger" aria-label={locale === "zh" ? "查看可用 Provider 和模型" : "View available providers and models"} data-provider-count={options.length}>
-        <Sparkles size={13} aria-hidden="true" />
-        <span>{locale === "zh" ? `自动选择 · ${options.length}` : `Auto · ${options.length}`}</span>
-      </button>
-    </ModelSelectorTrigger>
-    <ModelSelectorContent title={locale === "zh" ? "可用 Provider 和模型" : "Available providers and models"}>
-      <ModelSelectorInput placeholder={locale === "zh" ? "搜索 Provider 或模型" : "Search providers or models"} />
-      <ModelSelectorList>
-        <ModelSelectorEmpty>{locale === "zh" ? "没有可用模型" : "No available models"}</ModelSelectorEmpty>
-        <ModelSelectorGroup heading={locale === "zh" ? "AI 可自动选择" : "Available to AI"}>
-          {options.map((option) => <ModelSelectorItem key={option.id} model={option} onSelect={() => setOpen(false)} />)}
-        </ModelSelectorGroup>
-      </ModelSelectorList>
-    </ModelSelectorContent>
-  </ModelSelector>;
+function ProviderCandidates({ options, selectedOptionId, onSelect, locale }: { readonly options: readonly WorkbenchModelOption[]; readonly selectedOptionId?: string; readonly onSelect?: (optionId: string) => void; readonly locale: "zh" | "en" }) {
+  return <WorkbenchModelSelector
+    models={options}
+    value={selectedOptionId}
+    onChange={(optionId) => onSelect?.(optionId)}
+    locale={locale}
+    placeholder={locale === "zh" ? `自动选择 · ${options.length}` : `Auto · ${options.length}`}
+    ariaLabel={locale === "zh" ? "选择工作流 AI 文本模型" : "Select workflow AI text model"}
+    className="workflow-ai-model-selector"
+  />;
 }
 
 export function WorkflowAiSidebar({
@@ -80,6 +69,7 @@ export function WorkflowAiSidebar({
   maxWidth = DEFAULT_MAX_WIDTH,
   messages,
   providerOptions,
+  selectedProviderOptionId,
   context,
   locale,
   status,
@@ -87,11 +77,16 @@ export function WorkflowAiSidebar({
   onOpenChange,
   onWidthChange,
   onInputChange,
+  onProviderOptionChange,
   onSubmit,
   onStop,
   onRetry,
   onApprove,
   onReject,
+  resolvePreviewSource,
+  onPreviewDownload,
+  onPreviewExport,
+  onPreviewOpenExternal,
 }: WorkflowAiSidebarProps) {
   const resolvedWidth = clampWidth(width, minWidth, maxWidth);
   const sidebarStyle = useMemo(() => ({
@@ -165,7 +160,12 @@ export function WorkflowAiSidebar({
       <WorkbenchMessageSurface
         messages={messages}
         locale={locale}
+        workflowAi
         pendingMessageId={status === "streaming" ? "workflow-ai-pending" : undefined}
+        resolvePreviewSource={resolvePreviewSource}
+        onPreviewDownload={onPreviewDownload}
+        onPreviewExport={onPreviewExport}
+        onPreviewOpenExternal={onPreviewOpenExternal}
         onRetry={onRetry}
         onToolApproval={(_message, part, decision) => decision === "approve" ? onApprove(part.toolCallId) : onReject(part.toolCallId)}
         emptyState={<div className="workflow-ai-empty-state">
@@ -181,7 +181,7 @@ export function WorkflowAiSidebar({
       <PromptInput value={input} onValueChange={onInputChange} onSubmit={submit} onStop={onStop} status={status} locale={locale} maxHeight={160}>
         <PromptInputBody><PromptInputTextarea placeholder={locale === "zh" ? "向 AI 提问" : "Message AI"} rows={2} /></PromptInputBody>
         <PromptInputFooter>
-          <PromptInputTools><ProviderCandidates options={providerOptions} locale={locale} /></PromptInputTools>
+          <PromptInputTools><ProviderCandidates options={providerOptions} selectedOptionId={selectedProviderOptionId} onSelect={onProviderOptionChange} locale={locale} /></PromptInputTools>
           <PromptInputSubmit disabled={!input.trim() && status !== "streaming"} />
         </PromptInputFooter>
       </PromptInput>

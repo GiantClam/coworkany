@@ -1,4 +1,4 @@
-import { desktopUIMessageText, type DesktopUIMessage } from "@coworkany/workbench-client";
+import { desktopUIMessageText, type DesktopUIMessage, type DesktopUIMessagePart } from "@coworkany/workbench-client";
 
 type ConversationMessage = {
   readonly id: string;
@@ -72,9 +72,48 @@ export function mergeConversationMessages<TMessage extends ConversationMessage>(
   return repairAdjacentTimestampInversions(ordered);
 }
 
+function stablePartIdentity(part: DesktopUIMessagePart, occurrence: number) {
+  if (part.type === "text" || part.type === "reasoning") {
+    const metadata = part.providerMetadata?.coworkany as { partId?: unknown } | undefined;
+    if (typeof metadata?.partId === "string") return metadata.partId;
+  }
+  if (part.type === "dynamic-tool") return `tool:${part.toolCallId}`;
+  if ("id" in part && typeof part.id === "string") return `${part.type}:${part.id}`;
+  if (part.type === "source-url") return `source-url:${part.sourceId}:${part.url}`;
+  if (part.type === "source-document") return `source-document:${part.sourceId}`;
+  if (part.type === "file") return `file:${part.url}:${part.filename ?? ""}`;
+  return `${part.type}:legacy:${occurrence}`;
+}
+
+function indexedParts(parts: readonly DesktopUIMessagePart[]) {
+  const occurrences = new Map<string, number>();
+  return parts.map((part) => {
+    const occurrence = occurrences.get(part.type) ?? 0;
+    occurrences.set(part.type, occurrence + 1);
+    return { part, identity: stablePartIdentity(part, occurrence) };
+  });
+}
+
+function mergeMessageParts(displayed: readonly DesktopUIMessagePart[], live: readonly DesktopUIMessagePart[]) {
+  const liveEntries = indexedParts(live);
+  const liveByIdentity = new Map(liveEntries.map((entry) => [entry.identity, entry.part]));
+  const consumed = new Set<string>();
+  const merged = indexedParts(displayed).map(({ part, identity }) => {
+    const incoming = liveByIdentity.get(identity);
+    if (!incoming) return part;
+    consumed.add(identity);
+    if ((part.type === "text" || part.type === "reasoning") && incoming.type === part.type && !incoming.text && part.text) return part;
+    return incoming;
+  });
+  for (const { part, identity } of liveEntries) {
+    if (consumed.has(identity)) continue;
+    if ((part.type === "text" || part.type === "reasoning") && !part.text) continue;
+    merged.push(part);
+  }
+  return merged;
+}
+
 function mergeMessageView(displayed: DesktopUIMessage, live: DesktopUIMessage, preserveId = displayed.id) {
-  const displayedHasText = desktopUIMessageText(displayed).length > 0;
-  const liveHasText = desktopUIMessageText(live).length > 0;
   const metadata = {
     ...displayed.metadata,
     ...live.metadata,
@@ -86,7 +125,7 @@ function mergeMessageView(displayed: DesktopUIMessage, live: DesktopUIMessage, p
     ...displayed,
     ...live,
     id: preserveId,
-    parts: liveHasText || !displayedHasText ? live.parts : displayed.parts,
+    parts: mergeMessageParts(displayed.parts, live.parts),
     metadata,
   };
 }

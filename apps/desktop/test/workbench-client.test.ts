@@ -4,6 +4,24 @@ import test from "node:test";
 import { resolve } from "node:path";
 import { createDesktopChatTransport, createDesktopWorkbenchClient } from "../src/workbench-client";
 import { createDesktopUIMessage, desktopUIMessageText } from "@coworkany/workbench-client";
+import { resolveWorkflowAiTextProvider } from "../src/workflow-ai-controller";
+
+test("desktop WorkbenchClient maps persisted metrics into the shared contract", async () => {
+  const bridge = {
+    async invoke<T>(command: string) {
+      const count = { total: 1, completed: 1, failed: 0, rejected: 0 };
+      if (command === "get_run_metrics") return { runId: "r1", provider: "openai", model: "gpt", modelTools: count, capabilities: { ...count, total: 0, completed: 0 }, modelToolBreakdown: [{ name: "read", ...count }], capabilityBreakdown: [], inputTokens: 4, outputTokens: 2, cachedInputTokens: 1, reasoningTokens: null, providerCost: 0.01, estimatedCost: null, completeness: "complete" } as T;
+      if (command === "query_metrics") return { overview: { tokens: 6, modelTools: 1, capabilities: 0, providerCost: 0.01 }, series: [], models: [], tools: [], capabilities: [], runs: [], nextCursor: null } as T;
+      return undefined as T;
+    },
+    async listen() { return () => undefined; },
+  };
+  const client = createDesktopWorkbenchClient(bridge, { go: () => undefined, replace: () => undefined, current: () => "/dashboard/usage" });
+  const metrics = await client.metrics?.getRun("r1");
+  assert.equal(metrics?.modelTools.byName[0]?.name, "read");
+  assert.deepEqual(metrics?.tokens, { input: 4, output: 2, cachedInput: 1 });
+  assert.equal((await client.metrics?.query({ range: "30d" }))?.overview.tokens, 6);
+});
 
 test("desktop WorkbenchClient adapts conversations, workflows and file actions through Tauri", async () => {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
@@ -83,6 +101,29 @@ test("desktop WorkbenchClient adapts conversations, workflows and file actions t
   assert.equal((calls.at(-1)?.args?.message as { type?: string } | undefined)?.type, "run.cancel");
   await client.runs.emergencyStop("run-1");
   assert.equal((calls.at(-1)?.args?.message as { type?: string } | undefined)?.type, "run.emergency_stop");
+});
+
+test("desktop WorkbenchClient reads recoverable attempts without invoking mutations", async () => {
+  const calls: string[] = [];
+  const bridge = {
+    async invoke<T>(command: string) {
+      calls.push(command);
+      if (command === "list_recoverable_attempts") return [
+        { run_id: "r1", node_key: "image", idempotency_key: "r1:image:1", status: "running", provider_task_id: "provider-1", updated_at: "2026-01-01T00:00:00Z" },
+        { run_id: "r2", node_key: "video", idempotency_key: "r2:video:1", status: "submitted", provider_task_id: "provider-2", updated_at: "2026-01-01T00:01:00Z" },
+        { run_id: "r3", node_key: "bad", idempotency_key: "r3:bad:1", status: "unknown", provider_task_id: "provider-3", updated_at: "2026-01-01T00:02:00Z" },
+        { run_id: "r4", node_key: "missing", idempotency_key: "r4:missing:1", status: "queued", provider_task_id: "", updated_at: "2026-01-01T00:03:00Z" },
+      ] as T;
+      return undefined as T;
+    },
+    async listen() { return () => undefined; },
+  };
+  const client = createDesktopWorkbenchClient(bridge, { go: () => undefined, replace: () => undefined, current: () => "/dashboard" });
+  assert.deepEqual(await client.runs.recoverableAttempts?.(), [
+    { runId: "r1", nodeKey: "image", idempotencyKey: "r1:image:1", status: "running", providerTaskId: "provider-1", updatedAt: "2026-01-01T00:00:00Z" },
+    { runId: "r2", nodeKey: "video", idempotencyKey: "r2:video:1", status: "submitted", providerTaskId: "provider-2", updatedAt: "2026-01-01T00:01:00Z" },
+  ]);
+  assert.deepEqual(calls, ["list_recoverable_attempts"]);
 });
 
 test("desktop WorkbenchClient restores UIMessage parts without projecting away metadata or media", async () => {
@@ -251,6 +292,34 @@ test("desktop ChatTransport keeps the user prompt intact without sending legacy 
   assert.equal(sentSystemPrompt, undefined);
 });
 
+test("workflow AI transport sends the selected configured text Provider and model", async () => {
+  const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+  const bridge = {
+    async invoke<T>(command: string, args?: Record<string, unknown>) { calls.push({ command, args }); return undefined as T; },
+    async listen() { return () => undefined; },
+  };
+  const fallback = { id: "text-basic", source: "openai-compatible", baseUrl: "https://basic.test/v1", apiKey: "secret-basic", model: "basic", models: ["basic"], capabilities: ["text"] as const };
+  const providers = [fallback, { id: "text-paid", source: "openai-compatible", baseUrl: "https://paid.test/v1", apiKey: "secret-paid", model: "premium", models: ["premium"], capabilities: ["text"] as const }];
+  const workbenchClient = { runs: { subscribe: () => () => undefined } } as never;
+  const transport = createDesktopChatTransport(bridge, workbenchClient, {
+    resolveSessionId: async (chatId) => chatId,
+    resolveProvider: (message) => resolveWorkflowAiTextProvider(providers, message.metadata?.providerId, message.metadata?.modelId, fallback),
+    resolveSkillId: () => "workflow-authoring",
+    resolveAgentId: () => "workflow-ai",
+    resolveConversationAgentId: () => "workflow-ai",
+    resolveAllowArtifacts: () => false,
+  });
+  const message = createDesktopUIMessage({ id: "workflow-ai-user-1", role: "user", conversationId: "workflow-ai:w1", content: "Plan this workflow", providerId: "text-paid", modelId: "premium" });
+  await transport.sendMessages({ trigger: "submit-message", chatId: "workflow-ai:w1", messageId: undefined, messages: [message], abortSignal: undefined });
+  const sent = calls.find((call) => call.command === "host_send")?.args?.message as { type?: string; payload?: { provider?: { id?: string; apiKey?: string }; model?: string; skillId?: string; agentId?: string } } | undefined;
+  assert.equal(sent?.type, "session.prompt");
+  assert.equal(sent?.payload?.provider?.id, "text-paid");
+  assert.equal(sent?.payload?.provider?.apiKey, "secret-paid");
+  assert.equal(sent?.payload?.model, "premium");
+  assert.equal(sent?.payload?.skillId, "workflow-authoring");
+  assert.equal(sent?.payload?.agentId, "workflow-ai");
+});
+
 test("desktop WorkbenchClient streams text, tool, usage, cancellation and terminal events", async () => {
   let listener: ((payload: { raw: string }) => void) | undefined;
   const bridge = {
@@ -274,20 +343,45 @@ test("desktop WorkbenchClient streams text, tool, usage, cancellation and termin
   emit({ event: "reasoning_delta", delta: "planning", sequence: 2, createdAt: "2026-08-12T00:00:02Z" });
   emit({ event: "tool_event", tool: "writer", phase: "completed", message: "finished", sequence: 3, createdAt: "2026-08-12T00:00:03Z" });
   emit({ event: "artifact", artifact: { id: "a1", relativePath: "artifacts/report.md", title: "报告", mimeType: "text/markdown", byteLength: 12, sha256: "hash-a" }, sequence: 4, createdAt: "2026-08-12T00:00:04Z" });
-  emit({ event: "usage", provider: "fixture", model: "fixture/model", inputTokens: 3, outputTokens: 5, costUsd: 0.02, sequence: 5, createdAt: "2026-08-12T00:00:05Z" });
-  emit({ event: "runtime_error", code: "workflow_cancelled", sequence: 6, createdAt: "2026-08-12T00:00:06Z" });
-  emit({ event: "done", sequence: 7, createdAt: "2026-08-12T00:00:07Z" });
+  emit({ event: "preview", preview: { kind: "ppt", title: "Deck preview", url: "http://127.0.0.1:5200/", previewSessionId: "dashi-ppt:1", engine: "dashi-ppt", status: "ready" }, sequence: 5, createdAt: "2026-08-12T00:00:05Z" });
+  emit({ event: "usage", provider: "fixture", model: "fixture/model", inputTokens: 3, outputTokens: 5, costUsd: 0.02, sequence: 6, createdAt: "2026-08-12T00:00:06Z" });
+  emit({ event: "runtime_error", code: "workflow_cancelled", sequence: 7, createdAt: "2026-08-12T00:00:07Z" });
+  emit({ event: "done", sequence: 8, createdAt: "2026-08-12T00:00:08Z" });
   assert.deepEqual(events, [
     { type: "text", delta: "hello", sequence: 1, createdAt: "2026-08-12T00:00:01Z" },
     { type: "reasoning", delta: "planning", sequence: 2, createdAt: "2026-08-12T00:00:02Z" },
-    { type: "tool", tool: "writer", phase: "completed", message: "finished", sequence: 3, createdAt: "2026-08-12T00:00:03Z" },
+    { type: "tool_call", toolName: "writer", toolCallId: "writer:3", phase: "completed", input: undefined, output: undefined, error: undefined, sequence: 3, createdAt: "2026-08-12T00:00:03Z" },
     { type: "artifact", artifact: { id: "a1", relativePath: "artifacts/report.md", title: "报告", mimeType: "text/markdown", byteLength: 12, sha256: "hash-a" }, sequence: 4, createdAt: "2026-08-12T00:00:04Z" },
-    { type: "usage", usage: { runId: "run-stream", provider: "fixture", model: "fixture/model", inputTokens: 3, outputTokens: 5, providerCost: 0.02 }, sequence: 5, createdAt: "2026-08-12T00:00:05Z" },
-    { type: "status", status: "cancelled", sequence: 6, createdAt: "2026-08-12T00:00:06Z" },
-    { type: "status", status: "succeeded", sequence: 7, createdAt: "2026-08-12T00:00:07Z" },
+    { type: "preview", preview: { kind: "ppt", title: "Deck preview", url: "http://127.0.0.1:5200/", previewSessionId: "dashi-ppt:1", engine: "dashi-ppt", status: "ready" }, sequence: 5, createdAt: "2026-08-12T00:00:05Z" },
+    { type: "usage", usage: { runId: "run-stream", usageId: undefined, provider: "fixture", model: "fixture/model", inputTokens: 3, outputTokens: 5, cachedInputTokens: undefined, reasoningTokens: undefined, providerCost: 0.02, aggregation: "delta", scope: "step" }, sequence: 6, createdAt: "2026-08-12T00:00:06Z" },
+    { type: "status", status: "cancelled", sequence: 7, createdAt: "2026-08-12T00:00:07Z" },
+    { type: "status", status: "succeeded", sequence: 8, createdAt: "2026-08-12T00:00:08Z" },
   ]);
   dispose();
   assert.equal(listener, undefined);
+});
+
+test("desktop WorkbenchClient disposes a late run listener registration", async () => {
+  let listener: ((payload: { raw: string }) => void) | undefined;
+  let resolveListen!: (unlisten: () => void) => void;
+  let unlistenCalls = 0;
+  const bridge = {
+    async invoke<T>() { return undefined as T; },
+    async listen<T>(_event: string, callback: (payload: T) => void) {
+      listener = callback as unknown as (payload: { raw: string }) => void;
+      return new Promise<() => void>((resolve) => { resolveListen = resolve; });
+    },
+  };
+  const client = createDesktopWorkbenchClient(bridge, { go: () => undefined, replace: () => undefined, current: () => "/dashboard/ai" });
+  const events: unknown[] = [];
+  const dispose = client.runs.subscribe("late-run", (event) => events.push(event));
+  dispose();
+  resolveListen(() => { unlistenCalls += 1; });
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  assert.equal(unlistenCalls, 1);
+  const body = JSON.stringify({ version: 1, data: { event: { runId: "late-run", event: "text_delta", delta: "ignored" } } });
+  listener?.({ raw: `${Buffer.byteLength(body, "utf8")}:${body}` });
+  assert.deepEqual(events, []);
 });
 
 test("desktop WorkbenchClient routes Obsidian index and search through host RPC", async () => {

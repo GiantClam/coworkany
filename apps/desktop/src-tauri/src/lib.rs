@@ -1,13 +1,21 @@
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
+#[cfg(windows)]
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(windows)]
+use std::process::Stdio;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{Emitter, Manager};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(windows)]
+use std::time::Instant;
+use tauri::Manager;
+#[cfg(windows)]
+use tauri::Emitter;
 use std::fs;
 mod storage;
 mod supervisor;
@@ -306,6 +314,7 @@ fn write_runtime_probe_cache(data: &Path, fingerprint: &str, result: &serde_json
     }
 }
 
+#[cfg(windows)]
 fn invalidate_runtime_probe_cache(data: &Path) {
     let _ = fs::remove_file(data.join(RUNTIME_PROBE_CACHE_FILE));
 }
@@ -409,19 +418,23 @@ fn system_executable(command: &str) -> Option<PathBuf> {
 
 #[derive(Debug, Deserialize, Default)]
 struct RuntimeRepairOptions {
+    #[cfg(windows)]
     #[serde(rename = "offlineZip")]
     offline_zip: Option<String>,
 }
 
+#[cfg(windows)]
 #[derive(Clone, Debug, Serialize)]
 struct RuntimeProgressEvent {
     message: String,
 }
 
+#[cfg(windows)]
 fn emit_runtime_progress(app: &tauri::AppHandle, message: impl Into<String>) {
     let _ = app.emit("desktop://runtime-progress", RuntimeProgressEvent { message: message.into() });
 }
 
+#[cfg(windows)]
 fn discover_offline_runtime_zip(resource: &Path) -> Option<PathBuf> {
     let executable = std::env::current_exe().ok();
     let mut candidates = vec![resource.join("CoworkAny-Runtime-x64.zip")];
@@ -430,6 +443,7 @@ fn discover_offline_runtime_zip(resource: &Path) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file()).and_then(|path| std::fs::canonicalize(path).ok()).map(bootstrap::powershell_compatible_path)
 }
 
+#[cfg(any(windows, test))]
 fn configured_offline_runtime_zip(data: &Path) -> Option<PathBuf> {
     let value = config::read(&data.join("config.json"), data).ok()?;
     let configured = value.get("offlineRuntimeZipPath").and_then(serde_json::Value::as_str)?.trim();
@@ -610,8 +624,10 @@ fn is_usable_desktop_config(value: &serde_json::Value) -> bool {
 
 fn is_default_portable_text_config(value: &serde_json::Value) -> bool {
     value.get("provider").and_then(serde_json::Value::as_object).is_some_and(|provider| {
-        provider.get("id").and_then(serde_json::Value::as_str) == Some("local")
-            && matches!(provider.get("model").and_then(serde_json::Value::as_str), Some("") | Some("ollama/qwen3:8b"))
+        let id = provider.get("id").and_then(serde_json::Value::as_str);
+        let model = provider.get("model").and_then(serde_json::Value::as_str);
+        (id == Some("local") && matches!(model, Some("") | Some("ollama/qwen3:8b")))
+            || (id == Some("cheapbuddy") && model == Some("") && provider.get("credentialRef").and_then(serde_json::Value::as_str).map_or(true, str::is_empty))
     })
 }
 
@@ -635,17 +651,25 @@ fn merge_portable_provider_config(current: &serde_json::Value, imported: &serde_
 /// 客户包中的 Provider 和默认路由以种子配置为准，用户工作目录、运行时路径等设置保持不变。
 fn merge_customer_seed_provider_config(current: &serde_json::Value, seed: &serde_json::Value) -> serde_json::Value {
     let mut merged = current.clone();
-    if is_default_portable_text_config(current) {
+    let cheapbuddy_seed = seed.get("provider").and_then(|provider| provider.get("id")).and_then(serde_json::Value::as_str) == Some("cheapbuddy");
+    let cheapbuddy_current = current.get("provider").and_then(|provider| provider.get("id")).and_then(serde_json::Value::as_str) == Some("cheapbuddy");
+    if is_default_portable_text_config(current) && (!cheapbuddy_seed || cheapbuddy_current) {
         if let Some(provider) = seed.get("provider") { merged["provider"] = provider.clone(); }
     }
     if let Some(seed_profiles) = seed.get("providers").and_then(serde_json::Value::as_object) {
         let mut profiles = merged.get("providers").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
-        for (id, profile) in seed_profiles { profiles.insert(id.clone(), profile.clone()); }
+        for (id, profile) in seed_profiles {
+            if id == "cheapbuddy" && profiles.contains_key(id) { continue; }
+            profiles.insert(id.clone(), profile.clone());
+        }
         merged["providers"] = serde_json::Value::Object(profiles);
     }
     if let Some(seed_defaults) = seed.get("defaults").and_then(serde_json::Value::as_object) {
         let mut defaults = merged.get("defaults").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
-        for (capability, provider_id) in seed_defaults { defaults.insert(capability.clone(), provider_id.clone()); }
+        for (capability, provider_id) in seed_defaults {
+            if provider_id.as_str() == Some("cheapbuddy") && (defaults.contains_key(capability) || !cheapbuddy_current) { continue; }
+            defaults.insert(capability.clone(), provider_id.clone());
+        }
         merged["defaults"] = serde_json::Value::Object(defaults);
     }
     if seed.get("packageType").and_then(serde_json::Value::as_str) == Some("customer") {
@@ -922,6 +946,7 @@ fn write_file_atomically(target: &std::path::Path, bytes: &[u8]) -> Result<(), S
     result
 }
 
+#[cfg(windows)]
 fn powershell_quote(value: &str) -> String { value.replace('\'', "''") }
 
 fn archive_diagnostics(staging: &std::path::Path, zip_path: &std::path::Path) -> Result<(), String> {
@@ -1005,6 +1030,51 @@ fn open_workspace(app: tauri::AppHandle) -> Result<(), String> {
     platform::open_path_command(&root).spawn().map(|_| ()).map_err(|error| format!("workspace_open_failed: {error}"))
 }
 
+fn is_allowed_external_preview_url(value: &str) -> bool {
+    if value.is_empty() || value.chars().any(|character| character.is_whitespace() || character.is_control()) {
+        return false;
+    }
+    let Some(authority_and_path) = value.strip_prefix("http://") else { return false; };
+    let authority = authority_and_path.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') { return false; }
+    let Some((host, port)) = authority.rsplit_once(':') else { return false; };
+    let host = host.to_ascii_lowercase();
+    if !matches!(host.as_str(), "127.0.0.1" | "localhost" | "[::1]") { return false; }
+    port.parse::<u16>().is_ok_and(|port| port > 0)
+}
+
+#[tauri::command]
+fn open_external_preview(url: String) -> Result<(), String> {
+    if !is_allowed_external_preview_url(&url) { return Err("external_preview_url_rejected".into()); }
+    platform::open_url_command(&url).spawn().map(|_| ()).map_err(|error| format!("external_preview_open_failed: {error}"))
+}
+
+const CHEAPBUDDY_PURCHASE_URL: &str = "https://cheapbuddy.cc/#pricing";
+
+#[tauri::command]
+fn open_cheapbuddy_purchase() -> Result<(), String> {
+    platform::open_url_command(CHEAPBUDDY_PURCHASE_URL).spawn().map(|_| ()).map_err(|error| format!("cheapbuddy_purchase_open_failed: {error}"))
+}
+
+#[cfg(test)]
+mod external_preview_url_tests {
+    use super::is_allowed_external_preview_url;
+
+    #[test]
+    fn allows_http_loopback_preview_urls() {
+        for url in ["http://127.0.0.1:5321/", "http://localhost:5173/index.html", "http://[::1]:8080/?view=1"] {
+            assert!(is_allowed_external_preview_url(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_local_or_non_http_urls() {
+        for url in ["https://127.0.0.1:5321/", "http://example.com:5321/", "http://localhost/", "http://localhost:0/", "http://user@localhost:5321/", "http://localhost:5321/\n"] {
+            assert!(!is_allowed_external_preview_url(url), "{url}");
+        }
+    }
+}
+
 #[tauri::command]
 fn pick_directory(initial_path: Option<String>) -> Result<Option<String>, String> {
     #[cfg(windows)]
@@ -1050,9 +1120,10 @@ fn workflow_file_mime_type(path: &Path) -> &'static str {
         "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "gif" => "image/gif",
         "mp4" => "video/mp4", "mov" => "video/quicktime", "webm" => "video/webm",
         "mp3" => "audio/mpeg", "wav" => "audio/wav", "m4a" => "audio/mp4", "ogg" => "audio/ogg",
-        "pdf" => "application/pdf", "txt" => "text/plain", "md" => "text/markdown", "csv" => "text/csv", "json" => "application/json",
-        "doc" => "application/msword", "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "ppt" => "application/vnd.ms-powerpoint", "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "pdf" => "application/pdf", "txt" => "text/plain", "md" => "text/markdown", "csv" => "text/csv", "json" => "application/json", "rtf" => "application/rtf",
+        "doc" => "application/msword", "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "odt" => "application/vnd.oasis.opendocument.text",
+        "ppt" => "application/vnd.ms-powerpoint", "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation", "odp" => "application/vnd.oasis.opendocument.presentation",
+        "xls" => "application/vnd.ms-excel", "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "ods" => "application/vnd.oasis.opendocument.spreadsheet",
         _ => "application/octet-stream",
     }
 }
@@ -1503,8 +1574,8 @@ fn append_message(app: tauri::AppHandle, input: MessageInput) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn create_run(app: tauri::AppHandle, run_id: String, conversation_id: Option<String>, model: Option<String>) -> Result<(), String> {
-    storage::create_run(&database_path(&app)?, &run_id, conversation_id.as_deref(), model.as_deref()).map_err(|error| error.to_string())
+fn create_run(app: tauri::AppHandle, run_id: String, conversation_id: Option<String>, model: Option<String>, source: Option<String>, assistant_message_id: Option<String>) -> Result<(), String> {
+    storage::create_run_with_context(&database_path(&app)?, &run_id, conversation_id.as_deref(), model.as_deref(), source.as_deref(), assistant_message_id.as_deref()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1518,8 +1589,24 @@ fn finish_run(app: tauri::AppHandle, run_id: String, status: String) -> Result<(
 }
 
 #[tauri::command]
-fn record_usage(app: tauri::AppHandle, run_id: String, provider: Option<String>, model: String, input_tokens: Option<i64>, output_tokens: Option<i64>, provider_cost: Option<f64>, estimated_cost: Option<f64>, idempotency_key: Option<String>) -> Result<(), String> {
-    storage::record_usage(&database_path(&app)?, &run_id, provider.as_deref(), &model, input_tokens, output_tokens, provider_cost, estimated_cost, idempotency_key.as_deref()).map_err(|error| error.to_string())
+fn record_usage(app: tauri::AppHandle, run_id: String, provider: Option<String>, model: String, input_tokens: Option<i64>, output_tokens: Option<i64>, cached_input_tokens: Option<i64>, reasoning_tokens: Option<i64>, provider_cost: Option<f64>, estimated_cost: Option<f64>, usage_id: Option<String>, aggregation: Option<String>, scope: Option<String>, idempotency_key: Option<String>) -> Result<(), String> {
+    let usage_id = usage_id.as_deref().or(idempotency_key.as_deref()).unwrap_or("");
+    storage::record_usage_detailed(&database_path(&app)?, &run_id, usage_id, provider.as_deref(), &model, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, provider_cost, estimated_cost, aggregation.as_deref().unwrap_or("delta"), scope.as_deref().unwrap_or("step")).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn record_run_invocation(app: tauri::AppHandle, run_id: String, invocation_id: String, category: String, name: String, status: String, attempt: i64, started_at: Option<String>, finished_at: Option<String>) -> Result<(), String> {
+    storage::record_run_invocation(&database_path(&app)?, &run_id, &invocation_id, &category, &name, &status, attempt, started_at.as_deref(), finished_at.as_deref()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_run_metrics(app: tauri::AppHandle, run_id: String) -> Result<storage::RunMetricsRow, String> {
+    storage::get_run_metrics(&database_path(&app)?, &run_id).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn query_metrics(app: tauri::AppHandle, filters: storage::MetricsQueryFilters) -> Result<storage::MetricsQueryResult, String> {
+    storage::query_metrics(&database_path(&app)?, &filters).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1739,7 +1826,7 @@ pub fn run() {
             *state.0.lock().map_err(|_| "startup_state_poisoned")? = Some(StartupResults { local_state, runtime });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, append_diagnostic_log, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, apply_workflow_ai_operation, list_workflow_ai_operation_groups, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
+        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, append_diagnostic_log, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, open_external_preview, open_cheapbuddy_purchase, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_invocation, get_run_metrics, query_metrics, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, apply_workflow_ai_operation, list_workflow_ai_operation_groups, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
     let app = builder.build(tauri::generate_context!()).expect("error while building CoworkAny");
     drop(startup_progress);
     app.run(|app, event| {
@@ -1773,7 +1860,9 @@ fn adjacent_instance_lock_path(data_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, customer_package_id, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, merge_customer_seed_provider_config, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, customer_package_id, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, merge_customer_seed_provider_config, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    #[cfg(windows)]
+    use super::powershell_quote;
     #[cfg(target_os = "macos")]
     use super::macos_workflow_output_save_script;
     use std::fs;
@@ -1827,6 +1916,32 @@ mod tests {
         assert!(merged["providers"]["user-provider"].is_object());
         assert_eq!(merged["providers"]["image-main"]["model"], "gpt-image-2.5");
         assert_eq!(merged["defaults"]["image"], "image-main");
+    }
+
+    #[test]
+    fn cheapbuddy_seed_preserves_user_defaults_and_existing_account_reference() {
+        let current = serde_json::json!({
+            "provider": { "id": "local", "source": "local", "model": "" },
+            "providers": { "cheapbuddy": { "id": "cheapbuddy", "credentialRef": "existing-reference", "model": "user-model" } },
+            "defaults": { "image": "user-image" }
+        });
+        let seed = config::default_config(Path::new("/seed"));
+        let merged = merge_customer_seed_provider_config(&current, &seed);
+        assert_eq!(merged["provider"]["id"], "local");
+        assert_eq!(merged["defaults"]["image"], "user-image");
+        assert!(merged["defaults"].get("text").is_none());
+        assert_eq!(merged["providers"]["cheapbuddy"]["credentialRef"], "existing-reference");
+        assert_eq!(merged["providers"]["cheapbuddy"]["model"], "user-model");
+    }
+
+    #[test]
+    fn unauthenticated_cheapbuddy_default_can_receive_an_explicit_customer_seed() {
+        let current = config::default_config(Path::new("/user"));
+        assert!(is_default_portable_text_config(&current));
+        let seed = serde_json::json!({ "provider": { "id": "customer", "model": "customer-model" }, "defaults": { "text": "customer" } });
+        let merged = merge_customer_seed_provider_config(&current, &seed);
+        assert_eq!(merged["provider"]["model"], "customer-model");
+        assert_eq!(merged["workspacePath"], current["workspacePath"]);
     }
 
     #[cfg(target_os = "macos")]

@@ -1,7 +1,8 @@
 import { copyFile, mkdir, open, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { DesktopPaths } from "./paths";
-import { usableRunningHubWorkflowId, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "../src/provider-config";
+import { normalizeCapabilityModels, usableRunningHubWorkflowId, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "../src/provider-config";
+import { createCheapBuddyProvider } from "../src/cheapbuddy";
 import { migrateLegacyRunningHubWorkflows, normalizeRunningHubCharacterImageBindings, type RunningHubWorkflowRegistration } from "../src/runninghub-workflow";
 
 export interface DesktopConfig {
@@ -28,7 +29,8 @@ export interface DesktopEmbeddingConfig {
 }
 
 export function defaultDesktopConfig(paths: DesktopPaths): DesktopConfig {
-  return { schemaVersion: 1, locale: "auto", workspacePath: paths.projects, provider: { id: "local", source: "local", model: "", baseUrl: "http://127.0.0.1:11434/v1", apiKey: "" }, runtime: { source: "system" } };
+  const provider = createCheapBuddyProvider();
+  return { schemaVersion: 1, locale: "auto", workspacePath: paths.projects, provider, providers: { cheapbuddy: provider }, defaults: { text: "cheapbuddy", image: "cheapbuddy", video: "cheapbuddy" }, runtime: { source: "system" } };
 }
 
 export async function readDesktopConfig(paths: DesktopPaths): Promise<DesktopConfig> {
@@ -56,6 +58,8 @@ function parseConfig(raw: string): DesktopConfig {
   const capabilities = normalizeProviderCapabilities(value.provider.capabilities);
   const embedding = normalizeEmbeddingConfig(value.embedding);
   const providerWorkflows = normalizeAndMigrateRunningHubWorkflows(value.provider.workflows, legacyWorkflowIds(value.provider));
+  const credentialRef = typeof value.provider.credentialRef === "string" ? value.provider.credentialRef.trim() : "";
+  const capabilityModels = normalizeCapabilityModels(value.provider.capabilityModels);
   return {
     schemaVersion: 1,
     locale: value.locale === "zh" || value.locale === "en" ? value.locale : "auto",
@@ -65,7 +69,7 @@ function parseConfig(raw: string): DesktopConfig {
     ...(embedding ? { embedding } : {}),
     ...(typeof (value as Partial<DesktopConfig>).offlineRuntimeZipPath === "string" ? { offlineRuntimeZipPath: (value as Partial<DesktopConfig>).offlineRuntimeZipPath } : {}),
     ...(normalizeMenuAgentIds(value.menuAgentIds).length ? { menuAgentIds: normalizeMenuAgentIds(value.menuAgentIds) } : {}),
-    provider: { id: String(value.provider.id ?? "local"), model, ...(models.length ? { models } : {}), ...(capabilities ? { capabilities } : {}), ...(value.provider.source ? { source: String(value.provider.source) } : {}), ...(value.provider.baseUrl ? { baseUrl: String(value.provider.baseUrl) } : {}), ...(value.provider.apiKey ? { apiKey: String(value.provider.apiKey) } : {}), ...(value.provider.reasoningEffort ? { reasoningEffort: String(value.provider.reasoningEffort) } : {}), ...(typeof value.provider.skillId === "string" && value.provider.skillId.trim() ? { skillId: value.provider.skillId.trim() } : {}), ...(value.provider.endpoint ? { endpoint: String(value.provider.endpoint) } : {}), ...(value.provider.queryEndpoint ? { queryEndpoint: String(value.provider.queryEndpoint) } : {}), ...(providerWorkflows ? { workflows: providerWorkflows } : {}) },
+    provider: { id: String(value.provider.id ?? "local"), model, ...(models.length ? { models } : {}), ...(capabilityModels ? { capabilityModels } : {}), ...(credentialRef ? { credentialRef } : {}), ...(capabilities ? { capabilities } : {}), ...(value.provider.source ? { source: String(value.provider.source) } : {}), ...(value.provider.baseUrl ? { baseUrl: String(value.provider.baseUrl) } : {}), ...(!credentialRef && value.provider.apiKey ? { apiKey: String(value.provider.apiKey) } : {}), ...(value.provider.reasoningEffort ? { reasoningEffort: String(value.provider.reasoningEffort) } : {}), ...(typeof value.provider.skillId === "string" && value.provider.skillId.trim() ? { skillId: value.provider.skillId.trim() } : {}), ...(value.provider.endpoint ? { endpoint: String(value.provider.endpoint) } : {}), ...(value.provider.queryEndpoint ? { queryEndpoint: String(value.provider.queryEndpoint) } : {}), ...(providerWorkflows ? { workflows: providerWorkflows } : {}) },
     ...(normalizeProviderProfiles(value.providers) ? { providers: normalizeProviderProfiles(value.providers) } : {}),
     ...(normalizeProviderDefaults(value.defaults) ? { defaults: normalizeProviderDefaults(value.defaults) } : {}),
     runtime: {
@@ -99,14 +103,18 @@ function normalizeProviderProfiles(value: unknown): DesktopProviderProfiles | un
     const models = normalizeConfiguredModels(record.models);
     const capabilities = normalizeProviderCapabilities(record.capabilities);
     const workflows = normalizeAndMigrateRunningHubWorkflows(record.workflows, legacyWorkflowIds(record));
+    const credentialRef = typeof record.credentialRef === "string" ? record.credentialRef.trim() : "";
+    const capabilityModels = normalizeCapabilityModels(record.capabilityModels);
     profiles[key] = {
       id,
       ...(typeof record.source === "string" && record.source.trim() ? { source: record.source.trim() } : {}),
       ...(typeof record.model === "string" ? { model: models.includes(record.model.trim()) ? record.model.trim() : (models[0] ?? record.model.trim()) } : models.length ? { model: models[0] } : {}),
       ...(models.length ? { models } : {}),
+      ...(capabilityModels ? { capabilityModels } : {}),
+      ...(credentialRef ? { credentialRef } : {}),
       ...(capabilities ? { capabilities } : {}),
       ...(typeof record.baseUrl === "string" && record.baseUrl.trim() ? { baseUrl: record.baseUrl.trim() } : {}),
-      ...(typeof record.apiKey === "string" && record.apiKey ? { apiKey: record.apiKey } : {}),
+      ...(!credentialRef && typeof record.apiKey === "string" && record.apiKey ? { apiKey: record.apiKey } : {}),
       ...(typeof record.reasoningEffort === "string" && record.reasoningEffort.trim() ? { reasoningEffort: record.reasoningEffort.trim() } : {}),
       ...(typeof record.skillId === "string" && record.skillId.trim() ? { skillId: record.skillId.trim() } : {}),
       ...(typeof record.endpoint === "string" && record.endpoint.trim() ? { endpoint: record.endpoint.trim() } : {}),

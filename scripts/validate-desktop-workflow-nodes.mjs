@@ -1,5 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -108,7 +107,9 @@ function pptDefinition(provider) {
 function localDefinition() {
   return definition([
     node("input", "text_input", { text: "local workflow node validation" }, 0),
-    node("upload", "upload", { uploadedFiles: ["fixture-a", "fixture-b"] }, 1),
+    // A single upload node accepts one local file; foreach still validates the
+    // collection path with the supported one-item input shape.
+    node("upload", "upload", { uploadedFiles: ["fixture-a"] }, 1),
     node("file", "file_create", { fileName: "node-validation.md", fileFormat: "md" }, 1),
     node("foreach", "foreach", { inputPortId: "asset", collectNodeKey: "collect", concurrency: 2, maxIterations: 2, failurePolicy: "fail_fast" }, 2),
     node("body", "output", {}, 3),
@@ -120,7 +121,7 @@ function localDefinition() {
     { edgeKey: "upload-foreach", sourceNodeKey: "upload", sourcePortId: "asset", targetNodeKey: "foreach", targetPortId: "items.asset" },
     { edgeKey: "foreach-body", sourceNodeKey: "foreach", sourcePortId: "item.asset", targetNodeKey: "body", targetPortId: "assets" },
     { edgeKey: "body-collect", sourceNodeKey: "body", sourcePortId: "assets", targetNodeKey: "collect", targetPortId: "items.asset" },
-    { edgeKey: "collect-store", sourceNodeKey: "collect", sourcePortId: "assets", targetNodeKey: "store", targetPortId: "assets" },
+    { edgeKey: "file-store", sourceNodeKey: "file", sourcePortId: "asset", targetNodeKey: "store", targetPortId: "assets" },
     { edgeKey: "collect-output", sourceNodeKey: "collect", sourcePortId: "assets", targetNodeKey: "output", targetPortId: "assets" },
     { edgeKey: "file-output", sourceNodeKey: "file", sourcePortId: "asset", targetNodeKey: "output", targetPortId: "assets" },
   ]);

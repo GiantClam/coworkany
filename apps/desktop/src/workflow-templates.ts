@@ -1,4 +1,4 @@
-import { hashWorkflowDefinition, type WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
+import { hashWorkflowDefinition, workflowNodeRegistry, type WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
 import type { DesktopProviderConfig } from "./provider-config";
 
 type DesktopVideoProvider = {
@@ -8,6 +8,33 @@ type DesktopVideoProvider = {
 };
 
 type DesktopLocale = "zh" | "en";
+
+/** Golden campaign template with real writer + image branches and one shared artifact sink. */
+export function buildCampaignImageWorkflowDefinition(prompt: string, imageProvider: TemplateProvider, locale: DesktopLocale = "zh"): WorkflowDefinitionEnvelope {
+  const text = workflowNodeRegistry.require("text_input");
+  const writer = workflowNodeRegistry.require("writer");
+  const image = workflowNodeRegistry.require("image_generate");
+  const store = workflowNodeRegistry.require("product_store");
+  const nodes: WorkflowDefinitionEnvelope["nodes"] = [
+    { nodeKey: "input", type: "text_input", nodeVersion: text.version, title: localized(locale, "任务输入", "Campaign brief"), positionX: 0, positionY: 176, config: { ...text.defaultConfig, text: prompt } },
+    { nodeKey: "copy", type: "writer", nodeVersion: writer.version, title: localized(locale, "生成营销文案", "Generate campaign copy"), positionX: 408, positionY: 0, config: { ...writer.defaultConfig, prompt } },
+    { nodeKey: "image", type: "image_generate", nodeVersion: image.version, title: localized(locale, "生成营销图片", "Generate campaign image"), positionX: 408, positionY: 352, config: { ...image.defaultConfig, ...providerConfig(imageProvider), prompt } },
+    { nodeKey: "asset-library", type: "product_store", nodeVersion: store.version, title: localized(locale, "保存到资产库", "Save to Asset Library"), positionX: 816, positionY: 176, config: { ...store.defaultConfig, title: localized(locale, "营销活动产物", "Campaign artifacts"), fileName: "campaign.md" } },
+  ];
+  const definition: WorkflowDefinitionEnvelope = {
+    schemaVersion: 2,
+    revision: 1,
+    definitionHash: "",
+    nodes,
+    edges: [
+      { edgeKey: "input-copy", sourceNodeKey: "input", sourcePortId: "text", targetNodeKey: "copy", targetPortId: "text" },
+      { edgeKey: "input-image", sourceNodeKey: "input", sourcePortId: "text", targetNodeKey: "image", targetPortId: "text" },
+      { edgeKey: "copy-store", sourceNodeKey: "copy", sourcePortId: "text", targetNodeKey: "asset-library", targetPortId: "text" },
+      { edgeKey: "image-store", sourceNodeKey: "image", sourcePortId: "image", targetNodeKey: "asset-library", targetPortId: "images" },
+    ],
+  };
+  return { ...definition, definitionHash: hashWorkflowDefinition(definition) };
+}
 
 /** Reads the user-facing prompt from canonical and legacy workflow inputs. */
 export function workflowPromptFromDefinition(definition: WorkflowDefinitionEnvelope): string {

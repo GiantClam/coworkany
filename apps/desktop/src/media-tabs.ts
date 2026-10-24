@@ -1,4 +1,4 @@
-import type { WorkbenchMediaFeature, WorkbenchMediaFeatureId } from "@coworkany/workbench-ui";
+import type { WorkbenchMediaFeature, WorkbenchMediaFeatureId } from "@coworkany/workbench-ui/desktop";
 import type { DesktopImageSettings } from "./image-model-parameters";
 
 export type DesktopMediaTabState = {

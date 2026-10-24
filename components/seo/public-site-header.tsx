@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import Image from "next/image"
 import { ChevronDown } from "lucide-react"
 
 import { useI18n } from "@/components/locale-provider"
@@ -45,12 +46,9 @@ export function PublicSiteHeader({ activeKey }: { activeKey?: PublicNavKey }) {
   return (
     <header className="relative z-50 border-b border-border/80 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/88">
       <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-6 py-4">
-        <Link href={homeHref} className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-[6px] border border-primary/50 bg-primary shadow-[inset_0_0_0_1px_rgba(0,0,0,0.15)]">
-            <span className="font-display text-lg font-extrabold uppercase tracking-[0.08em] text-primary-foreground">AI</span>
-          </div>
+        <Link href={homeHref} className="flex items-center gap-3" aria-label="Coworkany">
           <div className="min-w-0">
-            <div className="public-kicker text-muted-foreground/80">{copy.header.productName}</div>
+            <Image src="/brand/coworkany-logo.png" alt="Coworkany" width={1120} height={228} className="h-8 w-auto object-contain object-left" priority />
             <div className="mt-1 font-display text-base font-bold uppercase tracking-[0.03em] text-foreground">
               {copy.header.tagline}
             </div>

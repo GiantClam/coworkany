@@ -9,16 +9,21 @@ import type {
   WorkbenchKnowledgeResult,
   WorkbenchRunEvent,
   WorkbenchRunRequest,
+  WorkbenchPreviewData,
   WorkbenchUsage,
   WorkbenchWorkflow,
   WorkbenchWorkflowInput,
   WorkbenchConversationMessagesOptions,
   WorkflowAiCommand,
   WorkflowAiOperationGroup,
+  MetricsQueryFilters,
+  MetricsQueryResult,
+  RunMetrics,
+  RunMetricCount,
+  WorkbenchRunAttemptSummary,
 } from "@coworkany/workbench-client";
-import { applyWorkbenchRunEventToUIMessage, createDesktopRunTransport, createDesktopUIMessage, desktopUIMessageStorage, desktopUIMessageText, parseDesktopUIMessage } from "@coworkany/workbench-client";
+import { createDesktopRunTransport, createDesktopUIMessage, desktopUIMessageStorage, desktopUIMessageText, parseDesktopUIMessage } from "@coworkany/workbench-client";
 import type { DesktopUIMessage } from "@coworkany/workbench-client";
-import type { WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
 import type { TauriBridge } from "./tauri";
 import { promptRequestsArtifact } from "./artifact-intent";
 import { createQuestionBridge } from "./question-bridge";
@@ -31,24 +36,39 @@ type DesktopWorkflowAiOperationGroupRow = { id: string; conversation_id: string;
 type DesktopArtifactRow = { id: string; relative_path: string; mime_type: string; byte_length: number; sha256: string; created_at: string; available?: boolean };
 type DesktopRunRow = { id: string; conversation_id?: string | null; status: WorkbenchRun["status"] | string; model?: string | null; started_at: string; finished_at?: string | null };
 type DesktopRunDetail = { run: DesktopRunRow; nodes: Array<{ node_key: string; status: string; output_json?: string | null; updated_at: string }>; events: Array<{ sequence: number; event_type: string; payload_json: string; created_at: string }>; usage: Array<{ provider?: string | null; model: string; input_tokens?: number | null; output_tokens?: number | null; provider_cost?: number | null; estimated_cost?: number | null; created_at: string }> };
+type DesktopRunAttemptRow = { run_id?: unknown; node_key?: unknown; idempotency_key?: unknown; status?: unknown; provider_task_id?: unknown; updated_at?: unknown };
 type DesktopKnowledgeIndex = { generation: number; documents: number; chunks: number; indexPath: string; semantic: boolean; embeddingModel?: string; embeddingDimension?: number; watcher?: string };
 type DesktopKnowledgeResult = { chunkId: string; documentPath: string; heading?: string; excerpt: string; score?: number; lineStart?: number; lineEnd?: number };
+type DesktopMetricCount = { total: number; completed: number; failed: number; rejected: number; running?: number };
+type DesktopMetricNameCount = DesktopMetricCount & { name: string };
+type DesktopRunMetrics = {
+  runId: string;
+  provider?: string | null;
+  model?: string | null;
+  modelTools: DesktopMetricCount;
+  capabilities: DesktopMetricCount;
+  modelToolBreakdown?: DesktopMetricNameCount[];
+  capabilityBreakdown?: DesktopMetricNameCount[];
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  cachedInputTokens?: number | null;
+  reasoningTokens?: number | null;
+  providerCost?: number | null;
+  estimatedCost?: number | null;
+  completeness: RunMetrics["completeness"];
+};
+type DesktopMetricsQueryResult = Omit<MetricsQueryResult, "runs" | "nextCursor"> & { runs: Array<Omit<MetricsQueryResult["runs"][number], "metrics"> & { metrics: DesktopRunMetrics }>; nextCursor?: string | null };
 
 export type DesktopChatTransportOptions = {
   readonly resolveSessionId: (chatId: string) => Promise<string>;
   readonly resolveProvider: (message: DesktopUIMessage) => Record<string, unknown>;
-  readonly ensureSession?: (request: { readonly chatId: string; readonly sessionId: string; readonly provider: Record<string, unknown>; readonly message: DesktopUIMessage }) => Promise<string | { readonly sessionId: string; readonly recoveryContext?: string }>;
+  readonly ensureSession?: (request: { readonly chatId: string; readonly sessionId: string; readonly provider: Record<string, unknown>; readonly message: DesktopUIMessage; readonly conversationAgentId?: string }) => Promise<string | { readonly sessionId: string; readonly recoveryContext?: string }>;
+  readonly resolveConversationAgentId?: (message: DesktopUIMessage) => string | undefined;
   readonly resolveSkillId?: (message: DesktopUIMessage) => string | undefined;
   readonly resolvePrompt?: (message: DesktopUIMessage, prompt: string) => string;
   readonly resolveSystemPrompt?: (message: DesktopUIMessage) => string | undefined;
   readonly resolveAgentId?: (message: DesktopUIMessage) => string | undefined;
   readonly resolveAllowArtifacts?: (message: DesktopUIMessage) => boolean;
-  readonly onRunStarted?: (runId: string, chatId: string, message: DesktopUIMessage) => void;
-};
-
-export type DesktopWorkflowAiChatTransportOptions = {
-  readonly resolveProvider: (message: DesktopUIMessage) => Record<string, unknown>;
-  readonly resolvePrompt?: (message: DesktopUIMessage, prompt: string) => string;
   readonly onRunStarted?: (runId: string, chatId: string, message: DesktopUIMessage) => void;
 };
 
@@ -102,12 +122,11 @@ function toWorkbenchArtifact(row: DesktopArtifactRow): WorkbenchArtifact {
 }
 
 function readStoredUIMessage(row: DesktopMessageRow): DesktopUIMessage {
-  let parts: unknown = [];
+  let storedParts: unknown;
   let metadata: unknown;
-  try { parts = JSON.parse(row.parts_json ?? "[]"); } catch { parts = []; }
+  try { storedParts = JSON.parse(row.parts_json ?? "[]"); } catch { storedParts = []; }
   try { metadata = JSON.parse(row.metadata_json ?? "{}"); } catch { metadata = undefined; }
-  const storedParts = Array.isArray(parts) ? parts : [];
-  const parsed = parseDesktopUIMessage({ id: row.id, role: row.role === "system" || row.role === "tool" ? "assistant" : row.role, parts: storedParts, metadata });
+  const parsed = parseDesktopUIMessage({ id: row.id, role: row.role === "system" || row.role === "tool" ? "assistant" : row.role, parts: Array.isArray(storedParts) ? storedParts : [], metadata });
   const storageMetadata = {
     ...(parsed.metadata ?? {}),
     conversationId: parsed.metadata?.conversationId ?? row.conversation_id,
@@ -146,12 +165,48 @@ function toWorkbenchRunDetail(detail: DesktopRunDetail): WorkbenchRunDetail {
   };
 }
 
+function toWorkbenchRunAttempt(row: DesktopRunAttemptRow): WorkbenchRunAttemptSummary | null {
+  const statuses = ["queued", "running", "submitted", "download_failed"] as const;
+  if (typeof row.run_id !== "string" || !row.run_id || typeof row.node_key !== "string" || !row.node_key || typeof row.idempotency_key !== "string" || !row.idempotency_key || typeof row.provider_task_id !== "string" || !row.provider_task_id || typeof row.updated_at !== "string" || !row.updated_at || !statuses.includes(row.status as typeof statuses[number])) return null;
+  return { runId: row.run_id, nodeKey: row.node_key, idempotencyKey: row.idempotency_key, status: row.status as typeof statuses[number], providerTaskId: row.provider_task_id, updatedAt: row.updated_at };
+}
+
 function toWorkbenchKnowledgeIndex(value: DesktopKnowledgeIndex): WorkbenchKnowledgeIndex {
   return { generation: value.generation, documents: value.documents, chunks: value.chunks, indexPath: value.indexPath, semantic: value.semantic, embeddingModel: value.embeddingModel, embeddingDimension: value.embeddingDimension, watcher: value.watcher };
 }
 
 function toWorkbenchKnowledgeResult(value: DesktopKnowledgeResult): WorkbenchKnowledgeResult {
   return { chunkId: value.chunkId, documentPath: value.documentPath, heading: value.heading, excerpt: value.excerpt, score: typeof value.score === "number" ? value.score : 0, lineStart: value.lineStart, lineEnd: value.lineEnd };
+}
+
+function toMetricCount(count: DesktopMetricCount, byName: readonly DesktopMetricNameCount[] = []): RunMetricCount {
+  return {
+    total: count.total,
+    completed: count.completed,
+    failed: count.failed,
+    rejected: count.rejected,
+    running: count.running ?? Math.max(0, count.total - count.completed - count.failed - count.rejected),
+    byName: byName.map((item) => ({ ...item, running: item.running ?? Math.max(0, item.total - item.completed - item.failed - item.rejected) })),
+  };
+}
+
+function toRunMetrics(value: DesktopRunMetrics): RunMetrics {
+  return {
+    runId: value.runId,
+    ...(value.provider ? { provider: value.provider } : {}),
+    ...(value.model ? { model: value.model } : {}),
+    modelTools: toMetricCount(value.modelTools, value.modelToolBreakdown),
+    capabilities: toMetricCount(value.capabilities, value.capabilityBreakdown),
+    tokens: {
+      ...(value.inputTokens == null ? {} : { input: value.inputTokens }),
+      ...(value.outputTokens == null ? {} : { output: value.outputTokens }),
+      ...(value.cachedInputTokens == null ? {} : { cachedInput: value.cachedInputTokens }),
+      ...(value.reasoningTokens == null ? {} : { reasoning: value.reasoningTokens }),
+    },
+    ...(value.providerCost == null ? {} : { providerCost: value.providerCost }),
+    ...(value.estimatedCost == null ? {} : { estimatedCost: value.estimatedCost }),
+    completeness: value.completeness,
+  };
 }
 
 export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: WorkbenchClient["navigation"]): WorkbenchClient & { readonly questions: WorkbenchQuestionClient } {
@@ -162,8 +217,7 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
     let dispose: (() => void) | undefined;
     try {
       let resolveResponse: (value: Record<string, unknown>) => void = () => undefined;
-      let rejectResponse: (error: unknown) => void = () => undefined;
-      const response = new Promise<Record<string, unknown>>((resolve, reject) => { resolveResponse = resolve; rejectResponse = reject; });
+      const response = new Promise<Record<string, unknown>>((resolve) => { resolveResponse = resolve; });
       // Await listener registration before host_send so a fast local response
       // cannot be lost between the two IPC calls.
       dispose = await bridge.listen<{ raw: string }>("desktop://runtime-response", (event) => {
@@ -186,6 +240,17 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
     }
   }
 
+  const metrics = {
+    async getRun(runId: string): Promise<RunMetrics> {
+      return toRunMetrics(await bridge.invoke<DesktopRunMetrics>("get_run_metrics", { runId }));
+    },
+    async query(filters: MetricsQueryFilters): Promise<MetricsQueryResult> {
+      const result = await bridge.invoke<DesktopMetricsQueryResult>("query_metrics", { filters });
+      const { nextCursor, ...base } = result;
+      return { ...base, runs: result.runs.map((row) => ({ ...row, metrics: toRunMetrics(row.metrics) })), ...(nextCursor ? { nextCursor } : {}) };
+    },
+  };
+
   const conversations = {
     async list(): Promise<readonly WorkbenchConversation[]> {
       const rows = await bridge.invoke<DesktopConversationRow[]>("list_conversations");
@@ -204,7 +269,18 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
         input.beforeId = options.before.id;
       }
       const rows = await bridge.invoke<DesktopMessageRow[]>("list_messages", input);
-      return rows.map(readStoredUIMessage);
+      return Promise.all(rows.map(async (row) => {
+        const message = readStoredUIMessage(row);
+        const runId = message.metadata?.runId;
+        if (message.role !== "assistant" || !runId) return message;
+        try {
+          const runMetrics = await metrics.getRun(runId);
+          const parts = message.parts.filter((part) => part.type !== "data-runMetrics");
+          return { ...message, parts: [...parts, { type: "data-runMetrics", id: `run-metrics:${runId}`, data: runMetrics }] } as DesktopUIMessage;
+        } catch {
+          return message;
+        }
+      }));
     },
   };
 
@@ -243,7 +319,7 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
   const runs = {
     async start(request: WorkbenchRunRequest): Promise<WorkbenchRun> {
       const run = { id: request.id ?? makeId("run"), conversationId: request.conversationId ?? "", status: "queued" as const, startedAt: new Date().toISOString() };
-      await bridge.invoke("create_run", { runId: run.id, conversationId: request.conversationId || null, model: request.model ?? null });
+      await bridge.invoke("create_run", { runId: run.id, conversationId: request.conversationId || null, model: request.model ?? null, source: request.source ?? "conversation", assistantMessageId: request.assistantMessageId ?? null });
       return run;
     },
     async list(): Promise<readonly WorkbenchRun[]> {
@@ -261,7 +337,10 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
     },
     subscribe(runId: string, onEvent: (event: WorkbenchRunEvent) => void) {
       let dispose: (() => void) | undefined;
+      let disposed = false;
+      const activeToolCallIds = new Map<string, string>();
       void bridge.listen<{ raw: string }>("desktop://runtime-response", (payload) => {
+        if (disposed) return;
         try {
           const separator = payload.raw.indexOf(":");
           const frame = JSON.parse(payload.raw.slice(separator + 1)) as { data?: { event?: Record<string, unknown> } };
@@ -274,8 +353,9 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
           if (event.event === "text_delta") onEvent({ type: "text", delta: String(event.delta ?? ""), ...metadata });
           else if (event.event === "reasoning_delta") onEvent({ type: "reasoning", delta: String(event.delta ?? ""), ...metadata });
           else if (event.event === "runtime_warning") onEvent({ type: "warning", code: String(event.code ?? "runtime_warning"), message: String(event.message ?? "Runtime warning"), ...metadata });
-          else if (event.event === "usage") onEvent({ type: "usage", usage: { runId, provider: typeof event.provider === "string" ? event.provider : undefined, model: String(event.model ?? "unknown"), inputTokens: Number(event.inputTokens ?? 0), outputTokens: Number(event.outputTokens ?? 0), providerCost: typeof event.costUsd === "number" ? event.costUsd : undefined }, ...metadata });
+          else if (event.event === "usage") onEvent({ type: "usage", usage: { runId, usageId: typeof event.usageId === "string" ? event.usageId : undefined, provider: typeof event.provider === "string" ? event.provider : undefined, model: String(event.model ?? "unknown"), inputTokens: typeof event.inputTokens === "number" ? event.inputTokens : undefined, outputTokens: typeof event.outputTokens === "number" ? event.outputTokens : undefined, cachedInputTokens: typeof event.cachedInputTokens === "number" ? event.cachedInputTokens : undefined, reasoningTokens: typeof event.reasoningTokens === "number" ? event.reasoningTokens : undefined, providerCost: typeof event.costUsd === "number" ? event.costUsd : undefined, aggregation: event.aggregation === "snapshot" ? "snapshot" : "delta", scope: event.scope === "run" ? "run" : "step" }, ...metadata });
           else if (event.event === "artifact" && event.artifact && typeof event.artifact === "object") onEvent({ type: "artifact", artifact: event.artifact as WorkbenchArtifact, ...metadata });
+          else if (event.event === "preview" && event.preview && typeof event.preview === "object") onEvent({ type: "preview", preview: event.preview as WorkbenchPreviewData, ...metadata });
           else if (event.event === "done") onEvent({ type: "status", status: "succeeded", ...metadata });
           else if (event.event === "runtime_error") {
             const code = String(event.code ?? "");
@@ -300,11 +380,43 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
           else if (event.event === "attachment" && event.attachment && typeof event.attachment === "object") onEvent({ type: "attachment", attachment: event.attachment as { id: string; name: string; mediaType: string; uri?: string; status?: "queued" | "uploading" | "ready" | "failed" }, ...metadata });
           else if (event.event === "tool_event") {
             const phase = event.phase === "completed" || event.phase === "failed" ? event.phase : "started";
-            onEvent({ type: "tool", tool: String(event.tool ?? "tool"), phase, message: typeof event.message === "string" ? event.message : undefined, ...metadata });
+            const toolName = String(event.tool ?? "tool");
+            const explicitCallId = typeof event.toolCallId === "string" ? event.toolCallId : typeof event.callId === "string" ? event.callId : undefined;
+            const toolCallId = explicitCallId ?? activeToolCallIds.get(toolName) ?? `${toolName}:${metadata.sequence ?? "active"}`;
+            if (phase === "started") activeToolCallIds.set(toolName, toolCallId);
+            else activeToolCallIds.delete(toolName);
+            let detail: Record<string, unknown> = {};
+            if (typeof event.message === "string") {
+              try {
+                const parsed: unknown = JSON.parse(event.message);
+                if (parsed && typeof parsed === "object") detail = parsed as Record<string, unknown>;
+              } catch { /* optional legacy tool detail */ }
+            }
+            onEvent({
+              type: "tool_call",
+              toolName,
+              toolCallId,
+              phase,
+              input: detail.args ?? detail.input,
+              output: detail.result ?? detail.output,
+              error: phase === "failed" && typeof event.message === "string" ? event.message : undefined,
+              ...metadata,
+            });
           }
         } catch { /* malformed frames remain in host diagnostics */ }
-      }).then((unlisten) => { dispose = unlisten; }).catch(() => undefined);
-      return () => dispose?.();
+      }).then((unlisten) => {
+        if (disposed) unlisten();
+        else dispose = unlisten;
+      }).catch(() => undefined);
+      return () => {
+        disposed = true;
+        dispose?.();
+        dispose = undefined;
+      };
+    },
+    async recoverableAttempts(): Promise<readonly WorkbenchRunAttemptSummary[]> {
+      const rows = await bridge.invoke<DesktopRunAttemptRow[]>("list_recoverable_attempts");
+      return rows.map(toWorkbenchRunAttempt).filter((row): row is WorkbenchRunAttemptSummary => row !== null);
     },
   };
 
@@ -352,6 +464,7 @@ export function createDesktopWorkbenchClient(bridge: TauriBridge, navigation: Wo
         return [{ runId: conversationId ?? "summary", model: "local", inputTokens: summary.input_tokens, outputTokens: summary.output_tokens, providerCost: summary.provider_cost, estimatedCost: summary.estimated_cost }];
       },
     },
+    metrics,
   };
 }
 
@@ -367,13 +480,13 @@ export function createDesktopChatTransport(bridge: TauriBridge, workbenchClient:
       const runId = makeId("run");
       const provider = options.resolveProvider(message);
       const requestedSessionId = await options.resolveSessionId(chatId);
-      const ensuredSession = options.ensureSession ? await options.ensureSession({ chatId, sessionId: requestedSessionId, provider, message }) : requestedSessionId;
+      const ensuredSession = options.ensureSession ? await options.ensureSession({ chatId, sessionId: requestedSessionId, provider, message, conversationAgentId: options.resolveConversationAgentId?.(message) }) : requestedSessionId;
       const sessionId = typeof ensuredSession === "string" ? ensuredSession : ensuredSession.sessionId;
       const resolvedProviderId = typeof provider.id === "string" ? provider.id : undefined;
       const resolvedModelId = typeof provider.model === "string" ? provider.model : undefined;
       if (message.metadata?.providerId && resolvedProviderId && message.metadata.providerId !== resolvedProviderId) throw new Error("desktop_transport_provider_changed");
       if (message.metadata?.modelId && resolvedModelId && message.metadata.modelId !== resolvedModelId) throw new Error("desktop_transport_model_changed");
-      await bridge.invoke("create_run", { runId, conversationId: chatId, model: message.metadata?.modelId ?? null });
+      await bridge.invoke("create_run", { runId, conversationId: chatId, model: message.metadata?.modelId ?? null, source: message.metadata?.capability === "ppt" || message.metadata?.route?.includes("executive-ppt") ? "ppt" : message.metadata?.route?.includes("agent") ? "agent" : "conversation", assistantMessageId: `assistant-${runId}` });
       const stored = desktopUIMessageStorage(message);
       await bridge.invoke("append_message", { input: { id: message.id, conversation_id: chatId, role: "user", content: stored.content, parts_json: stored.parts_json, metadata_json: stored.metadata_json, created_at: message.metadata?.createdAt ?? new Date().toISOString() } });
       options.onRunStarted?.(runId, chatId, message);
@@ -400,62 +513,6 @@ export function createDesktopChatTransport(bridge: TauriBridge, workbenchClient:
       return { runId };
     },
     subscribe: workbenchClient.runs.subscribe,
-    stop: workbenchClient.runs.cancel,
-  });
-}
-
-/**
- * Workflow AI uses a direct Provider request with no OpenCode tool catalog.
- * The renderer accepts only the structured workflow envelope and executes it
- * through the local allowlisted controller.
- */
-export function createDesktopWorkflowAiChatTransport(bridge: TauriBridge, workbenchClient: WorkbenchClient, options: DesktopWorkflowAiChatTransportOptions) {
-  const conversationsByRun = new Map<string, string>();
-  const assistantMessages = new Map<string, DesktopUIMessage>();
-  return createDesktopRunTransport({
-    start: async ({ chatId, message, prompt }) => {
-      const runId = makeId("workflow-ai-run");
-      const provider = options.resolveProvider(message);
-      const resolvedProviderId = typeof provider.id === "string" ? provider.id : undefined;
-      const resolvedModelId = typeof provider.model === "string" ? provider.model : undefined;
-      if (message.metadata?.providerId && resolvedProviderId && message.metadata.providerId !== resolvedProviderId) throw new Error("desktop_transport_provider_changed");
-      if (message.metadata?.modelId && resolvedModelId && message.metadata.modelId !== resolvedModelId) throw new Error("desktop_transport_model_changed");
-      await bridge.invoke("create_conversation", { input: { id: chatId, title: "Workflow AI", project_id: null, agent_id: "workflow-ai" } });
-      await bridge.invoke("create_run", { runId, conversationId: chatId, model: resolvedModelId ?? null });
-      const stored = desktopUIMessageStorage(message);
-      await bridge.invoke("append_message", { input: { id: message.id, conversation_id: chatId, role: "user", content: stored.content, parts_json: stored.parts_json, metadata_json: stored.metadata_json, created_at: message.metadata?.createdAt ?? new Date().toISOString() } });
-      options.onRunStarted?.(runId, chatId, message);
-      await bridge.invoke("host_start");
-      await bridge.invoke("host_send", { message: {
-        version: 1,
-        requestId: runId,
-        runId,
-        type: "workflow.ai",
-        payload: {
-          prompt: options.resolvePrompt?.(message, prompt) ?? prompt,
-          model: resolvedModelId,
-          provider,
-        },
-      } });
-      conversationsByRun.set(runId, chatId);
-      assistantMessages.set(runId, createDesktopUIMessage({ id: `assistant-${runId}`, role: "assistant", conversationId: chatId, runId, providerId: resolvedProviderId, modelId: resolvedModelId }));
-      return { runId };
-    },
-    subscribe(runId, onEvent) {
-      return workbenchClient.runs.subscribe(runId, (event) => {
-        onEvent(event);
-        const current = assistantMessages.get(runId);
-        if (current) assistantMessages.set(runId, applyWorkbenchRunEventToUIMessage(current, event));
-        if (event.type !== "status" || !["succeeded", "failed", "cancelled", "interrupted"].includes(event.status)) return;
-        const completed = assistantMessages.get(runId);
-        const conversationId = conversationsByRun.get(runId);
-        assistantMessages.delete(runId);
-        conversationsByRun.delete(runId);
-        if (!completed || !conversationId) return;
-        const stored = desktopUIMessageStorage(completed);
-        void bridge.invoke("append_message", { input: { id: completed.id, conversation_id: conversationId, role: "assistant", content: stored.content, parts_json: stored.parts_json, metadata_json: stored.metadata_json, created_at: completed.metadata?.createdAt ?? new Date().toISOString() } }).catch(() => undefined);
-      });
-    },
     stop: workbenchClient.runs.cancel,
   });
 }

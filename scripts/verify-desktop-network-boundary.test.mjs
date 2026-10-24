@@ -23,6 +23,13 @@ test("desktop network boundary allows the approved provider catalog default", ()
   ]), []);
 });
 
+test("CheapBuddy permits only its fixed account and Relay origins", () => {
+  assert.deepEqual(scanDesktopNetworkBoundary([{ filePath: "cheapbuddy.js", source: "https://api.cheapbuddy.cc/v1 https://cheapbuddy.cc/#pricing" }]), []);
+  for (const source of ["https://evil.cheapbuddy.cc/", "https://cheapbuddy.cc.evil.example/", "https://api.cheapbuddy.cc.evil.example/"]) {
+    assert.equal(scanDesktopNetworkBoundary([{ filePath: "unapproved.js", source }]).length, 1);
+  }
+});
+
 test("desktop network boundary ignores library documentation and XML namespace URLs", () => {
   assert.deepEqual(scanDesktopNetworkBoundary([
     { filePath: "fixture.js", source: "https://react.dev/errors/1 https://github.com/org/repo https://radix-ui.com/primitives/docs/components/dialog http://www.w3.org/2000/svg" },

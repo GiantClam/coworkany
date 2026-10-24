@@ -1,0 +1,14 @@
+:root { font-size: 16px; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif; }
+html, body, #root { width: 100%; height: 100%; min-width: 0; min-height: 0; margin: 0; }
+.tool-activity-shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; color: var(--foreground); background: var(--background); }
+.tool-activity-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 64px; padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.tool-activity-controls button { border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; color: var(--foreground); background: var(--card); cursor: pointer; }
+.tool-activity-controls button[aria-pressed="true"] { border-color: var(--primary); background: var(--muted); }
+.tool-activity-controls output { font-variant-numeric: tabular-nums; }
+.tool-activity-stage { flex: 1; width: min(820px, 100%); min-height: 0; margin: 0 auto; }
+.tool-activity-stage.narrow-stage { width: 390px; max-width: 100%; }
+.tool-activity-stage .wb-ai-message-surface { height: 100%; min-height: 0; }
+.tool-activity-shell.reduced-motion *, .tool-activity-shell.reduced-motion *::before, .tool-activity-shell.reduced-motion *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+.tool-activity-controls textarea { width: min(320px, 100%); min-height: 32px; height: 32px; max-width: 100%; box-sizing: border-box; resize: horizontal; }
+.tool-activity-controls textarea[data-testid="native-verification-metrics"] { width: min(420px, 100%); min-height: 96px; height: 96px; resize: both; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+html[data-fixture-presentation="true"] .tool-activity-controls { display: none; }

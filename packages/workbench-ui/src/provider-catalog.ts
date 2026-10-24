@@ -14,6 +14,7 @@ export type WorkbenchProviderDescriptor = {
 
 export const WORKBENCH_PROVIDER_CATALOG: Readonly<Record<WorkbenchProviderCategory, readonly WorkbenchProviderDescriptor[]>> = {
   text_generation: [
+    { providerId: "cheapbuddy", providerLabel: "CheapBuddy", integrationLabel: "CheapBuddy Relay", models: [] },
     { providerId: "siliconflow", providerLabel: "硅基流动", integrationLabel: "SiliconFlow API", models: ["deepseek-ai/DeepSeek-V3", "Qwen/Qwen2.5-72B-Instruct"] },
     { providerId: "openrouter", providerLabel: "OpenRouter", integrationLabel: "OpenRouter API", models: ["x-ai/grok-4.5"] },
     { providerId: "openai_compatible", providerLabel: "OpenAI Compatible", integrationLabel: "Compatible API", models: [] },
@@ -23,6 +24,7 @@ export const WORKBENCH_PROVIDER_CATALOG: Readonly<Record<WorkbenchProviderCatego
     { providerId: "volcengine_official", providerLabel: "火山引擎", integrationLabel: "Volcengine Ark API", models: ["doubao-1-5-pro-32k-250115", "deepseek-v3-2-251201"] },
   ],
   image_generation: [
+    { providerId: "cheapbuddy", providerLabel: "CheapBuddy", integrationLabel: "CheapBuddy Relay", models: [] },
     { providerId: "bailian_official", providerLabel: "阿里云百炼", integrationLabel: "Bailian Singapore API", models: ["qwen-image-3.0-pro", "qwen-image-2.7"] },
     { providerId: "google_official", providerLabel: "Google", integrationLabel: "Official API", models: ["Nanobanana2"] },
     { providerId: "openai_official", providerLabel: "OpenAI", integrationLabel: "Official API", models: ["gpt-image-2"] },
@@ -30,6 +32,7 @@ export const WORKBENCH_PROVIDER_CATALOG: Readonly<Record<WorkbenchProviderCatego
     { providerId: "runninghub", providerLabel: "RunningHub", integrationLabel: "RunningHub API", models: ["seedream-v5-text-to-image", "seedream-v5-image-to-image"] },
   ],
   video_generation: [
+    { providerId: "cheapbuddy", providerLabel: "CheapBuddy", integrationLabel: "CheapBuddy Relay", models: [] },
     { providerId: "bailian_official", providerLabel: "阿里云百炼", integrationLabel: "Bailian API", models: ["happyhorse-1.1-t2v", "happyhorse-1.1-i2v", "happyhorse-1.1-r2v", "happyhorse-1.0-video-edit"] },
     { providerId: "minimax_official", providerLabel: "MiniMax 海螺", integrationLabel: "Official API", models: ["MiniMax-Hailuo-2.3", "MiniMax-Hailuo-2.3-Fast"] },
     { providerId: "gemini_official", providerLabel: "Gemini", integrationLabel: "Official API", models: ["Veo 3.1"] },

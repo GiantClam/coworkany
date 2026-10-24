@@ -91,6 +91,8 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Install pinned OpenCode CLI for Windows packages
+        run: npm install --global --no-audit --no-fund opencode-ai@1.18.31
       - name: Validate Windows application
         env:
           TAURI_CONFIG: '{"bundle":{"resources":[]}}'
@@ -221,6 +223,10 @@ jobs:
           else
             pnpm --filter @coworkany/desktop exec tauri build --config ${{ matrix.tauri_config }} --target ${{ matrix.rust_target }} --bundles app
           fi
+      - name: Validate virtual office release assets and lazy renderer
+        run: |
+          pnpm --filter @coworkany/desktop verify:virtual-office-assets
+          pnpm --filter @coworkany/desktop verify:virtual-office-bundle
       - name: Sign, notarize and package macOS release
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
