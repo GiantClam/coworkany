@@ -5,18 +5,23 @@ import { readFile, realpath } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 import { dirname, isAbsolute, relative, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import sharp from "sharp";
 
 export const ASSET_ERROR_CODES = Object.freeze({
   missing: "asset_missing",
   pathEscape: "asset_path_escape",
   hashMismatch: "asset_hash_mismatch",
   framesEmpty: "asset_frames_empty",
+  formatInvalid: "asset_format_invalid",
+  alphaInvalid: "asset_alpha_invalid",
+  rigInvalid: "asset_rig_invalid",
   idInvalid: "asset_id_invalid",
   duplicateId: "asset_id_duplicate",
   budgetExceeded: "asset_budget_exceeded",
 });
 
 export const OFFICE_ASSET_GZIP_BUDGET_BYTES = 2_500_000;
+export const OFFICE_RIG_CLIPS = Object.freeze(["idle", "walk", "work", "thinking", "waiting", "completed", "error"]);
 
 function error(code, message) {
   return { code, message };
@@ -58,6 +63,8 @@ export async function validateManifest({ rootDir, manifestPath = resolve(rootDir
   const realRoot = await realpath(root);
   const ids = new Set();
   const errors = [];
+  const imageMetadata = new Map();
+  const gzipMetadata = new Map();
   let gzipBytes = 0;
   for (const asset of manifest.assets) {
     const id = asset?.id;
@@ -85,8 +92,9 @@ export async function validateManifest({ rootDir, manifestPath = resolve(rootDir
       continue;
     }
     let bytes;
+    let realAssetPath;
     try {
-      const realAssetPath = await realpath(assetPath);
+      realAssetPath = await realpath(assetPath);
       const realEscaped = relative(realRoot, realAssetPath);
       if (isAbsolute(realEscaped) || realEscaped === ".." || realEscaped.split(/[\\/]/u).includes("..")) {
         errors.push(error(ASSET_ERROR_CODES.pathEscape, `asset path escapes v1 directory: ${asset.path}`));
@@ -97,20 +105,56 @@ export async function validateManifest({ rootDir, manifestPath = resolve(rootDir
       errors.push(error(ASSET_ERROR_CODES.missing, `asset file missing: ${asset.path}`));
       continue;
     }
-    const dimensions = isJsonAsset(asset) ? null : webpDimensions(bytes);
+    // WebP dimensions can be read without decoding, while PNG (the approved
+    // chair sprite) is decoded through sharp below.  Keep this nullable so a
+    // malformed image still reports an integrity error instead of throwing.
+    let dimensions = isJsonAsset(asset) || asset.format !== "webp" ? null : webpDimensions(bytes);
     const hash = createHash("sha256").update(bytes).digest("hex");
     let contentInvalid = false;
+    let alphaInvalid = false;
+    let rigInvalid = false;
     if (isJsonAsset(asset)) {
+      if (asset.format !== "json") errors.push(error(ASSET_ERROR_CODES.formatInvalid, `JSON asset format is invalid: ${asset.path}`));
       try {
-        JSON.parse(bytes.toString("utf8"));
+        const value = JSON.parse(bytes.toString("utf8"));
+        if (asset.id === "rig") {
+          const clips = value && typeof value === "object" && !Array.isArray(value) ? value.clips : undefined;
+          const clipNames = clips && typeof clips === "object" && !Array.isArray(clips) ? Object.keys(clips) : [];
+          const manifestClips = Array.isArray(asset.clips) ? asset.clips : asset.frames;
+          const manifestClipsValid = manifestClips.length === OFFICE_RIG_CLIPS.length && OFFICE_RIG_CLIPS.every((clip, index) => manifestClips[index] === clip);
+          rigInvalid = !manifestClipsValid || clipNames.length !== OFFICE_RIG_CLIPS.length || OFFICE_RIG_CLIPS.some((clip) => !clipNames.includes(clip));
+        }
       } catch {
         contentInvalid = true;
       }
     } else {
-      contentInvalid = !dimensions || dimensions.width !== asset.width || dimensions.height !== asset.height;
+      if (asset.format !== "webp" && asset.format !== "png") errors.push(error(ASSET_ERROR_CODES.formatInvalid, `image format is invalid: ${asset.path}`));
+      if (asset.hasAlpha !== true) alphaInvalid = true;
+      try {
+        const cacheKey = realAssetPath;
+        let metadata = imageMetadata.get(cacheKey);
+        if (!metadata) {
+          metadata = await sharp(bytes).metadata();
+          imageMetadata.set(cacheKey, metadata);
+        }
+        if (!dimensions) dimensions = { width: metadata.width, height: metadata.height };
+        contentInvalid = !dimensions || dimensions.width !== asset.width || dimensions.height !== asset.height;
+        contentInvalid ||= metadata.format !== asset.format;
+        alphaInvalid ||= metadata.hasAlpha !== true;
+        contentInvalid ||= metadata.width !== asset.width || metadata.height !== asset.height;
+      } catch {
+        contentInvalid = true;
+      }
     }
     if (hash !== asset.sha256 || contentInvalid) errors.push(error(ASSET_ERROR_CODES.hashMismatch, `asset integrity mismatch: ${asset.path}`));
-    gzipBytes += gzipSync(bytes).byteLength;
+    if (alphaInvalid) errors.push(error(ASSET_ERROR_CODES.alphaInvalid, `asset must be an RGBA/alpha-capable image: ${asset.path}`));
+    if (rigInvalid) errors.push(error(ASSET_ERROR_CODES.rigInvalid, `rig clips are invalid: ${asset.path}`));
+    let compressedBytes = gzipMetadata.get(hash);
+    if (compressedBytes === undefined) {
+      compressedBytes = gzipSync(bytes).byteLength;
+      gzipMetadata.set(hash, compressedBytes);
+    }
+    gzipBytes += compressedBytes;
   }
   if (gzipBytes > OFFICE_ASSET_GZIP_BUDGET_BYTES) errors.push(error(ASSET_ERROR_CODES.budgetExceeded, `gzip budget exceeded: ${gzipBytes} > ${OFFICE_ASSET_GZIP_BUDGET_BYTES}`));
   return { ok: errors.length === 0, errors, gzipBytes };

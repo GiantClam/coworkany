@@ -59,6 +59,12 @@
       "sha256": "a3c57e5651bb5d0e86892d527619557a646788b6d4a6802685d71a6a38f70707"
     },
     {
+      "path": "office-chair-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "sha256": "a5fe477fc79c8c4649cb349481b4fdf16900ff746df54c3ee8036a45fb9f6c1b"
+    },
+    {
       "path": "character-ai-chat-turnaround-v1.png",
       "width": 1536,
       "height": 1024,
@@ -133,8 +139,8 @@
       "path": "characters.webp",
       "purpose": "back-facing character skin atlas",
       "format": "webp",
-      "width": 896,
-      "height": 128,
+      "width": 1792,
+      "height": 256,
       "hasAlpha": true,
       "frames": [
         "back"
@@ -149,69 +155,69 @@
         "video-producer"
       ],
       "cell": {
-        "width": 128,
-        "height": 128
+        "width": 256,
+        "height": 256
       },
       "regions": [
         {
           "roleId": "ai-chat",
           "x": 0,
           "y": 0,
-          "width": 128,
-          "height": 128
+          "width": 256,
+          "height": 256
         },
         {
           "roleId": "agent-center",
-          "x": 128,
+          "x": 256,
           "y": 0,
-          "width": 128,
-          "height": 128
+          "width": 256,
+          "height": 256
         },
         {
           "roleId": "ppt-expert",
-          "x": 256,
+          "x": 512,
           "y": 0,
-          "width": 128,
-          "height": 128
+          "width": 256,
+          "height": 256
         },
         {
           "roleId": "workflow-operator",
-          "x": 384,
+          "x": 768,
           "y": 0,
-          "width": 128,
-          "height": 128
+          "width": 256,
+          "height": 256
         },
         {
           "roleId": "writer",
-          "x": 512,
+          "x": 1024,
           "y": 0,
-          "width": 128,
-          "height": 128
+          "width": 256,
+          "height": 256
         },
         {
           "roleId": "image-creator",
-          "x": 640,
+          "x": 1280,
           "y": 0,
-          "width": 128,
-          "height": 128
+          "width": 256,
+          "height": 256
         },
         {
           "roleId": "video-producer",
-          "x": 768,
+          "x": 1536,
           "y": 0,
-          "width": 128,
-          "height": 128
+          "width": 256,
+          "height": 256
         }
       ],
-      "sha256": "8eca06b598b9fb142f0d8e1280cc75b65919921057447622e7636469d28d9826"
+      "sha256": "8ae59075b57e02db2992f9f520f72bec677bdeef0352ba184a63243c493e587e"
     },
     {
       "id": "workstations",
       "path": "workstations.webp",
       "purpose": "workstation shell atlas",
       "format": "webp",
-      "width": 896,
-      "height": 288,
+      "width": 1792,
+      "height": 576,
       "hasAlpha": true,
       "frames": [
         "available",
@@ -233,8 +239,8 @@
         "video-producer"
       ],
       "cell": {
-        "width": 128,
-        "height": 96
+        "width": 256,
+        "height": 192
       },
       "regions": [
         {
@@ -242,179 +248,179 @@
           "state": "available",
           "x": 0,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "agent-center",
           "state": "available",
-          "x": 128,
+          "x": 256,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "ppt-expert",
           "state": "available",
-          "x": 256,
+          "x": 512,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "workflow-operator",
           "state": "available",
-          "x": 384,
+          "x": 768,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "writer",
           "state": "available",
-          "x": 512,
+          "x": 1024,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "image-creator",
           "state": "available",
-          "x": 640,
+          "x": 1280,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "video-producer",
           "state": "available",
-          "x": 768,
+          "x": 1536,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "ai-chat",
           "state": "active",
           "x": 0,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "agent-center",
           "state": "active",
-          "x": 128,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 256,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "ppt-expert",
           "state": "active",
-          "x": 256,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 512,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "workflow-operator",
           "state": "active",
-          "x": 384,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 768,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "writer",
           "state": "active",
-          "x": 512,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 1024,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "image-creator",
           "state": "active",
-          "x": 640,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 1280,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "video-producer",
           "state": "active",
-          "x": 768,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 1536,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "ai-chat",
           "state": "offline",
           "x": 0,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "agent-center",
           "state": "offline",
-          "x": 128,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 256,
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "ppt-expert",
           "state": "offline",
-          "x": 256,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 512,
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "workflow-operator",
           "state": "offline",
-          "x": 384,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 768,
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "writer",
           "state": "offline",
-          "x": 512,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 1024,
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "image-creator",
           "state": "offline",
-          "x": 640,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 1280,
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "video-producer",
           "state": "offline",
-          "x": 768,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 1536,
+          "y": 384,
+          "width": 256,
+          "height": 192
         }
       ],
-      "sha256": "65a54d1ea2ec11dcd7fa7044f8c876d5b2b339a6d54868311a0aad123c316b78"
+      "sha256": "913c782c5fee30a254c42d8764d94b10397b12e7277be516d9e620579e08238e"
     },
     {
       "id": "workstations-front",
       "path": "workstations-front.webp",
       "purpose": "workstation front-edge atlas",
       "format": "webp",
-      "width": 896,
-      "height": 288,
+      "width": 1792,
+      "height": 576,
       "hasAlpha": true,
       "frames": [
         "available",
@@ -436,8 +442,8 @@
         "video-producer"
       ],
       "cell": {
-        "width": 128,
-        "height": 96
+        "width": 256,
+        "height": 192
       },
       "regions": [
         {
@@ -445,171 +451,193 @@
           "state": "available",
           "x": 0,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "agent-center",
           "state": "available",
-          "x": 128,
+          "x": 256,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "ppt-expert",
           "state": "available",
-          "x": 256,
+          "x": 512,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "workflow-operator",
           "state": "available",
-          "x": 384,
+          "x": 768,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "writer",
           "state": "available",
-          "x": 512,
+          "x": 1024,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "image-creator",
           "state": "available",
-          "x": 640,
+          "x": 1280,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "video-producer",
           "state": "available",
-          "x": 768,
+          "x": 1536,
           "y": 0,
-          "width": 128,
-          "height": 96
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "ai-chat",
           "state": "active",
           "x": 0,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "agent-center",
           "state": "active",
-          "x": 128,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 256,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "ppt-expert",
           "state": "active",
-          "x": 256,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 512,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "workflow-operator",
           "state": "active",
-          "x": 384,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 768,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "writer",
           "state": "active",
-          "x": 512,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 1024,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "image-creator",
           "state": "active",
-          "x": 640,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 1280,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "video-producer",
           "state": "active",
-          "x": 768,
-          "y": 96,
-          "width": 128,
-          "height": 96
+          "x": 1536,
+          "y": 192,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "ai-chat",
           "state": "offline",
           "x": 0,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "agent-center",
           "state": "offline",
-          "x": 128,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 256,
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "ppt-expert",
           "state": "offline",
-          "x": 256,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 512,
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "workflow-operator",
           "state": "offline",
-          "x": 384,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 768,
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "writer",
           "state": "offline",
-          "x": 512,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 1024,
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "image-creator",
           "state": "offline",
-          "x": 640,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 1280,
+          "y": 384,
+          "width": 256,
+          "height": 192
         },
         {
           "roleId": "video-producer",
           "state": "offline",
-          "x": 768,
-          "y": 192,
-          "width": 128,
-          "height": 96
+          "x": 1536,
+          "y": 384,
+          "width": 256,
+          "height": 192
         }
       ],
-      "sha256": "1dde1c62e14240fceefd6eb0458fd590cfe94035da5c53d1f8745e385f75baf1"
+      "sha256": "178818cb051398bed5db18a45b6756a73043eed8133a7d7382fa6fde9a86c4a6"
+    },
+    {
+      "id": "chair",
+      "path": "office-chair.png",
+      "purpose": "approved transparent office chair sprite",
+      "format": "png",
+      "width": 715,
+      "height": 1047,
+      "hasAlpha": true,
+      "frames": [
+        "chair"
+      ],
+      "regions": [
+        {
+          "id": "chair",
+          "x": 0,
+          "y": 0,
+          "width": 715,
+          "height": 1047
+        }
+      ],
+      "sha256": "c09371fcfd5d9e471de4d979fae1c46cef6c3534fbffa2d6e2eb8fbc6aa32f98"
     },
     {
       "id": "displays",

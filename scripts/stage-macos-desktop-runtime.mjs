@@ -221,17 +221,20 @@ async function repairPythonMachODependencies() {
       await execFileAsync("/usr/bin/install_name_tool", ["-change", dependency, replacement, file]);
       changed.push(file);
     }
-    if (file.endsWith(".dylib")) {
-      const ids = (await execFileAsync("/usr/bin/otool", ["-D", file], { encoding: "utf8" }).catch(() => ({ stdout: "" }))).stdout
-        .split("\n")
-        .map(line => line.trim().split(" (", 1)[0]);
-      for (const id of ids) {
-        const relativeTarget = pythonFrameworkDependency(id);
-        if (!relativeTarget || !bundled.has(join(pythonRoot, relativeTarget))) continue;
-        await execFileAsync("/usr/bin/install_name_tool", ["-id", `@loader_path/${file.slice(file.lastIndexOf("/") + 1)}`, file]);
-        changed.push(file);
-        break;
-      }
+    // Python's main shared library is named `Python` without a `.dylib`
+    // suffix. Its LC_ID_DYLIB is still an absolute framework path, and
+    // `otool -L` reports that ID as a dependency. Rewrite IDs for every
+    // Mach-O file whose ID points into the copied framework, not only files
+    // ending in `.dylib`.
+    const ids = (await execFileAsync("/usr/bin/otool", ["-D", file], { encoding: "utf8" }).catch(() => ({ stdout: "" }))).stdout
+      .split("\n")
+      .map(line => line.trim().split(" (", 1)[0]);
+    for (const id of ids) {
+      const relativeTarget = pythonFrameworkDependency(id);
+      if (!relativeTarget || !bundled.has(join(pythonRoot, relativeTarget))) continue;
+      await execFileAsync("/usr/bin/install_name_tool", ["-id", `@loader_path/${file.slice(file.lastIndexOf("/") + 1)}`, file]);
+      changed.push(file);
+      break;
     }
   }
   for (const file of new Set(changed)) {

@@ -1,0 +1,38 @@
+.cheapbuddy-account { grid-column: 1 / -1; min-width: 0; display: grid; gap: 14px; padding: 16px; border: 1px solid var(--wb-border, #e5e5e0); border-radius: 6px; background: var(--wb-card, #fff); color: var(--wb-foreground, #111); }
+.cheapbuddy-account-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.cheapbuddy-account h3, .cheapbuddy-account h4, .cheapbuddy-account p, .cheapbuddy-account dl, .cheapbuddy-account dd { margin: 0; }
+.cheapbuddy-account h3 { font-size: 14px; }
+.cheapbuddy-account h4 { font-size: 12px; }
+.cheapbuddy-account-header > div { display: grid; gap: 4px; }
+.cheapbuddy-account-header p, .cheapbuddy-account-status, .cheapbuddy-account-note { color: var(--wb-muted-foreground, #777); font-size: 11px; line-height: 1.5; }
+.cheapbuddy-account-status { flex: 0 1 auto; border: 1px solid var(--wb-border, #e5e5e0); border-radius: 4px; padding: 3px 6px; }
+.cheapbuddy-account-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; }
+.cheapbuddy-account-form > p { grid-column: 1 / -1; color: var(--wb-muted-foreground, #777); font-size: 12px; line-height: 1.5; }
+.cheapbuddy-account-form label { display: grid; min-width: 0; gap: 6px; color: var(--wb-muted-foreground, #777); font-size: 12px; }
+.cheapbuddy-account-form input { min-width: 0; color: var(--wb-foreground, #111); background: var(--wb-card, #fff); border: 1px solid var(--wb-border, #e5e5e0); border-radius: 5px; padding: 10px 11px; font: inherit; }
+.cheapbuddy-account-form input:focus-visible { outline: 2px solid var(--wb-primary, #ffd000); outline-offset: 2px; }
+.cheapbuddy-account-form > button, .cheapbuddy-account-form > .cheapbuddy-account-actions { grid-column: 1 / -1; justify-self: start; }
+.cheapbuddy-account button { padding: 8px 11px; font-size: 12px; cursor: pointer; }
+.cheapbuddy-account button:disabled { cursor: wait; opacity: .6; }
+.cheapbuddy-account-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.cheapbuddy-account-summary > div { display: grid; min-width: 0; gap: 5px; align-content: start; }
+.cheapbuddy-account-summary dt { color: var(--wb-muted-foreground, #777); font-size: 11px; }
+.cheapbuddy-account-summary dd { overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; }
+.cheapbuddy-account-summary dd > div { display: grid; gap: 2px; }
+.cheapbuddy-account-summary small { color: var(--wb-muted-foreground, #777); font-size: 10px; }
+.cheapbuddy-account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cheapbuddy-account-actions > span { color: var(--wb-muted-foreground, #777); font-size: 11px; }
+.cheapbuddy-account-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--wb-destructive, #c74733); border-radius: 5px; padding: 10px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.cheapbuddy-account-error button { flex: 0 0 auto; }
+.cheapbuddy-product-section { display: grid; min-width: 0; gap: 9px; padding-top: 12px; border-top: 1px solid var(--wb-border, #e5e5e0); }
+.cheapbuddy-products { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.cheapbuddy-product { display: grid; min-width: 0; gap: 10px; align-content: start; border: 1px solid var(--wb-border, #e5e5e0); border-radius: 5px; padding: 12px; background: var(--wb-background, #fdfdfb); }
+.cheapbuddy-product > div { display: grid; gap: 4px; }
+.cheapbuddy-product strong { overflow-wrap: anywhere; font-size: 12px; }
+.cheapbuddy-product p, .cheapbuddy-product-price span { color: var(--wb-muted-foreground, #777); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.cheapbuddy-product > button { justify-self: start; }
+@media (max-width: 640px) {
+  .cheapbuddy-account-form, .cheapbuddy-account-summary, .cheapbuddy-products { grid-template-columns: minmax(0, 1fr); }
+  .cheapbuddy-account-header { flex-wrap: wrap; }
+  .cheapbuddy-account-error { align-items: flex-start; flex-direction: column; }
+}

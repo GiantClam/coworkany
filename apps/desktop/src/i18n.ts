@@ -13,7 +13,6 @@ export function resolveDesktopLocale(preference: DesktopLocalePreference, system
 
 export const desktopCopy = {
   zh: {
-    localWorkspace: "本地工作区 · FULL ACCESS",
     runtimeReady: "运行环境已就绪",
     welcome: "欢迎回来，伙伴",
     welcomeSubtitle: "你的营销工作台已准备好。今天想创建什么？",
@@ -26,7 +25,6 @@ export const desktopCopy = {
     languageEn: "English",
   },
   en: {
-    localWorkspace: "LOCAL WORKSPACE · FULL ACCESS",
     runtimeReady: "Runtime ready",
     // The cloud home uses the same fallback display name when no account is
     // present; keep the local account-free adapter text identical.

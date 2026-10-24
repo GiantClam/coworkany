@@ -1,6 +1,6 @@
 import { Container, Graphics, Sprite, type Texture } from "pixi.js";
 import type { OfficeRoleId, OfficeRoleState, OfficeSnapshot, OfficeVisualState } from "./types";
-import { OFFICE_ROLE_ORDER } from "./office-layout";
+import { OFFICE_ROLE_COLUMNS, OFFICE_ROLE_ORDER } from "./office-layout";
 import {
   OFFICE_LAYER_Z,
   type OfficeCharacterLayerHandle,
@@ -9,7 +9,7 @@ import {
   type OfficeRigEvaluationLike,
   type OfficeRigLike,
   type OfficeRigTrackValue,
-  computeOfficeContainedBounds,
+  computeOfficeStageBounds,
   computeOfficeLayerAnchors,
   destroyOfficeLayerContainer,
   findOfficeAssetEntry,
@@ -18,7 +18,7 @@ import {
   officeAssetUrl,
   reportOfficeLayerError,
 } from "./office-layer-types";
-import { createRoleTexture } from "./office-layer-assets";
+import { createRolePartTexture, roleCellRectangle } from "./office-layer-assets";
 import { OFFICE_WALK_DURATION_MS, resolveOfficeVisualState, resolveOfficeWorkThinkingPhase } from "./visual-state";
 import { createOfficeRigEvaluator, validateOfficeRigManifest, type OfficeRigEvaluator } from "./character-rig";
 
@@ -47,13 +47,41 @@ const STATE_COLORS: Readonly<Record<OfficeVisualState, number>> = {
   offline: 0x9b9b9b,
 };
 
+/**
+ * The source atlas is a standing turnaround, so the desk front provides the
+ * seated silhouette. Keep this offset small enough that the front edge masks
+ * the lower body instead of leaving the character floating above the desk.
+ */
+// Sink the hips into the chair seat/backrest contact zone so the character
+// does not look separated from the furniture. The overlap is deliberately
+// modest: the head remains fully readable above the foreground backrest.
+export const OFFICE_SEATED_ROOT_Y_FACTOR = 0.16;
+const OFFICE_WALK_PHASE_STEP_MS = 173;
+const OFFICE_HEAD_PHASE_STEP_MS = 97;
+const OFFICE_HEAD_SPRITE_Y_FACTOR = -0.14;
+
+export interface OfficeCharacterMotionProfile {
+  readonly walkDirection: -1 | 1;
+  readonly phaseOffsetMs: number;
+  readonly headPhaseOffsetMs: number;
+}
+
+/** Stable, renderer-only motion metadata derived from the approved role order. */
+export function getOfficeCharacterMotionProfile(roleId: OfficeRoleId): OfficeCharacterMotionProfile {
+  const index = Math.max(0, OFFICE_ROLE_ORDER.indexOf(roleId));
+  return {
+    walkDirection: index % 2 === 0 ? 1 : -1,
+    phaseOffsetMs: index * OFFICE_WALK_PHASE_STEP_MS,
+    headPhaseOffsetMs: index * OFFICE_HEAD_PHASE_STEP_MS,
+  };
+}
+
 function sourceOf(texture: Texture): import("pixi.js").TextureSource {
   return texture.source;
 }
 function officeBounds(context: OfficeLayerContext) {
   const viewport = getOfficeViewport(context);
-  const office = findOfficeAssetEntry(context.manifest, "office");
-  return computeOfficeContainedBounds(viewport, office?.width ?? viewport.width, office?.height ?? viewport.height);
+  return computeOfficeStageBounds(viewport);
 }
 
 function readNumber(value: unknown, fallback = 0): number {
@@ -120,9 +148,32 @@ function stateAtTime(state: OfficeRoleState, previous: OfficeVisualState | undef
   return resolveOfficeWorkThinkingPhase(elapsedMs, phaseOffset);
 }
 
+function headSwayAmplitude(visualState: OfficeVisualState): number {
+  if (visualState === "thinking" || visualState === "waiting") return 4.2;
+  if (visualState === "idle" || visualState === "work") return 2.6;
+  if (visualState === "walk") return 1.8;
+  return 0;
+}
+
+function headSwayRotation(visualState: OfficeVisualState, phaseMs: number, profile: OfficeCharacterMotionProfile, reducedMotion: boolean): number {
+  if (reducedMotion) return 0;
+  const amplitude = headSwayAmplitude(visualState);
+  if (amplitude === 0) return 0;
+  const periodMs = visualState === "thinking" || visualState === "waiting" ? 1_800 : 2_600;
+  return Math.sin(((phaseMs + profile.headPhaseOffsetMs) / periodMs) * Math.PI * 2) * amplitude;
+}
+
 /** The rig uses idle as the static skin for an unavailable/offline role. */
 function rigClipForVisualState(state: OfficeVisualState): string {
   return state === "offline" ? "idle" : state;
+}
+
+function destroyDerivedTexture(texture: Texture | undefined): void {
+  try {
+    texture?.destroy(false);
+  } catch {
+    // A route transition may already have torn down the Pixi texture system.
+  }
 }
 
 /** Render back-facing chibi characters with a normalized keyframe rig. */
@@ -197,10 +248,14 @@ export async function createOfficeCharacterLayer(context: OfficeLayerContext): P
       parent.addChild(boneRoot);
       boneMap.set(bone.name, boneRoot);
     }
-    const character = new Sprite(createRoleTexture(sourceOf(sourceTexture), asset, roleId, roleIndex(roleId), undefined, 0));
-    character.anchor.set(0.5, 1);
+    const body = new Sprite(createRolePartTexture(sourceOf(sourceTexture), asset, roleId, roleIndex(roleId), "body", undefined, 0));
+    const head = new Sprite(createRolePartTexture(sourceOf(sourceTexture), asset, roleId, roleIndex(roleId), "head", undefined, 0));
+    body.anchor.set(0.5, 1);
+    head.anchor.set(0.5, 1);
     const torso = boneMap.get("torso") ?? rigRoot;
-    torso.addChild(character);
+    const headBone = boneMap.get("head") ?? torso;
+    torso.addChild(body);
+    headBone.addChild(head);
     layerRoot.addChild(roleRoot);
     boneMaps.set(roleId, boneMap);
 
@@ -211,7 +266,18 @@ export async function createOfficeCharacterLayer(context: OfficeLayerContext): P
     roleStatusRoot.addChild(statusFx);
     statusRoot.addChild(roleStatusRoot);
     statusNodes.set(roleId, roleStatusRoot);
-    nodes.set(roleId, { root: roleRoot, rigRoot, bones: boneMap, character, statusFx, roleId, visualState: "idle" });
+    nodes.set(roleId, {
+      root: roleRoot,
+      rigRoot,
+      bones: boneMap,
+      body,
+      head,
+      character: body,
+      characterHeight: 128,
+      statusFx,
+      roleId,
+      visualState: "idle",
+    });
   }
 
   let anchors = computeOfficeLayerAnchors(officeBounds(context));
@@ -221,29 +287,44 @@ export async function createOfficeCharacterLayer(context: OfficeLayerContext): P
   const resize = () => {
     anchors = computeOfficeLayerAnchors(officeBounds(context));
     const viewport = getOfficeViewport(context);
-    const maxWidth = Math.max(34, Math.min(86, (viewport.width / OFFICE_ROLE_ORDER.length) * 0.46));
+    // Size chibi figures against their responsive station width.
+    const maxWidth = Math.max(30, Math.min(100, (viewport.width / OFFICE_ROLE_COLUMNS) * 0.54));
     for (const roleId of OFFICE_ROLE_ORDER) {
       const node = nodes.get(roleId);
       const statusNode = statusNodes.get(roleId);
       if (!node || !statusNode) continue;
       const anchor = anchors.get(roleId) ?? { x: 0, y: 0 };
-      const width = Math.max(1, node.character.texture.width || 128);
-      const height = Math.max(1, node.character.texture.height || 128);
+      const cell = roleCellRectangle(asset, roleId, roleIndex(roleId), undefined, 0);
+      const width = Math.max(1, cell?.width ?? node.body.texture.width ?? 128);
+      const height = Math.max(1, cell?.height ?? 128);
       const scale = Math.min(1, maxWidth / width);
-      node.character.width = width * scale;
-      node.character.height = height * scale;
-      const characterHeight = node.character.height;
-      node.root.position.set(anchor.x, anchor.y - characterHeight * 0.62);
+      node.body.width = Math.max(1, node.body.texture.width) * scale;
+      node.body.height = Math.max(1, node.body.texture.height) * scale;
+      node.head.width = Math.max(1, node.head.texture.width) * scale;
+      node.head.height = Math.max(1, node.head.texture.height) * scale;
+      node.characterHeight = height * scale;
+      const characterHeight = node.characterHeight;
+      node.head.position.set(0, characterHeight * OFFICE_HEAD_SPRITE_Y_FACTOR);
+      // The approved source atlas contains full-body standing sprites.  Put
+      // Their feet overlap the desk-front edge so the visible torso reads as
+      // seated at the workstation instead of floating above it.
+      node.root.position.set(anchor.x, anchor.y + characterHeight * OFFICE_SEATED_ROOT_Y_FACTOR);
       statusNode.position.set(anchor.x, anchor.y - characterHeight * 1.06);
     }
   };
   resize();
 
-  const applyEvaluation = (roleId: OfficeRoleId, evaluation: OfficeRigEvaluationLike) => {
+  const applyEvaluation = (
+    roleId: OfficeRoleId,
+    evaluation: OfficeRigEvaluationLike,
+    visualState: OfficeVisualState,
+    phaseMs: number,
+    profile: OfficeCharacterMotionProfile,
+  ) => {
     const node = nodes.get(roleId);
     const bones = boneMaps.get(roleId);
     if (!node || !bones) return;
-    const characterHeight = Math.max(1, node.character.height || 128);
+    const characterHeight = Math.max(1, node.characterHeight || 128);
     const tracks = evaluation.tracks ?? {};
     for (const boneDef of rigBones) {
       const bone = bones.get(boneDef.name);
@@ -252,9 +333,14 @@ export async function createOfficeCharacterLayer(context: OfficeLayerContext): P
       const baseY = readNumber(boneDef.y);
       const baseRotation = readNumber(boneDef.rotation);
       const track = tracks[boneDef.name];
-      const x = baseX + readNumber(track?.x);
+      const walkDirection = visualState === "walk" ? profile.walkDirection : 1;
+      const x = baseX + readNumber(track?.x) * walkDirection;
       const y = baseY + readNumber(track?.y);
-      const rotation = baseRotation + readNumber(track?.rotation);
+      const headSway = headSwayRotation(visualState, phaseMs, profile, reducedMotion());
+      // The head sprite is now a distinct child of the head bone, so the
+      // procedural sway remains independent of the torso/body sprite.
+      const visibleSway = boneDef.name === "head" ? headSway : 0;
+      const rotation = baseRotation + readNumber(track?.rotation) * walkDirection + visibleSway;
       bone.position.set(x * characterHeight, y * characterHeight);
       bone.rotation = rotation * (Math.PI / 180);
       if (boneDef.name === "root" && track?.opacity !== undefined) node.root.alpha = clamp(readNumber(track.opacity, 1), 0, 1);
@@ -271,7 +357,7 @@ export async function createOfficeCharacterLayer(context: OfficeLayerContext): P
     const statusNode = statusNodes.get(roleId);
     if (!node || !statusNode) return;
     const color = STATE_COLORS[visualState];
-    const radius = Math.max(4, Math.min(9, node.character.width * 0.1));
+    const radius = Math.max(4, Math.min(9, node.body.width * 0.1));
     node.statusFx.clear().circle(0, 0, radius).fill({ color, alpha: visualState === "offline" ? 0.35 : 0.9 });
     statusNode.visible = !reducedMotion() && visualState !== "idle" && visualState !== "offline";
   };
@@ -286,7 +372,14 @@ export async function createOfficeCharacterLayer(context: OfficeLayerContext): P
     setTexture(roleId, texture) {
       const node = nodes.get(roleId);
       if (!node) return;
-      node.character.texture = texture;
+      const roleIndexValue = roleIndex(roleId);
+      const source = sourceOf(texture);
+      const previousBody = node.body.texture;
+      const previousHead = node.head.texture;
+      node.body.texture = createRolePartTexture(source, asset, roleId, roleIndexValue, "body", undefined, 0);
+      node.head.texture = createRolePartTexture(source, asset, roleId, roleIndexValue, "head", undefined, 0);
+      destroyDerivedTexture(previousBody);
+      destroyDerivedTexture(previousHead);
       resize();
     },
     update(snapshot: OfficeSnapshot) {
@@ -308,6 +401,7 @@ export async function createOfficeCharacterLayer(context: OfficeLayerContext): P
           continue;
         }
         const previous = previousStates.get(roleId);
+        const motionProfile = getOfficeCharacterMotionProfile(roleId);
         const base = resolveOfficeVisualState(state, undefined);
         const priorBase = baseStates.get(roleId);
         if (priorBase !== base || !stateStartedAt.has(roleId)) {
@@ -320,20 +414,25 @@ export async function createOfficeCharacterLayer(context: OfficeLayerContext): P
         } else if (base === "offline" || reducedMotion()) {
           walkStartedAt.delete(roleId);
         }
-        const walkElapsed = timestamp - (walkStartedAt.get(roleId) ?? timestamp);
-        const transitionState = walkElapsed < OFFICE_WALK_DURATION_MS && base !== "offline" && !reducedMotion() ? "walk" : undefined;
-        const nextState = transitionState ?? stateAtTime(state, previous, elapsed, reducedMotion(), index * 137);
+        const walkStarted = walkStartedAt.get(roleId);
+        const walkElapsed = walkStarted === undefined ? Number.POSITIVE_INFINITY : timestamp - walkStarted;
+        const transitionState = walkStarted !== undefined && walkElapsed < OFFICE_WALK_DURATION_MS && base !== "offline" && !reducedMotion() ? "walk" : undefined;
+        const nextState = transitionState ?? stateAtTime(state, previous, elapsed, reducedMotion(), motionProfile.phaseOffsetMs);
         previousStates.set(roleId, nextState);
         node.visualState = nextState;
         const evaluator = context.rigEvaluator ?? loadedEvaluator;
-        const evaluationElapsed = reducedMotion() ? 0 : elapsed;
+        const evaluationElapsed = reducedMotion() ? 0 : elapsed + motionProfile.phaseOffsetMs;
         const clipName = rigClipForVisualState(nextState);
         const evaluation = evaluator?.evaluate ? evaluator.evaluate(clipName, evaluationElapsed, reducedMotion()) : evaluateRig(rig, clipName, evaluationElapsed, reducedMotion());
-        applyEvaluation(roleId, evaluation);
+        applyEvaluation(roleId, evaluation, nextState, timestamp, motionProfile);
         applyStatusFx(roleId, nextState);
       }
     },
     destroy() {
+      for (const node of nodes.values()) {
+        destroyDerivedTexture(node.body.texture);
+        destroyDerivedTexture(node.head.texture);
+      }
       destroyOfficeLayerContainer(layerRoot);
       destroyOfficeLayerContainer(statusRoot);
     },

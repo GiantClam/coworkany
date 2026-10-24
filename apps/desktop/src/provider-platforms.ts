@@ -1,5 +1,6 @@
 import { WORKBENCH_PROVIDER_CATALOG, type WorkbenchProviderCategory } from "@coworkany/workbench-ui/desktop";
 import type { DesktopProviderConfig, ProviderCapability } from "./provider-config";
+import { CHEAPBUDDY, createCheapBuddyProvider } from "./cheapbuddy";
 
 export type ConfigurableProviderCapability = ProviderCapability;
 export type ProviderPlatformId = string;
@@ -19,6 +20,7 @@ const CLOUD_CATEGORY_BY_CAPABILITY: Record<ConfigurableProviderCapability, Workb
 };
 
 const RUNTIME_BY_CLOUD_PROVIDER: Record<string, Pick<ProviderPlatform, "source" | "baseUrl">> = {
+  cheapbuddy: { source: CHEAPBUDDY.id, baseUrl: CHEAPBUDDY.apiBaseUrl },
   siliconflow: { source: "siliconflow", baseUrl: "https://api.siliconflow.cn/v1" },
   openrouter: { source: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
   openai_compatible: { source: "openai-compatible", baseUrl: "" },
@@ -84,6 +86,7 @@ export function platformIdForProvider(provider: DesktopProviderConfig | undefine
 export function createPlatformProviderProfile(capability: ConfigurableProviderCapability, platformId: ProviderPlatformId): DesktopProviderConfig {
   const platform = providerPlatformForId(capability, platformId);
   if (!platform) throw new Error(`unsupported_provider_platform:${capability}:${platformId}`);
+  if (platformId === CHEAPBUDDY.id) return createCheapBuddyProvider();
   return {
     id: `${capability}-${platform.id}`,
     source: platform.source,

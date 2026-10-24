@@ -16,6 +16,12 @@ export const ROLE_IDS = Object.freeze([
 
 const CLIP_NAMES = Object.freeze(["idle", "walk", "work", "thinking", "waiting", "completed", "error"]);
 const STATE_NAMES = Object.freeze(["available", "active", "offline"]);
+// Export from the approved originals at 2× density for the renderer's capped
+// 2× device-pixel ratio. These are texel sizes, not workstation layout sizes.
+const ATLAS_DENSITY = 2;
+const CHARACTER_CELL = 128 * ATLAS_DENSITY;
+const DESK_CELL_WIDTH = 128 * ATLAS_DENSITY;
+const DESK_CELL_HEIGHT = 96 * ATLAS_DENSITY;
 const CHARACTER_BANDS = Object.freeze([
   [0, 315],
   [315, 315],
@@ -30,6 +36,7 @@ const SOURCE_SPECS = Object.freeze([
   ["characters-v1.png", 2203, 714],
   ["desk-state-variants-v1.png", 2172, 724],
   ["display-source-art-v1.png", 1536, 1024],
+  ["office-chair-v1.png", 1254, 1254],
   ["character-ai-chat-turnaround-v1.png", 1536, 1024],
   ["character-agent-center-turnaround-v1.png", 1536, 1024],
   ["character-ppt-expert-turnaround-v1.png", 1536, 1024],
@@ -38,6 +45,15 @@ const SOURCE_SPECS = Object.freeze([
   ["character-image-creator-turnaround-v1.png", 1536, 1024],
   ["character-video-producer-turnaround-v1.png", 1536, 1024],
 ]);
+
+// The approved chair concept has a transparent canvas whose RGB channels are
+// not all zero in the transparent margin.  Deriving the crop from alpha keeps
+// the runtime sprite tight without relying on sharp.trim's background-color
+// comparison.  The threshold intentionally ignores antialiasing dust while
+// preserving the complete chair silhouette.
+// Use alpha > 8 (represented as >= 9 for 8-bit channel data).
+const CHAIR_ALPHA_THRESHOLD = 9;
+const CHAIR_RUNTIME_BOUNDS = Object.freeze({ left: 265, top: 116, width: 715, height: 1047 });
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "../../..");
@@ -112,6 +128,37 @@ async function encodeLosslessWebpBuffer(buffer, destination) {
   await sharp(buffer).webp({ lossless: true, effort: 6 }).toFile(destination);
 }
 
+async function findAlphaBounds(input, threshold = CHAIR_ALPHA_THRESHOLD) {
+  const { data, info } = await sharp(input).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  let minX = info.width;
+  let minY = info.height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < info.height; y += 1) {
+    for (let x = 0; x < info.width; x += 1) {
+      if (data[(y * info.width + x) * info.channels + 3] < threshold) continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  if (maxX < minX || maxY < minY) throw inputError("approved chair input has no visible alpha pixels");
+  return { left: minX, top: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+}
+
+async function buildChairAsset(sourcePathname, destination) {
+  const bounds = await findAlphaBounds(sourcePathname);
+  if (JSON.stringify(bounds) !== JSON.stringify(CHAIR_RUNTIME_BOUNDS)) {
+    throw inputError(`unexpected chair alpha bounds: expected ${JSON.stringify(CHAIR_RUNTIME_BOUNDS)}, got ${JSON.stringify(bounds)}`);
+  }
+  await sharp(sourcePathname).extract(bounds).png().toFile(destination);
+  const metadata = await sharp(destination).metadata();
+  if (metadata.width !== CHAIR_RUNTIME_BOUNDS.width || metadata.height !== CHAIR_RUNTIME_BOUNDS.height || metadata.hasAlpha !== true) {
+    throw inputError(`generated chair asset is invalid: expected ${CHAIR_RUNTIME_BOUNDS.width}x${CHAIR_RUNTIME_BOUNDS.height} RGBA`);
+  }
+}
+
 async function makeTransparentAtlas(width, height, composites, destination) {
   await sharp({
     create: {
@@ -139,14 +186,14 @@ async function buildCharacterAtlas(sourcePathname, destination) {
   const composites = [];
   for (const [roleIndex, [left, width]] of CHARACTER_BANDS.entries()) {
     const crop = await sharp(sourcePathname).extract({ left, top: 0, width, height: 714 }).png().toBuffer();
-    const resized = await trimAndResize(crop, 112, 120);
+    const resized = await trimAndResize(crop, 112 * ATLAS_DENSITY, 120 * ATLAS_DENSITY);
     composites.push({
       input: resized.data,
-      left: roleIndex * 128 + Math.floor((128 - resized.info.width) / 2),
-      top: 128 - resized.info.height,
+      left: roleIndex * CHARACTER_CELL + Math.floor((CHARACTER_CELL - resized.info.width) / 2),
+      top: CHARACTER_CELL - resized.info.height,
     });
   }
-  await makeTransparentAtlas(896, 128, composites, destination);
+  await makeTransparentAtlas(ROLE_IDS.length * CHARACTER_CELL, CHARACTER_CELL, composites, destination);
 }
 
 async function extractDeskPart(sourcePathname, bandIndex, top, height) {
@@ -159,33 +206,33 @@ async function buildDeskAtlas(sourcePathname, destination, part) {
   const stateBuffers = [];
   for (let stateIndex = 0; stateIndex < STATE_NAMES.length; stateIndex += 1) {
     const source = await extractDeskPart(sourcePathname, stateIndex, part === "shell" ? 294 : 544, part === "shell" ? 430 : 180);
-    stateBuffers.push(await trimAndResize(source, 124, 92));
+    stateBuffers.push(await trimAndResize(source, 124 * ATLAS_DENSITY, 92 * ATLAS_DENSITY));
   }
   for (let stateIndex = 0; stateIndex < STATE_NAMES.length; stateIndex += 1) {
     const resized = stateBuffers[stateIndex];
     for (let roleIndex = 0; roleIndex < ROLE_IDS.length; roleIndex += 1) {
       composites.push({
         input: resized.data,
-        left: roleIndex * 128 + Math.floor((128 - resized.info.width) / 2),
-        top: (stateIndex + 1) * 96 - resized.info.height,
+        left: roleIndex * DESK_CELL_WIDTH + Math.floor((DESK_CELL_WIDTH - resized.info.width) / 2),
+        top: (stateIndex + 1) * DESK_CELL_HEIGHT - resized.info.height,
       });
     }
   }
-  await makeTransparentAtlas(896, 288, composites, destination);
+  await makeTransparentAtlas(ROLE_IDS.length * DESK_CELL_WIDTH, STATE_NAMES.length * DESK_CELL_HEIGHT, composites, destination);
 }
 
 function characterRegions() {
-  return ROLE_IDS.map((roleId, index) => ({ roleId, x: index * 128, y: 0, width: 128, height: 128 }));
+  return ROLE_IDS.map((roleId, index) => ({ roleId, x: index * CHARACTER_CELL, y: 0, width: CHARACTER_CELL, height: CHARACTER_CELL }));
 }
 
 function workstationRegions() {
   return STATE_NAMES.flatMap((state, stateIndex) => ROLE_IDS.map((roleId, roleIndex) => ({
     roleId,
     state,
-    x: roleIndex * 128,
-    y: stateIndex * 96,
-    width: 128,
-    height: 96,
+    x: roleIndex * DESK_CELL_WIDTH,
+    y: stateIndex * DESK_CELL_HEIGHT,
+    width: DESK_CELL_WIDTH,
+    height: DESK_CELL_HEIGHT,
   })));
 }
 
@@ -221,6 +268,7 @@ export async function buildVirtualOfficeAssets({ sourceDir = DEFAULT_SOURCE_DIR,
   const charactersPath = outputPath(resolvedOutputDir, "characters.webp");
   const workstationsPath = outputPath(resolvedOutputDir, "workstations.webp");
   const workstationsFrontPath = outputPath(resolvedOutputDir, "workstations-front.webp");
+  const chairPath = outputPath(resolvedOutputDir, "office-chair.png");
   const displaysPath = outputPath(resolvedOutputDir, "displays.webp");
   const rigPath = outputPath(resolvedOutputDir, "rig-animation-data.json");
 
@@ -228,6 +276,7 @@ export async function buildVirtualOfficeAssets({ sourceDir = DEFAULT_SOURCE_DIR,
   await buildCharacterAtlas(sourceByName.get("characters-v1.png"), charactersPath);
   await buildDeskAtlas(sourceByName.get("desk-state-variants-v1.png"), workstationsPath, "shell");
   await buildDeskAtlas(sourceByName.get("desk-state-variants-v1.png"), workstationsFrontPath, "front");
+  await buildChairAsset(sourceByName.get("office-chair-v1.png"), chairPath);
   await encodeLosslessWebp(sourceByName.get("display-source-art-v1.png"), displaysPath);
   await writeFile(rigPath, approved.rigBytes);
 
@@ -252,12 +301,12 @@ export async function buildVirtualOfficeAssets({ sourceDir = DEFAULT_SOURCE_DIR,
     path: "characters.webp",
     purpose: "back-facing character skin atlas",
     format: "webp",
-    width: 896,
-    height: 128,
+    width: ROLE_IDS.length * CHARACTER_CELL,
+    height: CHARACTER_CELL,
     hasAlpha: true,
     frames: ["back"],
     roleIds: [...ROLE_IDS],
-    cell: { width: 128, height: 128 },
+    cell: { width: CHARACTER_CELL, height: CHARACTER_CELL },
     regions: characterRegions(),
   }));
   for (const [id, purpose, path] of [
@@ -269,16 +318,27 @@ export async function buildVirtualOfficeAssets({ sourceDir = DEFAULT_SOURCE_DIR,
       path,
       purpose,
       format: "webp",
-      width: 896,
-      height: 288,
+      width: ROLE_IDS.length * DESK_CELL_WIDTH,
+      height: STATE_NAMES.length * DESK_CELL_HEIGHT,
       hasAlpha: true,
       frames: [...STATE_NAMES],
       states: [...STATE_NAMES],
       roleIds: [...ROLE_IDS],
-      cell: { width: 128, height: 96 },
+      cell: { width: DESK_CELL_WIDTH, height: DESK_CELL_HEIGHT },
       regions: workstationRegions(),
     }));
   }
+  assets.push(await hashedEntry(resolvedOutputDir, {
+    id: "chair",
+    path: "office-chair.png",
+    purpose: "approved transparent office chair sprite",
+    format: "png",
+    width: CHAIR_RUNTIME_BOUNDS.width,
+    height: CHAIR_RUNTIME_BOUNDS.height,
+    hasAlpha: true,
+    frames: ["chair"],
+    regions: [{ id: "chair", x: 0, y: 0, width: CHAIR_RUNTIME_BOUNDS.width, height: CHAIR_RUNTIME_BOUNDS.height }],
+  }));
   assets.push(await hashedEntry(resolvedOutputDir, {
     id: "displays",
     path: "displays.webp",

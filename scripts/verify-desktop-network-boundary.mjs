@@ -18,6 +18,8 @@ const APPROVED_PROVIDER_CATALOG_URLS = new Set([
   "https://api.minimaxi.com/",
   "https://api.openai.com/",
   "https://api.pptoken.cc/",
+  "https://api.cheapbuddy.cc/",
+  "https://cheapbuddy.cc/",
   "https://ark.cn-beijing.volces.com/",
   "https://dashscope.aliyuncs.com/",
   "https://generativelanguage.googleapis.com/",

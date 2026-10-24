@@ -100,7 +100,7 @@ test("offline bundle fingerprints complete skill trees and retains exact upstrea
     assert.equal(firstCatalog.directoryDigestAlgorithm, first.directoryDigestAlgorithm);
     assert.equal((await manifest("dashi-ppt")).directoryDigest, firstCatalog.skills.find(({ id }) => id === "dashi-ppt").directoryDigest);
     const bundledDashiSkill = await readFile(join(output, "skills/dashi-ppt/SKILL.md"), "utf8");
-    assert.match(bundledDashiSkill, /only its plain HTTP loopback URL/u);
+    assert.doesNotMatch(bundledDashiSkill, /CoworkAny desktop preview contract/u);
     const bundledDashiLauncher = await readFile(join(output, "skills/dashi-ppt/project/scripts/start-preview-server.mjs"), "utf8");
     assert.match(bundledDashiLauncher, /const url = httpUrl/u);
     assert.doesNotMatch(bundledDashiLauncher, /HTTPS preview URL/u);

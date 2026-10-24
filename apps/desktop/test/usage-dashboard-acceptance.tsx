@@ -57,7 +57,7 @@ function Acceptance() {
       <output aria-label="Last navigation">{navigation}</output>
     </div>
     <div style={{ height: "calc(100% - 42px)", minHeight: 0 }}>
-      <WorkbenchShell title="CoworkAny" locale={locale} onLocaleChange={setLocale} onLocaleToggle={() => setLocale(locale === "zh" ? "en" : "zh")} localLabel="Acceptance workspace" navItems={[{ path: "/dashboard/usage", label: locale === "zh" ? "用量统计" : "Usage analytics" }]} activePath="/dashboard/usage" collapsed={collapsed} onToggleCollapsed={() => setCollapsed(!collapsed)} onNavigate={setNavigation}>
+      <WorkbenchShell title="CoworkAny" locale={locale} onLocaleChange={setLocale} onLocaleToggle={() => setLocale(locale === "zh" ? "en" : "zh")} navItems={[{ path: "/dashboard/usage", label: locale === "zh" ? "用量统计" : "Usage analytics" }]} activePath="/dashboard/usage" collapsed={collapsed} onToggleCollapsed={() => setCollapsed(!collapsed)} onNavigate={setNavigation}>
         <section className="workspace"><DesktopUsageDashboard client={client} locale={locale} onNavigate={setNavigation} /></section>
       </WorkbenchShell>
     </div>

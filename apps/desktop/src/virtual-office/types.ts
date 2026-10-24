@@ -87,7 +87,7 @@ export interface AgentRuntimeProbe { readonly ready: boolean; readonly skills?: 
 export type AgentDirectoryReadResult = { readonly status: "ready"; readonly snapshot: AgentDirectorySnapshot } | { readonly status: "unknown"; readonly snapshot?: AgentDirectorySnapshot; readonly reason: string } | { readonly status: "offline"; readonly snapshot?: AgentDirectorySnapshot; readonly reason: string };
 export interface AgentDirectoryReader { read(options?: { readonly refresh?: boolean }): Promise<AgentDirectoryReadResult>; getSnapshot?: () => AgentDirectoryReadResult | undefined; clear(): void }
 export interface NavigationAdapter { go(route: string): void }
-export interface OfficeCompositionOptions { readonly client: WorkbenchClient; readonly capabilities: OfficeCapabilities; readonly agentDirectoryReader: AgentDirectoryReader }
+export interface OfficeCompositionOptions { readonly client: WorkbenchClient; readonly capabilities: OfficeCapabilities; readonly agentDirectoryReader: AgentDirectoryReader; readonly defaultIdle?: boolean }
 export const TERMINAL_DISPLAY_MS = 8_000;
 export const RECENT_ITEM_LIMIT = 20;
 export const DEVICE_LIMIT = 3;

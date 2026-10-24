@@ -1,13 +1,13 @@
-import { Container, Graphics, Rectangle, Sprite, Text, type Texture } from "pixi.js";
+import { Container, Graphics, Rectangle, Sprite, type Texture } from "pixi.js";
 import type { OfficeRoleId, OfficeRoleState, OfficeSnapshot, OfficeVisualState } from "./types";
-import { OFFICE_ROLE_ORDER } from "./office-layout";
+import { OFFICE_ROLE_COLUMNS, OFFICE_ROLE_ORDER } from "./office-layout";
 import { resolveOfficeVisualPhase } from "./visual-state";
 import {
   OFFICE_LAYER_Z,
   type OfficeDisplayLayerHandle,
   type OfficeDisplayLayerNode,
   type OfficeLayerContext,
-  computeOfficeContainedBounds,
+  computeOfficeStageBounds,
   computeOfficeLayerAnchors,
   destroyOfficeLayerContainer,
   findOfficeAssetEntry,
@@ -30,13 +30,15 @@ const STATUS_COLORS: Readonly<Record<OfficeVisualState, number>> = {
   offline: 0x9b9b9b,
 };
 
+const SCREEN_PANEL_WIDTH_FACTOR = 0.56;
+const SCREEN_PANEL_HEIGHT_FACTOR = 0.32;
+
 function sourceOf(texture: Texture): import("pixi.js").TextureSource {
   return texture.source;
 }
 function officeBounds(context: OfficeLayerContext) {
   const viewport = getOfficeViewport(context);
-  const office = findOfficeAssetEntry(context.manifest, "office");
-  return computeOfficeContainedBounds(viewport, office?.width ?? viewport.width, office?.height ?? viewport.height);
+  return computeOfficeStageBounds(viewport);
 }
 
 function displayTextures(source: import("pixi.js").TextureSource, asset: ReturnType<typeof findOfficeAssetEntry>): { main: Texture; side: Texture } {
@@ -53,17 +55,22 @@ function visualStateFor(state: OfficeRoleState | undefined, phaseMs: number, pre
   return resolveOfficeVisualPhase(state, phaseMs, previous, reducedMotion ? 0 : phaseOffset);
 }
 
-function statusText(context: OfficeLayerContext, state: OfficeRoleState | undefined, visualState: OfficeVisualState): string {
-  if (context.callbacks.statusLabel) {
-    const callbackStatus = visualState === "error" ? "failed" : state?.status ?? "unknown";
-    try {
-      return context.callbacks.statusLabel(callbackStatus);
-    } catch {
-      // Keep the decorative layer alive if a host's localization callback is
-      // intentionally strict about persisted status values.
-    }
-  }
-  return visualState;
+function screenProgress(visualState: OfficeVisualState, phaseMs: number, phaseOffset: number, reducedMotion: boolean): number {
+  if (visualState === "completed") return 1;
+  if (visualState === "error") return 0.18;
+  if (visualState === "offline") return 0.08;
+  if (visualState === "idle") return 0.28;
+  if (visualState === "waiting") return 0.66;
+  if (visualState === "walk") return 0.48;
+  if (reducedMotion) return visualState === "thinking" ? 0.58 : 0.72;
+  const pulse = 0.5 + 0.5 * Math.sin((phaseMs + phaseOffset) / 420);
+  return visualState === "thinking" ? 0.38 + pulse * 0.24 : 0.52 + pulse * 0.4;
+}
+
+function screenUiScale(visualState: OfficeVisualState): number {
+  if (visualState === "work" || visualState === "thinking" || visualState === "walk") return 1.5;
+  if (visualState === "waiting") return 1.15;
+  return 1;
 }
 
 /** Render the independently replaceable dual-display and status-glow layer. */
@@ -100,6 +107,7 @@ export async function createOfficeDisplayLayer(context: OfficeLayerContext): Pro
   const previousStates = new Map<OfficeRoleId, OfficeVisualState>();
   const statusRoots = new Map<OfficeRoleId, Container>();
   let reducedMotion = context.reducedMotion === true;
+  const now = context.now ?? (() => (typeof performance !== "undefined" ? performance.now() : Date.now()));
 
   for (const [index, roleId] of OFFICE_ROLE_ORDER.entries()) {
     const root = new Container();
@@ -110,27 +118,28 @@ export async function createOfficeDisplayLayer(context: OfficeLayerContext): Pro
     main.anchor.set(0.5, 1);
     side.anchor.set(0.5, 1);
     root.addChild(main, side);
-    const copy = new Text({ text: "", style: { fill: 0x24322e, fontSize: 8, fontFamily: "IBM Plex Sans, sans-serif", align: "center" } });
-    copy.anchor.set(0.5, 1);
-    root.addChild(copy);
     layerRoot.addChild(root);
 
     const roleStatusRoot = new Container();
     roleStatusRoot.label = `virtual-office-status:${roleId}`;
     roleStatusRoot.zIndex = index;
     const status = new Graphics();
-    roleStatusRoot.addChild(status);
+    const screenUi = new Graphics();
+    // The main display remains behind the character.  This compact chrome is
+    // intentionally in the shared status layer so the work state stays
+    // legible even when the character torso occludes the screen artwork.
+    roleStatusRoot.addChild(screenUi, status);
     statusRoot.addChild(roleStatusRoot);
     statusRoots.set(roleId, roleStatusRoot);
 
-    nodes.set(roleId, { root, main, side, status, copy, roleId, visualState: "idle" });
+    nodes.set(roleId, { root, main, side, status, screenUi, roleId, visualState: "idle" });
   }
 
   let anchors = computeOfficeLayerAnchors(officeBounds(context));
   const resize = () => {
     anchors = computeOfficeLayerAnchors(officeBounds(context));
     const viewport = getOfficeViewport(context);
-    const slotWidth = Math.max(48, Math.min(180, (viewport.width / OFFICE_ROLE_ORDER.length) * 0.9));
+    const slotWidth = Math.max(40, Math.min(180, (viewport.width / OFFICE_ROLE_COLUMNS) * 0.9));
     const displayWidth = Math.min(slotWidth * 0.48, 86);
     for (const roleId of OFFICE_ROLE_ORDER) {
       const node = nodes.get(roleId);
@@ -145,13 +154,38 @@ export async function createOfficeDisplayLayer(context: OfficeLayerContext): Pro
       node.side.width = displayWidth * 0.58;
       node.side.height = displayHeight * 0.72;
       node.side.position.set(displayWidth * 0.28, -displayHeight * 0.02);
-      node.copy.position.set(0, -displayHeight * 0.18);
-      statusNode.position.set(anchor.x + displayWidth * 0.34, anchor.y - Math.max(38, displayHeight * 1.06));
+      const displayRootOffsetY = -Math.max(34, displayHeight * 0.92);
+      const panelX = -displayWidth * 0.30;
+      const panelY = -displayHeight * 0.88;
+      // `statusNode` is anchored at the workstation, so include the display
+      // root offset when placing the screen chrome inside the monitor bounds.
+      node.screenUi.position.set(panelX, displayRootOffsetY + panelY);
+      // Keep the status layer in the station coordinate system.  Its children
+      // are positioned relative to the same anchor as the desk and display.
+      statusNode.position.set(anchor.x, anchor.y);
+      node.status.position.set(displayWidth * 0.34, -Math.max(38, displayHeight * 1.06));
     }
   };
   resize();
 
-  const applyStatus = (roleId: OfficeRoleId, visualState: OfficeVisualState) => {
+  const drawScreenUi = (node: OfficeDisplayLayerNode, visualState: OfficeVisualState, phaseMs: number) => {
+    const displayWidth = Math.max(1, node.main.width);
+    const displayHeight = Math.max(1, node.main.height);
+    const panelWidth = Math.max(18, displayWidth * SCREEN_PANEL_WIDTH_FACTOR);
+    const panelHeight = Math.max(9, displayHeight * SCREEN_PANEL_HEIGHT_FACTOR);
+    const progress = screenProgress(visualState, phaseMs, OFFICE_ROLE_ORDER.indexOf(node.roleId) * 137, reducedMotion);
+    const color = STATUS_COLORS[visualState];
+    const lineColor = visualState === "offline" ? 0x6f7b78 : 0x2d5f6e;
+    node.screenUi.scale.set(screenUiScale(visualState));
+    node.screenUi.clear();
+    node.screenUi.roundRect(0, 0, panelWidth, panelHeight, 2).fill({ color: 0xf5fbf8, alpha: 0.82 });
+    node.screenUi.roundRect(2, 2, Math.max(2, (panelWidth - 4) * progress), 1.8, 0.9).fill({ color, alpha: 0.98 });
+    node.screenUi.roundRect(2, panelHeight - 3.8, panelWidth * 0.22, 1.2, 0.6).fill({ color: lineColor, alpha: 0.46 });
+    node.screenUi.roundRect(panelWidth * 0.28, panelHeight - 3.8, panelWidth * 0.34, 1.2, 0.6).fill({ color: lineColor, alpha: 0.32 });
+    node.screenUi.roundRect(panelWidth * 0.66, panelHeight - 3.8, panelWidth * 0.25, 1.2, 0.6).fill({ color: lineColor, alpha: 0.24 });
+  };
+
+  const applyStatus = (roleId: OfficeRoleId, visualState: OfficeVisualState, phaseMs: number) => {
     const node = nodes.get(roleId);
     const statusNode = statusRoots.get(roleId);
     if (!node || !statusNode) return;
@@ -162,6 +196,7 @@ export async function createOfficeDisplayLayer(context: OfficeLayerContext): Pro
     node.main.tint = 0xffffff;
     node.side.tint = 0xffffff;
     node.status.clear().circle(0, 0, 5).fill({ color, alpha: visualState === "offline" ? 0.45 : 0.95 });
+    drawScreenUi(node, visualState, phaseMs);
     statusNode.alpha = reducedMotion ? 0.86 : visualState === "work" || visualState === "thinking" ? 0.95 : 0.82;
   };
 
@@ -172,6 +207,14 @@ export async function createOfficeDisplayLayer(context: OfficeLayerContext): Pro
     setReducedMotion(reduced) {
       reducedMotion = reduced;
     },
+    tick() {
+      const phaseMs = now();
+      for (const node of nodes.values()) {
+        if (node.root.visible && (node.visualState === "work" || node.visualState === "thinking" || node.visualState === "walk")) {
+          drawScreenUi(node, node.visualState, phaseMs);
+        }
+      }
+    },
     setTexture(roleId, target, texture) {
       const node = nodes.get(roleId);
       if (!node) return;
@@ -179,7 +222,7 @@ export async function createOfficeDisplayLayer(context: OfficeLayerContext): Pro
     },
     update(snapshot: OfficeSnapshot) {
       resize();
-      const phaseMs = context.now?.() ?? (typeof performance !== "undefined" ? performance.now() : Date.now());
+      const phaseMs = now();
       const stateByRole = new Map(snapshot.roles.map((state) => [state.roleId, state]));
       for (const [index, roleId] of OFFICE_ROLE_ORDER.entries()) {
         const node = nodes.get(roleId);
@@ -190,8 +233,7 @@ export async function createOfficeDisplayLayer(context: OfficeLayerContext): Pro
         statusNode.visible = Boolean(state);
         const visualState = visualStateFor(state, phaseMs, previousStates.get(roleId), index * 137, reducedMotion);
         previousStates.set(roleId, visualState);
-        applyStatus(roleId, visualState);
-        node.copy.text = state ? `${context.callbacks.roleLabel?.(roleId) ?? roleId}\n${statusText(context, state, visualState)}` : "";
+        applyStatus(roleId, visualState, phaseMs);
       }
     },
     destroy() {

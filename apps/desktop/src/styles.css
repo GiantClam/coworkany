@@ -968,7 +968,6 @@ textarea:focus { border-color: var(--wb-primary, #ffd000); }
 .wb-shell-collapsed .wb-locale-option { min-width: 32px; padding: 0 4px; }
 .wb-brand-mark { display: grid; flex: 0 0 40px; place-items: center; width: 40px; height: 40px; background: url("/brand/coworkany-icon-64.png") center / contain no-repeat; color: transparent; font-size: 0; }
 .wb-brand-title { display: none; width: 220px; height: 48px; overflow: hidden; background: url("/brand/coworkany-logo.png") left center / contain no-repeat; color: transparent; font-size: 0; }
-.wb-sidebar-context-label { grid-column: 1 / -1; display: flex; width: 100%; min-height: 28px; align-items: center; overflow: hidden; border: 1px solid color-mix(in srgb, var(--wb-border, #e5e5e0) 75%, transparent); border-radius: 4px; padding: 0 12px; background: var(--wb-background, #fdfdfb); color: var(--wb-foreground, #111); font-family: var(--wb-display-font, "Barlow Condensed", sans-serif); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-overflow: ellipsis; white-space: nowrap; }
 .wb-sidebar-scroll { min-height: 0; flex: 1; overflow-y: auto; overflow-x: hidden; padding-top: 16px; scrollbar-width: none; }
 .wb-sidebar-scroll::-webkit-scrollbar { display: none; }
 .wb-sidebar-nav { display: grid; gap: 8px; }

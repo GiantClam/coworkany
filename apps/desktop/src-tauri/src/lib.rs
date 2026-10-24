@@ -624,8 +624,10 @@ fn is_usable_desktop_config(value: &serde_json::Value) -> bool {
 
 fn is_default_portable_text_config(value: &serde_json::Value) -> bool {
     value.get("provider").and_then(serde_json::Value::as_object).is_some_and(|provider| {
-        provider.get("id").and_then(serde_json::Value::as_str) == Some("local")
-            && matches!(provider.get("model").and_then(serde_json::Value::as_str), Some("") | Some("ollama/qwen3:8b"))
+        let id = provider.get("id").and_then(serde_json::Value::as_str);
+        let model = provider.get("model").and_then(serde_json::Value::as_str);
+        (id == Some("local") && matches!(model, Some("") | Some("ollama/qwen3:8b")))
+            || (id == Some("cheapbuddy") && model == Some("") && provider.get("credentialRef").and_then(serde_json::Value::as_str).map_or(true, str::is_empty))
     })
 }
 
@@ -649,17 +651,25 @@ fn merge_portable_provider_config(current: &serde_json::Value, imported: &serde_
 /// 客户包中的 Provider 和默认路由以种子配置为准，用户工作目录、运行时路径等设置保持不变。
 fn merge_customer_seed_provider_config(current: &serde_json::Value, seed: &serde_json::Value) -> serde_json::Value {
     let mut merged = current.clone();
-    if is_default_portable_text_config(current) {
+    let cheapbuddy_seed = seed.get("provider").and_then(|provider| provider.get("id")).and_then(serde_json::Value::as_str) == Some("cheapbuddy");
+    let cheapbuddy_current = current.get("provider").and_then(|provider| provider.get("id")).and_then(serde_json::Value::as_str) == Some("cheapbuddy");
+    if is_default_portable_text_config(current) && (!cheapbuddy_seed || cheapbuddy_current) {
         if let Some(provider) = seed.get("provider") { merged["provider"] = provider.clone(); }
     }
     if let Some(seed_profiles) = seed.get("providers").and_then(serde_json::Value::as_object) {
         let mut profiles = merged.get("providers").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
-        for (id, profile) in seed_profiles { profiles.insert(id.clone(), profile.clone()); }
+        for (id, profile) in seed_profiles {
+            if id == "cheapbuddy" && profiles.contains_key(id) { continue; }
+            profiles.insert(id.clone(), profile.clone());
+        }
         merged["providers"] = serde_json::Value::Object(profiles);
     }
     if let Some(seed_defaults) = seed.get("defaults").and_then(serde_json::Value::as_object) {
         let mut defaults = merged.get("defaults").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
-        for (capability, provider_id) in seed_defaults { defaults.insert(capability.clone(), provider_id.clone()); }
+        for (capability, provider_id) in seed_defaults {
+            if provider_id.as_str() == Some("cheapbuddy") && (defaults.contains_key(capability) || !cheapbuddy_current) { continue; }
+            defaults.insert(capability.clone(), provider_id.clone());
+        }
         merged["defaults"] = serde_json::Value::Object(defaults);
     }
     if seed.get("packageType").and_then(serde_json::Value::as_str) == Some("customer") {
@@ -1000,6 +1010,13 @@ fn is_allowed_external_preview_url(value: &str) -> bool {
 fn open_external_preview(url: String) -> Result<(), String> {
     if !is_allowed_external_preview_url(&url) { return Err("external_preview_url_rejected".into()); }
     platform::open_url_command(&url).spawn().map(|_| ()).map_err(|error| format!("external_preview_open_failed: {error}"))
+}
+
+const CHEAPBUDDY_PURCHASE_URL: &str = "https://cheapbuddy.cc/#pricing";
+
+#[tauri::command]
+fn open_cheapbuddy_purchase() -> Result<(), String> {
+    platform::open_url_command(CHEAPBUDDY_PURCHASE_URL).spawn().map(|_| ()).map_err(|error| format!("cheapbuddy_purchase_open_failed: {error}"))
 }
 
 #[cfg(test)]
@@ -1777,7 +1794,7 @@ pub fn run() {
             *state.0.lock().map_err(|_| "startup_state_poisoned")? = Some(StartupResults { local_state, runtime });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, append_diagnostic_log, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, open_external_preview, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_invocation, get_run_metrics, query_metrics, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, apply_workflow_ai_operation, list_workflow_ai_operation_groups, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
+        .invoke_handler(tauri::generate_handler![health, local_state_status, runtime_status, list_local_skill_catalog, repair_runtime, runtime_paths, read_config, write_config, append_diagnostic_log, begin_local_attachment, append_local_attachment_chunk, finish_local_attachment, abort_local_attachment, allocate_media_temp, write_writer_draft, inspect_artifact, register_artifact, list_artifacts, remove_artifact, export_diagnostics, open_workspace, open_external_preview, open_cheapbuddy_purchase, pick_directory, pick_workflow_files, save_workflow_export, save_workflow_output, open_artifact, open_artifact_folder, open_artifact_default, open_artifact_with, read_artifact, read_workflow_local_file, open_vault_file, create_conversation, set_conversation_session, append_message, create_run, append_run_event, finish_run, record_usage, record_run_invocation, get_run_metrics, query_metrics, record_run_node, record_run_checkpoint, record_run_attempt, list_conversations, list_messages, list_runs, inspect_run, list_recoverable_attempts, save_workflow, list_workflows, apply_workflow_ai_operation, list_workflow_ai_operation_groups, remove_workflow, usage_summary, host::host_start, host::host_send, host::host_stop]);
     let app = builder.build(tauri::generate_context!()).expect("error while building CoworkAny");
     drop(startup_progress);
     app.run(|app, event| {
@@ -1867,6 +1884,32 @@ mod tests {
         assert!(merged["providers"]["user-provider"].is_object());
         assert_eq!(merged["providers"]["image-main"]["model"], "gpt-image-2.5");
         assert_eq!(merged["defaults"]["image"], "image-main");
+    }
+
+    #[test]
+    fn cheapbuddy_seed_preserves_user_defaults_and_existing_account_reference() {
+        let current = serde_json::json!({
+            "provider": { "id": "local", "source": "local", "model": "" },
+            "providers": { "cheapbuddy": { "id": "cheapbuddy", "credentialRef": "existing-reference", "model": "user-model" } },
+            "defaults": { "image": "user-image" }
+        });
+        let seed = config::default_config(Path::new("/seed"));
+        let merged = merge_customer_seed_provider_config(&current, &seed);
+        assert_eq!(merged["provider"]["id"], "local");
+        assert_eq!(merged["defaults"]["image"], "user-image");
+        assert!(merged["defaults"].get("text").is_none());
+        assert_eq!(merged["providers"]["cheapbuddy"]["credentialRef"], "existing-reference");
+        assert_eq!(merged["providers"]["cheapbuddy"]["model"], "user-model");
+    }
+
+    #[test]
+    fn unauthenticated_cheapbuddy_default_can_receive_an_explicit_customer_seed() {
+        let current = config::default_config(Path::new("/user"));
+        assert!(is_default_portable_text_config(&current));
+        let seed = serde_json::json!({ "provider": { "id": "customer", "model": "customer-model" }, "defaults": { "text": "customer" } });
+        let merged = merge_customer_seed_provider_config(&current, &seed);
+        assert_eq!(merged["provider"]["model"], "customer-model");
+        assert_eq!(merged["workspacePath"], current["workspacePath"]);
     }
 
     #[cfg(target_os = "macos")]

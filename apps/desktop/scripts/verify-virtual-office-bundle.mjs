@@ -7,6 +7,19 @@ import { fileURLToPath, URL } from "node:url";
 const dist = fileURLToPath(new URL("../dist", import.meta.url));
 const staticImport = /(?:import\s+(?:[^"']+?\s+from\s+)?|export\s+[^"']+?\s+from\s+)["']([^"']+)["']/gu;
 
+/** Stable root labels emitted by the renderer modules after Vite minification. */
+export const OFFICE_RENDERER_MODULE_MARKERS = Object.freeze({
+  background: "virtual-office-background",
+  desk: "virtual-office-desk-back",
+  chair: "virtual-office-chairs",
+  display: "virtual-office-displays",
+  character: "virtual-office-characters",
+});
+
+function countOccurrences(source, needle) {
+  return source.split(needle).length - 1;
+}
+
 function assetName(reference) {
   const path = reference.split("?", 1)[0].split("#", 1)[0];
   const normalized = path.startsWith("./") ? path.slice(2) : path;
@@ -56,8 +69,10 @@ export async function validateBundle({ distDir = dist, allowMissingManifest = fa
   }
   const staticHasPixi = [...entryFiles].some((file) => /(?:from\s*["']pixi\.js|import\s*\(\s*["']pixi\.js|require\s*\(\s*["']pixi\.js|PixiJS|pixi\.js\/math)/u.test(contents.get(file) ?? ""));
   const dynamicHasPixi = sceneFiles.length > 0 && sceneFiles.some(([, source]) => /PixiJS|pixi\.js\/math|from\s*["']pixi\.js/u.test(source));
+  const rendererModules = Object.fromEntries(Object.entries(OFFICE_RENDERER_MODULE_MARKERS).map(([name, marker]) => [name, sceneFiles.reduce((count, [, source]) => count + countOccurrences(source, marker), 0)]));
+  const rendererModulesPresent = Object.values(rendererModules).every((count) => count === 1);
   const entryMissing = entryFiles.size === 0;
-  return { ok: !staticHasPixi && dynamicHasPixi && missing.length === 0 && !entryMissing, staticHasPixi, dynamicHasPixi, entryMissing, missing, sceneFiles: sceneFiles.map(([file]) => file), staticFiles: [...entryFiles] };
+  return { ok: !staticHasPixi && dynamicHasPixi && rendererModulesPresent && missing.length === 0 && !entryMissing, staticHasPixi, dynamicHasPixi, rendererModulesPresent, rendererModules, entryMissing, missing, sceneFiles: sceneFiles.map(([file]) => file), staticFiles: [...entryFiles] };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

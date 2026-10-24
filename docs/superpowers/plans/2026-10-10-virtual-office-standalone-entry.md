@@ -18,6 +18,8 @@
 - Use the existing home route mode for /dashboard/office; do not widen the shared route-mode union.
 - Verify macOS only; do not claim Windows validation.
 
+Implementation and verification steps were completed in the shared working tree on 2026-10-11. The historical commit-only steps remain unchecked because this continuation leaves commit ownership with the workspace owner.
+
 ---
 
 ### Task 1: Add the independent route and page lifecycle
@@ -34,7 +36,7 @@
 - DesktopVirtualOffice({ composition, capabilities, navigation, locale }) starts and stops the existing OfficeComposition and renders VirtualOfficeHome.
 - /dashboard/office is a manifest route with mode: "home", placement: "main", and a network icon key.
 
-- [ ] **Step 1: Extend route regression fixtures before implementation**
+- [x] **Step 1: Extend route regression fixtures before implementation**
 
 Add the manifest assertion and release contract:
 
@@ -63,7 +65,7 @@ pnpm exec tsx --test apps/desktop/test/routes.test.ts apps/desktop/test/release-
 
 Expected: FAIL because the route and render marker do not exist yet.
 
-- [ ] **Step 2: Add the manifest entry and icon mapping**
+- [x] **Step 2: Add the manifest entry and icon mapping**
 
 In WORKBENCH_ROUTE_MANIFEST, add immediately after the dashboard home route:
 
@@ -77,7 +79,7 @@ In routeIconKeys, add:
 "/dashboard/office": "network",
 ~~~
 
-- [ ] **Step 3: Separate home content from office lifecycle**
+- [x] **Step 3: Separate home content from office lifecycle**
 
 Change DesktopHome's props to retain only `composition`, `capabilities`, `navigation`, `locale`, `children`, and optional `showVirtualOffice`; remove the currently unused `client` and `agentDirectoryReader` props. Default `showVirtualOffice` to false; only start/stop the composition and render VirtualOfficeHome when that flag is true. Create DesktopVirtualOffice.tsx as the focused wrapper:
 
@@ -89,7 +91,7 @@ export function DesktopVirtualOffice({ composition, capabilities, navigation, lo
 
 Keep the existing desktop-home shell class so current layout tokens continue to apply.
 
-- [ ] **Step 4: Mount the route before generic library/chat surfaces**
+- [x] **Step 4: Mount the route before generic library/chat surfaces**
 
 Import DesktopVirtualOffice and derive:
 
@@ -99,7 +101,7 @@ const isVirtualOfficeRoute = selected.path === "/dashboard/office";
 
 Render <DesktopVirtualOffice ... /> in the main workspace branch before the generic recent-card/library fallback, remove the now-unused client and agentDirectoryReader props from the dashboard DesktopHome call, and leave showVirtualOffice omitted there. The office route must not render <HomeEntryGroups> or the generic recent-session panel.
 
-- [ ] **Step 5: Run the route tests**
+- [x] **Step 5: Run the route tests**
 
 ~~~
 pnpm exec tsx --test apps/desktop/test/routes.test.ts apps/desktop/test/release-entry-regression.test.ts
@@ -126,7 +128,7 @@ git commit -m "Expose virtual office as a standalone workspace"
 - OfficeRoleStatusCardProps = { role, state, locale, onEnter, onWorkItemOpen, onClose?, unavailableReason? }.
 - The card exposes one primary onEnter button and stable OfficeWorkItemKey callbacks for devices and recent items.
 
-- [ ] **Step 1: Add failing component tests**
+- [x] **Step 1: Add failing component tests**
 
 Use renderToStaticMarkup and direct function invocation, following virtual-office-components.test.ts:
 
@@ -146,11 +148,11 @@ test("status card exposes localized state, workload counts, work items, and one 
 
 Also assert an unavailable role disables the primary button and task/recent buttons pass composite keys. Run the focused test and expect FAIL because the component is missing.
 
-- [ ] **Step 2: Extract shared status-label logic**
+- [x] **Step 2: Extract shared status-label logic**
 
 Export the existing statusLabel(state, locale) helper from RoleCard.tsx (rename to officeStatusLabel if needed) and import it from the new component. Do not duplicate the waiting-user wording or status map.
 
-- [ ] **Step 3: Implement the card with accessible DOM**
+- [x] **Step 3: Implement the card with accessible DOM**
 
 Implement the card as an aside or article with role="dialog", aria-label, a close button when onClose exists, four metric cells, limited device buttons, recent-work buttons, and one primary enter button:
 
@@ -164,7 +166,7 @@ Implement the card as an aside or article with role="dialog", aria-label, a clos
 
 Reuse state.devices, state.overflowCount, state.recentItems.slice(0, 5), and onWorkItemOpen. Keep the existing RoleCard fallback list behavior intact while allowing its open action to be redirected by the parent.
 
-- [ ] **Step 4: Run component tests and typecheck**
+- [x] **Step 4: Run component tests and typecheck**
 
 ~~~
 pnpm exec tsx --test apps/desktop/test/virtual-office-components.test.ts apps/desktop/test/virtual-office-role-status-card.test.ts
@@ -198,7 +200,7 @@ git commit -m "Add accessible virtual office role status card"
 - VirtualOfficeHome keeps selectedRoleId: OfficeRoleId | null and selectedAnchor: OfficeRoleAnchor | null.
 - clampOfficePopover(anchor, cardSize, hostSize) returns { left, top, placement } with values clamped to the host.
 
-- [ ] **Step 1: Add pure positioning tests**
+- [x] **Step 1: Add pure positioning tests**
 
 Create cases for right-side placement, left-edge fallback, right-edge flip, and narrow-window bottom placement:
 
@@ -210,7 +212,7 @@ assert.equal(clampOfficePopover({ x: 40, y: 180 }, { width: 280, height: 220 }, 
 
 Run the test and expect FAIL until the pure helper exists.
 
-- [ ] **Step 2: Implement anchor calculation and callback types**
+- [x] **Step 2: Implement anchor calculation and callback types**
 
 Add OfficeRoleAnchor to types.ts. Store the current anchor on each Pixi role node, update it beside the character during render, and invoke:
 
@@ -220,17 +222,17 @@ callbacks.onSelectRole(roleId, { x, y: y - station.height });
 
 Rename the callback plumbing in OfficeCanvasEnhancement and keep onActivate unchanged. The Pixi canvas remains aria-hidden; all semantic controls remain in the React overlay.
 
-- [ ] **Step 3: Add selection state to VirtualOfficeHome**
+- [x] **Step 3: Add selection state to VirtualOfficeHome**
 
 Replace direct navigation on character click with selection. Resolve the selected role/state from roles and snapshot.roles; render OfficeRoleStatusCard inside a stage wrapper. Add a document-level pointer listener that closes only when the event target is outside the stage, and a keydown listener for Escape that returns focus to the role trigger when available.
 
 When snapshot.roles no longer contains the selected role, clear both selection values. onEnter calls navigation.go(role.homeRoute); task and recent buttons call activateOfficeWorkItem.
 
-- [ ] **Step 4: Give the React fallback the same selection path**
+- [x] **Step 4: Give the React fallback the same selection path**
 
 Change FallbackOfficeList to accept onSelect(role) rather than only onOpen, and have its role button select the card. Keep the existing list visible below the scene so keyboard and screen-reader users never depend on Pixi.
 
-- [ ] **Step 5: Run focused tests and typecheck**
+- [x] **Step 5: Run focused tests and typecheck**
 
 ~~~
 pnpm exec tsx --test apps/desktop/test/virtual-office-popover-position.test.ts apps/desktop/test/virtual-office-scene.test.ts apps/desktop/test/virtual-office-components.test.ts
@@ -259,7 +261,7 @@ git commit -m "Open live role status cards from the office scene"
 - .virtual-office-stage is the relative overlay host.
 - .virtual-office-role-popover is the DOM status card; it must remain usable in narrow windows.
 
-- [ ] **Step 1: Add CSS regression assertions**
+- [x] **Step 1: Add CSS regression assertions**
 
 Extend the contrast test to require the existing darker muted fallback and add source checks for the enlarged scene and overlay rules:
 
@@ -269,7 +271,7 @@ assert.match(css, /min-height:\s*clamp\(520px/);
 assert.match(css, /\.virtual-office-role-popover/);
 ~~~
 
-- [ ] **Step 2: Implement responsive layout**
+- [x] **Step 2: Implement responsive layout**
 
 Use existing tokens and no new palette. The core rules should include:
 
@@ -287,11 +289,11 @@ Use existing tokens and no new palette. The core rules should include:
 
 Use color-mix and existing --wb-* variables, preserve the current muted fallback #5f5f58, and add visible focus styles. Do not make the fallback list the main visual surface on the standalone route.
 
-- [ ] **Step 3: Update the acceptance fixture**
+- [x] **Step 3: Update the acceptance fixture**
 
 Give the fixture a standalone wrapper class and add a deterministic role-selection instruction in the banner text. Keep the existing 50-item, status-toggle, bilingual, invalid-manifest, and route assertions intact.
 
-- [ ] **Step 4: Run CSS and fixture-related tests**
+- [x] **Step 4: Run CSS and fixture-related tests**
 
 ~~~
 pnpm exec tsx --test apps/desktop/test/virtual-office-contrast.test.ts apps/desktop/test/virtual-office-components.test.ts apps/desktop/test/virtual-office-bundle.test.ts
@@ -314,7 +316,7 @@ git commit -m "Expand virtual office canvas and role popover layout"
 - Modify: apps/desktop/test/fixtures/virtual-office-acceptance.tsx only if a deterministic smoke selector is missing.
 - Create: openspec/changes/real-state-virtual-office/evidence/macos-standalone-office-2026-10-10.md
 
-- [ ] **Step 1: Run the focused office suite**
+- [x] **Step 1: Run the focused office suite**
 
 ~~~
 pnpm exec tsx --test apps/desktop/test/virtual-office-*.test.ts
@@ -322,7 +324,7 @@ pnpm exec tsx --test apps/desktop/test/virtual-office-*.test.ts
 
 Expected: all virtual-office tests pass, including route, status-card, positioning, contrast, asset, bundle, store, projector, and navigation coverage.
 
-- [ ] **Step 2: Run desktop regression and typecheck**
+- [x] **Step 2: Run desktop regression and typecheck**
 
 ~~~
 pnpm --filter @coworkany/desktop test
@@ -332,7 +334,7 @@ pnpm --filter @coworkany/workbench-ui typecheck
 
 Expected: no test or TypeScript failures.
 
-- [ ] **Step 3: Build and validate static assets**
+- [x] **Step 3: Build and validate static assets**
 
 ~~~
 pnpm --filter @coworkany/desktop build
@@ -342,7 +344,7 @@ pnpm --filter @coworkany/desktop verify:virtual-office-bundle
 
 Expected: Vite build succeeds, manifest/asset validation succeeds, and the Pixi boundary remains intact.
 
-- [ ] **Step 4: Run the macOS native smoke**
+- [x] **Step 4: Run the macOS native smoke**
 
 Open the built macOS app and record evidence for:
 
@@ -355,7 +357,7 @@ Open the built macOS app and record evidence for:
 
 Save screenshots and observed routes in openspec/changes/real-state-virtual-office/evidence/macos-standalone-office-2026-10-10.md, explicitly marking Windows as unverified.
 
-- [ ] **Step 5: Final diff and status check**
+- [x] **Step 5: Final diff and status check**
 
 ~~~
 git diff --check

@@ -4,16 +4,16 @@ import { createPlatformProviderProfile, platformIdForProvider, PROVIDER_PLATFORM
 
 test("image and video directly expose the cloud governance provider catalog", () => {
   assert.deepEqual(PROVIDER_PLATFORM_OPTIONS.image.map((platform) => platform.id), [
-    "bailian_official", "google_official", "openai_official", "runninghub", "pptoken",
+    "cheapbuddy", "bailian_official", "google_official", "openai_official", "runninghub", "pptoken",
   ]);
   assert.deepEqual(PROVIDER_PLATFORM_OPTIONS.video.map((platform) => platform.id), [
-    "bailian_official", "minimax_official", "gemini_official", "runninghub",
+    "cheapbuddy", "bailian_official", "minimax_official", "gemini_official", "runninghub",
   ]);
 });
 
 test("settings platforms do not prefill a built-in model catalog", () => {
   assert.deepEqual(PROVIDER_PLATFORM_OPTIONS.text.map((platform) => platform.id), [
-    "siliconflow", "openrouter", "openai_compatible", "qwen_official", "minimax_official", "glm_official", "volcengine_official", "pptoken",
+    "cheapbuddy", "siliconflow", "openrouter", "openai_compatible", "qwen_official", "minimax_official", "glm_official", "volcengine_official", "pptoken",
   ]);
   assert.ok(Object.values(PROVIDER_PLATFORM_OPTIONS).flat().every((platform) => !("models" in platform)));
 });

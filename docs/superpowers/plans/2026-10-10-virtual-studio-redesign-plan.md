@@ -33,6 +33,8 @@
 
 The approved runtime scope is implemented. The scene now renders independent background, desk-back, character rig, display, desk-front, status, and interaction layers; the role state resolver covers idle, walk, work, thinking, waiting, completed, error, and offline; reduced-motion maps to static poses and disables status effects. The browser check at `/dashboard/office` rendered the 3+4 island layout and opened a role status card. macOS packaging and Windows release validation remain outside this checkpoint.
 
+The approved split-head continuation is also implemented: each role now renders overlapping head/body textures from its full atlas cell, with body on `torso` and head on `head`; initial available roles remain idle instead of entering an unintended startup walk.
+
 ---
 
 ## File Map and Responsibilities
@@ -279,7 +281,7 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
 - [x] **Step 1: Write layer-order and replacement tests**
 
-  Assert that the scene creates the z-order `background < desk-back < character < display < desk-front < status/hit`, that replacing a character skin leaves desk and display object identity unchanged, and that replacing a display texture leaves character rig state unchanged.
+  Assert that the scene creates the z-order `background < desk-back < display < character < desk-front < status/hit`, that replacing a character skin leaves desk and display object identity unchanged, and that replacing a display texture leaves character rig state unchanged.
 
 - [x] **Step 2: Run the focused test and verify failure**
 
@@ -299,7 +301,7 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
 - [x] **Step 5: Implement the display layer**
 
-  Create independent main and side display sprites, update screen copy from projected labels only, and render status glow from `OfficeVisualState`. Never import navigation or source adapters. The display layer must sit between the character and desk-front layers.
+  Create independent main and side display sprites, update screen copy from projected labels only, and render status glow from `OfficeVisualState`. Never import navigation or source adapters. The display layer must sit behind the character and desk-front layers so the person reads as seated at the workstation.
 
 - [x] **Step 6: Implement the rig adapter and character layer**
 
@@ -343,11 +345,11 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 - The public React props remain `snapshot`, `onActivate`, `onOpenRole`, `roleLabel`, `statusLabel`, and `onStateChange`.
 - The scene remains optional; the fallback list is always rendered when roles are available.
 
-- [ ] **Step 1: Add failing component assertions**
+- [x] **Step 1: Add failing component assertions**
 
   Assert the warm scene wrapper, seven role anchors, bilingual state text, fallback cards, and the unchanged open / work-item callbacks in the acceptance fixture.
 
-- [ ] **Step 2: Run the fixture tests and verify failure**
+- [x] **Step 2: Run the fixture tests and verify failure**
 
   ```bash
   pnpm --dir apps/desktop exec tsx --test test/virtual-office-components.test.ts test/virtual-office-contrast.test.ts
@@ -355,15 +357,15 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
   Expected: FAIL only for the new scene markers and fixture expectations.
 
-- [ ] **Step 3: Update CSS and shell markup**
+- [x] **Step 3: Update CSS and shell markup**
 
   Add responsive island sizing, warm surface tokens, focus-safe fallback spacing, and a non-Canvas scene notice. Keep all text and controls in React; do not place essential labels only in Pixi.
 
-- [ ] **Step 4: Update the acceptance fixture**
+- [x] **Step 4: Update the acceptance fixture**
 
   Seed running, waiting, completed, failed, overflow, and unavailable roles so the new desk/display/character layers are exercised alongside the existing cards.
 
-- [ ] **Step 5: Run focused UI tests**
+- [x] **Step 5: Run focused UI tests**
 
   ```bash
   pnpm --dir apps/desktop exec tsx --test test/virtual-office-components.test.ts test/virtual-office-contrast.test.ts test/virtual-office-navigation.test.ts test/virtual-office-status.test.ts
@@ -392,11 +394,11 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 - Asset verifier exits non-zero for missing approved files, bad hashes, invalid alpha / dimensions, unknown rig clips, duplicate IDs, or gzip budget violations.
 - Frame policy continues to expose active, idle, hidden, and reduced-motion modes with deterministic transitions.
 
-- [ ] **Step 1: Add failing generated-asset checks**
+- [x] **Step 1: Add failing generated-asset checks**
 
   Test the approved manifest for every required asset family, exact role IDs, required clips, and transparent texture metadata. Add a fixture that fails when one approved file is missing or its SHA-256 changes.
 
-- [ ] **Step 2: Run the asset gate and verify failure on the bad fixture**
+- [x] **Step 2: Run the asset gate and verify failure on the bad fixture**
 
   ```bash
   pnpm --dir apps/desktop test -- --test-name-pattern="generated asset|asset manifest"
@@ -457,7 +459,7 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
   Expected: TypeScript exits 0 and Vite produces a static entry plus a dynamic renderer chunk.
 
-- [ ] **Step 3: Run the macOS build checks available in the environment**
+- [x] **Step 3: Run the macOS build checks available in the environment**
 
   ```bash
   pnpm --dir apps/desktop run build:macos
@@ -475,7 +477,7 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
   Include commit SHA, macOS version, commands, screenshot paths, measured bundle / asset totals, and any untested host-specific behavior. Explicitly state that Windows validation remains deferred.
 
-- [x] **Step 6: Commit evidence**
+- [ ] **Step 6: Commit evidence**
 
   ```bash
   git add docs/superpowers/assets/2026-10-10-virtual-studio-asset-approval.md docs/superpowers/evidence/2026-10-10-virtual-studio-acceptance.md
@@ -495,8 +497,232 @@ export function createOfficeDisplayLayer(context: OfficeLayerContext): Promise<O
 
 Plan complete and saved to `docs/superpowers/plans/2026-10-10-virtual-studio-redesign-plan.md`.
 
+The shell, generated-asset, bundle, and macOS verification steps were completed in the shared working tree on 2026-10-11. The historical commit-only steps remain unchecked because this continuation deliberately leaves commit ownership with the workspace owner.
+
 Two execution options:
 
 1. **Subagent-Driven (recommended)** — dispatch a fresh subagent per task and review between tasks.
 2. **Inline Execution** — execute the tasks in this session with checkpoints.
+
+---
+
+## Approved Visual Correction Addendum (2026-10-11)
+
+**Goal:** Align each character with the desk and monitor in the approved composite while making the monitor's work state readable in the live layered renderer.
+
+**Architecture:** Keep the existing independent layers and shared station anchors. Render the display behind the character, lower the character baseline so the desk-front overlay masks the legs, and add a renderer-only screen-status overlay driven by the already projected visual state and animation phase. No business-state source or asset approval boundary changes.
+
+**Files:**
+- Modify: `apps/desktop/src/virtual-office/office-layer-types.ts` — update layer z-order constants and display-node overlay fields if needed.
+- Modify: `apps/desktop/src/virtual-office/office-character-layer.ts` — lower the character root baseline relative to the station anchor.
+- Modify: `apps/desktop/src/virtual-office/office-display-layer.ts` — draw compact state/progress UI inside each screen and animate it from `phaseMs`.
+- Modify: `apps/desktop/test/virtual-office-layer-order.test.ts` — assert display < character < desk-front and the overlay contract.
+
+- [x] **Step 1: Lock the visual contract in tests**
+
+  Update the layer-order expectation to `background < deskBack < display < character < deskFront < status`. Add an assertion that every display node owns a state overlay and that `update` changes its visual state without adding a second business-state source.
+
+- [x] **Step 2: Implement the minimal ordering and baseline correction**
+
+  Set `OFFICE_LAYER_Z.display = 20`, `character = 30`, and keep `deskFront = 40`. In the character resize path use the seated factor `anchor.y + characterHeight * OFFICE_SEATED_ROOT_Y_FACTOR` (`OFFICE_SEATED_ROOT_Y_FACTOR = -0.04`) so the hips align with the chair cushion while the desk front still masks the lower body and the head/torso remain in front of the screen. Keep the existing shared anchor and texture scale.
+
+- [x] **Step 3: Implement compact screen-state UI**
+
+  The original compact-label proposal is superseded by the approved no-text addendum below: use only a `Graphics` status bar and geometric progress/line cues. Use the resolved visual state colors, derive a deterministic pulse/progress width from `phaseMs`, preserve reduced-motion behavior, and position the chrome in the upper-middle of the screen so the character layer cannot obscure it.
+
+- [x] **Step 4: Run focused checks and browser acceptance**
+
+  Run the layer-order, scene, visual-state, and projector tests; then run typecheck, Vite build, and both virtual-office verification scripts. Reload `/dashboard/office`, confirm seven visible idle stations, inspect the composite screenshot, and confirm no browser console warnings/errors.
+
+- [x] **Step 5: Record the result**
+
+  Leave the live browser tab open for review and report the exact commands and outcomes. If the standing source atlas still leaves a small pose mismatch, state that the desk occlusion is the intentional approximation and that a separately approved seated atlas would be a future art revision.
+
+## Approved No-Text Canvas Addendum (2026-10-11)
+
+**Goal:** Remove decorative Pixi text from the studio canvas because the visual workspace has too much copy, while retaining the React role cards and non-text visual state cues.
+
+**Architecture:** The canvas remains a decorative, image-led composition. Role identity is communicated by the approved character/desk/display art and station position; state is communicated by status color, screen progress geometry, and the existing character animation. React cards remain the accessible textual source for role names and statuses, so this change does not remove keyboard or screen-reader information.
+
+**Files:**
+- Modify: `apps/desktop/src/virtual-office/office-display-layer.ts` — remove Pixi `Text` labels and state-copy helpers; retain the `Graphics` screen UI, status lights, and animated progress geometry.
+- Modify: `apps/desktop/src/virtual-office/office-layer-types.ts` — remove the display-node `copy` contract.
+- Modify: `apps/desktop/src/virtual-office/office-scene.ts` — remove role-name, device-status, and overflow-count `Text` objects from the decorative interaction overlay while keeping hit areas and colored markers.
+- Modify: `apps/desktop/test/virtual-office-layer-order.test.ts` — assert that the rendered Pixi layer tree contains no `Text` nodes and that the screen graphics still update for active states.
+
+**Interfaces:**
+- The display layer continues to expose `screenUi: Graphics`, `status: Graphics`, `visualState`, and optional `tick(): void`; no business-state source is added.
+- The React fallback cards and their existing `roleLabel`/`statusLabel` callbacks remain unchanged.
+
+- [x] **Step 1: Add the failing no-text regression test**
+
+  Extend `apps/desktop/test/virtual-office-layer-order.test.ts` with a recursive Pixi-container helper that detects `Text` descendants. Assert that a composed scene has no text descendants, and replace the old `copy.text` assertions with checks for `visualState` and a non-empty `screenUi` bounds rectangle. Run the focused layer-order test and confirm it fails because the current display node still creates `copy`.
+
+- [x] **Step 2: Remove display-screen text**
+
+  In `office-display-layer.ts`, remove the `Text` import, bilingual screen-label constants, `statusText`/`screenStatusText` helpers, `copy` construction/positioning, and `node.copy.text` updates. Keep `screenUi` and its color/progress/line drawing, including the existing `tick()` pulse. Remove `copy` from `OfficeDisplayLayerNode` in `office-layer-types.ts`.
+
+- [x] **Step 3: Remove interaction-overlay text**
+
+  In `office-scene.ts`, remove the `Text` import and the role-name, device-status, and `+N` overflow text nodes. Keep the role/device hit areas, colored device marker graphics, click handlers, and layout calculations. `renderOverlay` must no longer assign text, visibility, or text positions.
+
+- [x] **Step 4: Run focused regression checks**
+
+  ```bash
+  pnpm --dir apps/desktop exec tsx --test test/virtual-office-layer-order.test.ts test/virtual-office-scene.test.ts test/virtual-office-visual-state.test.ts test/virtual-office-projector.test.ts
+  pnpm --dir apps/desktop run typecheck
+  ```
+
+  Expected: all focused tests and TypeScript checks pass; the layer test explicitly proves that no Pixi `Text` remains while active screen graphics still render.
+
+- [x] **Step 5: Run build, asset, bundle, and full-suite verification**
+
+  ```bash
+  pnpm --dir apps/desktop exec vite build
+  pnpm --dir apps/desktop run verify:virtual-office-assets
+  pnpm --dir apps/desktop run verify:virtual-office-bundle
+  pnpm --dir apps/desktop run test
+  git diff --check
+  ```
+
+  Expected: every command exits 0; the full desktop suite remains green and the virtual-office asset/bundle budgets are unchanged.
+
+- [x] **Step 6: Verify the live browser composition**
+
+  Reload `http://127.0.0.1:1420/dashboard/office`, confirm one canvas and seven role cards with seven idle statuses, and inspect the screenshot for a text-free canvas, visible character/desk/display art, colored screen progress, and no console errors or warnings. Leave the tab open for review; React cards must still expose role names and statuses below the canvas.
+
+## Approved Character Motion Addendum (2026-10-11)
+
+**Goal:** Make the approved text-free studio feel naturally occupied: characters read as seated by default, active task geometry is larger, walk transitions use distinct directions and phases, and heads gently look left/right.
+
+**Architecture:** Keep the existing role-parametric atlas and renderer-neutral rig. The character layer adds deterministic per-role motion offsets at render time; the display layer scales its existing `Graphics` panel for active visual states. No business-state schema or new asset is introduced, and React cards remain the semantic text surface.
+
+**Design reference:** `docs/superpowers/specs/2026-10-11-virtual-studio-character-motion-design.md`
+
+**Files:**
+- Modify: `apps/desktop/src/virtual-office/office-character-layer.ts` — add stable role phase/direction helpers, seated-state baseline constants, and a procedural head-bone sway layered over rig evaluations.
+- Modify: `apps/desktop/src/virtual-office/office-display-layer.ts` — enlarge active-state screen geometry while preserving the text-free `Graphics` contract.
+- Modify: `apps/desktop/test/virtual-office-visual-state.test.ts` or a focused character-layer test — cover stable walk direction/phase and reduced-motion head behavior.
+- Modify: `apps/desktop/test/virtual-office-layer-order.test.ts` — keep the no-Text assertion and assert the active screen geometry is larger than idle geometry.
+
+**Interfaces:**
+- Character nodes continue to expose the same `bones`, `visualState`, and `update(snapshot)` API; motion offsets are internal to the renderer.
+- Display nodes continue to expose `screenUi: Graphics` and no `copy: Text` field.
+
+- [x] **Step 1: Add failing motion and task-scale tests**
+
+  Add deterministic test seams for the character layer's renderer clock and assert that adjacent role indices receive opposite walk direction signs, distinct phase offsets, and changing head rotation between two timestamps. Assert that reduced motion produces a stable head rotation. In the display test, capture the idle and running `screenUi` bounds and assert the running panel is larger.
+
+- [x] **Step 2: Implement seated, desynchronised character motion**
+
+  Keep the existing desk-occlusion baseline for idle/work/waiting. Derive `walkDirection = index % 2 === 0 ? 1 : -1` and a stable role phase (for example `index * 173ms`); feed both into walk evaluation timing/root x offset. Add a small sine-based rotation to the `head` bone after rig evaluation (`idle/work` subtle, `thinking/waiting` slightly stronger), and force the offset to zero when reduced motion is enabled.
+
+- [x] **Step 3: Enlarge active task geometry**
+
+  In `drawScreenUi`, use the enlarged base panel factors (`0.56` of display width and `0.32` of display height), then use a state multiplier of `1` for idle/terminal states and `1.5` for work/thinking/walk. Scale the panel dimensions and progress/line geometry together so the active task is visibly larger without introducing text or changing the station anchor.
+
+- [x] **Step 4: Run focused checks**
+
+  ```bash
+  pnpm --dir apps/desktop exec tsx --test test/virtual-office-layer-order.test.ts test/virtual-office-scene.test.ts test/virtual-office-visual-state.test.ts test/virtual-office-rig.test.ts test/virtual-office-projector.test.ts
+  pnpm --dir apps/desktop run typecheck
+  ```
+
+  Expected: no-text, motion, reduced-motion, and screen-scale assertions pass; TypeScript reports no API regressions.
+
+- [x] **Step 5: Run complete verification and browser acceptance**
+
+  Run the Vite build, virtual-office asset/bundle gates, full desktop suite, `git diff --check`, and reload `/dashboard/office`. Confirm seven seated idle characters, no synchronized walk direction when a transition is exercised, visibly larger active task panels, subtle head sway, seven textual React cards, and no browser console errors or warnings.
+
+### Addendum self-review
+
+- Spec coverage: the no-text addendum removes all decorative Pixi copy while retaining React accessibility; the motion addendum covers seated baseline, role-offset walking, visible head/torso sway, active task scaling, and reduced-motion behavior.
+- Placeholder scan: the two addenda contain no `TODO`, `TBD`, or unnamed implementation step; every new step has an exact file, behavior, or verification command.
+- Interface consistency: `OfficeDisplayLayerNode` exposes `screenUi` and no `copy`; character motion remains internal to `OfficeCharacterLayerHandle`; no business-state or asset-manifest contract changes.
+
+## Approved Split Head/Body Continuation (2026-10-11)
+
+**Goal:** Finish the remaining motion gap by making the head sprite independently rotatable while preserving the approved atlas, seated baseline, renderer-only state ownership, and no-text canvas.
+
+**Architecture:** Add a small atlas-part helper that derives overlapping `head` and `body` frames from each existing 128×128 role cell. The character layer creates two sprites per role: body under `torso`, head under `head`. Bone coordinates and seated placement use a full-cell scaled height; cropped sprite dimensions are never used as rig units. Replacement textures are split through the same helper so the public layer contract remains coherent.
+
+**Files:**
+- Modify: `apps/desktop/src/virtual-office/office-layer-assets.ts` — add deterministic full-cell and part-frame helpers.
+- Modify: `apps/desktop/src/virtual-office/office-layer-types.ts` — expose body/head sprites and full scaled character height on character nodes.
+- Modify: `apps/desktop/src/virtual-office/office-character-layer.ts` — create, position, resize, update, replace, and destroy the two part sprites; remove torso-coupled procedural sway once the head slot is visual.
+- Modify: `apps/desktop/test/virtual-office-layer-order.test.ts` — assert distinct part textures, slot parenting, full-height seating math, independent head transform, and replacement behavior.
+- Modify: `docs/superpowers/specs/2026-10-11-virtual-studio-character-motion-design.md` — record the approved continuation and acceptance criteria.
+
+- [x] **Step 1: Add failing atlas-part and layer tests**
+
+  Add tests that call `character.nodes.get("ai-chat")!` and assert `body`/`head` are distinct sprites, their texture frames have different `y`/`height`, `body.parent` is the torso bone, `head.parent` is the head bone, and `characterHeight` equals the full-cell scale rather than `body.height`. Add a timestamp test that changes only the head bone rotation and asserts the head sprite world transform changes while the body sprite world transform remains unchanged. Add a replacement-texture test using `setTexture` and assert both part textures are rebuilt from the replacement source.
+
+- [x] **Step 2: Implement deterministic part frames**
+
+  In `office-layer-assets.ts`, derive the full role cell first, then use an overlap seam: `headHeight = round(cell.height * 0.58)`, `bodyY = round(cell.height * 0.40)`, `bodyHeight = cell.height - bodyY`. Return `Rectangle(cell.x, cell.y, cell.width, headHeight)` for the head and `Rectangle(cell.x, cell.y + bodyY, cell.width, bodyHeight)` for the body. Preserve the existing manifest-region fallback and do not mutate the source texture.
+
+- [x] **Step 3: Mount split sprites and preserve full-height rig math**
+
+  Create the body sprite from the body frame and the head sprite from the head frame. Set both anchors to `(0.5, 1)`, attach body to `torso`, attach head to `head`, and position the head sprite at `y = -fullHeight * 0.14` relative to the head bone so its crop bottom aligns with the original full-cell silhouette. Store `characterHeight = fullCellHeight * scale` on the node. Use this value for bone coordinates, status radius, root placement, and seated-root tests. Apply full procedural sway only to the head bone; remove the temporary `0.5` torso coupling. Keep `character` as the body alias for compatibility and add `body`/`head` fields explicitly.
+
+- [x] **Step 4: Split replacement textures and clean up**
+
+  Update `setTexture` to retain the replacement source, rebuild both part textures with the role's cell, call `resize`, and destroy the old part textures when Pixi ownership permits. Keep the body alias synchronized. Ensure `destroy()` removes both sprites and no texture is leaked by the layer-owned derived frames.
+
+- [x] **Step 5: Run focused tests and typecheck**
+
+  ```bash
+  pnpm --dir apps/desktop exec tsx --test test/virtual-office-layer-order.test.ts test/virtual-office-scene.test.ts test/virtual-office-visual-state.test.ts test/virtual-office-rig.test.ts test/virtual-office-projector.test.ts
+  pnpm --dir apps/desktop run typecheck
+  ```
+
+  Expected: all focused tests pass, including distinct texture frames, parent slots, full-height seated math, independent head transform, replacement textures, and reduced-motion freeze.
+
+- [x] **Step 6: Run complete verification and browser acceptance**
+
+  ```bash
+  pnpm --dir apps/desktop exec vite build
+  pnpm --dir apps/desktop run verify:virtual-office-assets
+  pnpm --dir apps/desktop run verify:virtual-office-bundle
+  pnpm --dir apps/desktop run test
+  git diff --check
+  ```
+
+  Reload `http://127.0.0.1:1420/dashboard/office`, confirm seven seated idle characters, inspect a head sway frame, confirm the canvas remains text-free, and check that browser logs contain no errors or warnings. Leave the tab open for review.
+
+### Split head/body continuation self-review
+
+- Spec coverage: atlas part derivation, independent bone parenting, full-cell rig units, replacement textures, reduced motion, and all required verification commands are covered by Tasks 1–6.
+- Placeholder scan: no `TODO`, `TBD`, or unspecified implementation step remains in this continuation.
+- Type consistency: `createRolePartTexture`, `roleCellRectangle`, `OfficeCharacterLayerNode.body`, `OfficeCharacterLayerNode.head`, and `characterHeight` are defined before their consumers and are used consistently across resize, replacement, tests, and cleanup.
+
+## Approved chair/seated continuation (2026-10-11)
+
+**Goal:** Make the seated relationship unambiguous after the split head/body pass. The approved transparent PNG chair is split into a rear seat/base and a foreground backrest so the rear-view character reads as seated: the chair back covers the torso, the head remains visible, and the text-free canvas is preserved.
+
+**Files:**
+- Add: `apps/desktop/src/virtual-office/office-chair-layer.ts` — renderer-owned chair silhouettes and thin cushion occlusion.
+- Modify: `apps/desktop/src/virtual-office/office-layer-types.ts` — chair node/handle contracts and z-order constants.
+- Modify: `apps/desktop/src/virtual-office/office-scene.ts` — mount, update, reduced-motion, and destroy the chair layer.
+- Modify: `apps/desktop/src/virtual-office/office-character-layer.ts` — use the chair-aligned seated baseline and slightly larger chibi fit.
+- Modify: `apps/desktop/test/virtual-office-layer-order.test.ts` — assert chair roots, z-order, and no-text behavior.
+- Add: `docs/superpowers/assets/drafts/2026-10-10-virtual-studio/office-chair-v1.png` — approved transparent chair source; runtime crop is generated at `apps/desktop/public/virtual-office/v1/office-chair.png`.
+
+- [x] **Step 1: Add chair layer and cushion edge**
+
+  Create stable per-role chair nodes from the approved PNG. Keep the complete seat/base in a compact chair layer above the desk/lower body and render a cropped backrest plus a thin cushion edge in a separate foreground root. The visible order is desk/display → character → chair base → chair back.
+
+- [x] **Step 2: Mount the layer and adjust seated fit**
+
+  Insert the chair base above the desk front and lower character body, keep the backrest in the foreground root, hide both with absent roles, align the character hips to the chair cushion, and fit the complete chair slightly below the chibi height so the seat, stem, and casters remain visible.
+
+- [x] **Step 3: Verify browser and regression gates**
+
+  Run focused layer tests, typecheck, Vite build, asset/bundle gates, the full desktop suite, `git diff --check`, and a browser smoke check. Confirm seven chairs/seated characters, text-free canvas, active screen geometry, and zero browser errors/warnings.
+
+### Chair continuation self-review
+
+- The chair is an independent renderer layer and loads the approved `chair` manifest asset; the source texture is split into stable rear and foreground frames without changing the scene contract.
+- The cushion edge is intentionally thin and narrower than the 128px station cell; the foreground backrest supplies the body occlusion while the head remains visible from the rear view.
+- No business state, role labels, or accessibility semantics moved into Pixi.
 

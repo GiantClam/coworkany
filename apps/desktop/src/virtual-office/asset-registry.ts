@@ -8,6 +8,7 @@ export const OFFICE_ASSET_IDS = [
   "characters",
   "workstations",
   "workstations-front",
+  "chair",
   "displays",
   "rig",
 ] as const;
@@ -15,13 +16,17 @@ export const OFFICE_ASSET_IDS = [
 export const OFFICE_CHARACTER_ASSET_ID = "characters" as const;
 export const OFFICE_WORKSTATION_ASSET_ID = "workstations" as const;
 export const OFFICE_WORKSTATION_FRONT_ASSET_ID = "workstations-front" as const;
+export const OFFICE_CHAIR_ASSET_ID = "chair" as const;
 export const OFFICE_DISPLAY_ASSET_ID = "displays" as const;
 export const OFFICE_RIG_ASSET_ID = "rig" as const;
 
 /** Legacy alias retained for older consumers that only need a nominal cell. */
 export const OFFICE_ATLAS_CELL = { width: 128, height: 64, columns: 7 } as const;
-export const OFFICE_CHARACTER_CELL = { width: 128, height: 128, columns: 7 } as const;
-export const OFFICE_WORKSTATION_CELL = { width: 128, height: 96, columns: 7, rows: 3 } as const;
+/** Physical texel dimensions of the 2× runtime atlases. */
+export const OFFICE_CHARACTER_CELL = { width: 256, height: 256, columns: 7 } as const;
+export const OFFICE_WORKSTATION_CELL = { width: 256, height: 192, columns: 7, rows: 3 } as const;
+/** Layout stays independent of atlas density. */
+export const OFFICE_WORKSTATION_LOGICAL_WIDTH = 128;
 
 export const OFFICE_ROLE_ASSET_IDS: readonly OfficeRoleId[] = [
   "ai-chat",
@@ -56,7 +61,7 @@ export interface OfficeAssetManifestEntry {
   readonly id: string;
   readonly path: string;
   readonly purpose: string;
-  readonly format?: "webp" | "json" | string;
+  readonly format?: "webp" | "png" | "json" | string;
   readonly width?: number;
   readonly height?: number;
   readonly hasAlpha?: boolean;
@@ -105,10 +110,11 @@ function validateFrames(asset: OfficeAssetManifestEntry, expected?: readonly str
   }
 }
 
-function validateImageBase(asset: OfficeAssetManifestEntry): void {
+function validateImageBase(asset: OfficeAssetManifestEntry, expectedFormat: "webp" | "png" = "webp", expectedPath?: string): void {
   const width = asset.width;
   const height = asset.height;
-  if (asset.format !== "webp" || typeof asset.path !== "string" || asset.path !== `${asset.id}.webp` || typeof width !== "number" || !Number.isInteger(width) || width <= 0 || typeof height !== "number" || !Number.isInteger(height) || height <= 0 || asset.hasAlpha !== true) {
+  const path = expectedPath ?? `${asset.id}.${expectedFormat}`;
+  if (asset.format !== expectedFormat || typeof asset.path !== "string" || asset.path !== path || typeof width !== "number" || !Number.isInteger(width) || width <= 0 || typeof height !== "number" || !Number.isInteger(height) || height <= 0 || asset.hasAlpha !== true) {
     fail(`entry is invalid: ${asset.id}`);
   }
   validateFrames(asset);
@@ -149,7 +155,7 @@ function validateCharacterRegions(asset: OfficeAssetManifestEntry): void {
   for (const roleId of OFFICE_ROLE_ASSET_IDS) if (!asset.regions.some((region) => region.roleId === roleId)) fail(`regions are invalid: ${asset.id}`);
 }
 
-/** Validate the checked-in six-asset contract before any Pixi texture loads. */
+/** Validate the checked-in seven-asset contract before any Pixi texture loads. */
 export function validateOfficeAssetManifest(value: unknown): OfficeAssetManifest {
   if (!isRecord(value)) fail("is not an object");
   if (value.schemaVersion !== 1 || !Array.isArray(value.assets)) fail("schema is invalid");
@@ -189,6 +195,12 @@ export function validateOfficeAssetManifest(value: unknown): OfficeAssetManifest
         validateFrames(asset, ["available", "active", "offline"]);
         if (!Array.isArray(asset.states) || asset.states.length !== 3 || asset.states.some((state, stateIndex) => state !== ["available", "active", "offline"][stateIndex])) fail(`states are invalid: ${asset.id}`);
         validateStationRegions(asset);
+        break;
+      case OFFICE_CHAIR_ASSET_ID:
+        validateImageBase(asset, "png", "office-chair.png");
+        if (asset.width !== 715 || asset.height !== 1047) fail(`entry dimensions are invalid: ${asset.id}`);
+        validateFrames(asset, ["chair"]);
+        validateRegions(asset, ["chair"]);
         break;
       case OFFICE_DISPLAY_ASSET_ID:
         validateImageBase(asset);

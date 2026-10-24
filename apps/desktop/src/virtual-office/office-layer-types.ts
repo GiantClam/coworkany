@@ -82,9 +82,18 @@ export interface OfficeDeskLayerHandle extends OfficeLayerHandle {
   setTexture?(roleId: OfficeRoleId, variant: OfficeDeskVariant, texture: Texture, target?: "back" | "front" | "both"): void;
 }
 
+/** Independent PNG chair art and the front-edge occlusion used to make the
+ * standing source sprites read as seated workstation characters. */
+export interface OfficeChairLayerHandle extends OfficeLayerHandle {
+  readonly nodes: ReadonlyMap<OfficeRoleId, OfficeChairLayerNode>;
+  readonly frontRoot?: Container;
+}
+
 export interface OfficeDisplayLayerHandle extends OfficeLayerHandle {
   readonly nodes: ReadonlyMap<OfficeRoleId, OfficeDisplayLayerNode>;
   readonly statusRoot?: Container;
+  /** Advance renderer-only screen chrome without reprojecting business state. */
+  tick?(): void;
   setTexture?(roleId: OfficeRoleId, target: "main" | "side", texture: Texture): void;
 }
 
@@ -103,12 +112,24 @@ export interface OfficeDeskLayerNode {
   variant: OfficeDeskVariant;
 }
 
+export interface OfficeChairLayerNode {
+  readonly root: Container;
+  /** Lower seat/column/wheel portion of the approved PNG, above the desk and lower body. */
+  readonly rear: import("pixi.js").Sprite;
+  /** Cropped backrest portion, rendered in the foreground over the role. */
+  readonly art: import("pixi.js").Sprite;
+  /** A slim foreground cushion edge that completes the seated read. */
+  readonly occlusion: import("pixi.js").Graphics;
+  readonly roleId: OfficeRoleId;
+}
+
 export interface OfficeDisplayLayerNode {
   readonly root: Container;
   readonly main: import("pixi.js").Sprite;
   readonly side: import("pixi.js").Sprite;
   readonly status: import("pixi.js").Graphics;
-  readonly copy: import("pixi.js").Text;
+  /** Compact work-state chrome rendered above the character occlusion layer. */
+  readonly screenUi: import("pixi.js").Graphics;
   readonly roleId: OfficeRoleId;
   visualState: OfficeVisualState;
 }
@@ -117,7 +138,13 @@ export interface OfficeCharacterLayerNode {
   readonly root: Container;
   readonly rigRoot: Container;
   readonly bones: ReadonlyMap<string, Container>;
+  /** Body sprite retained as the compatibility alias exposed by `character`. */
+  readonly body: import("pixi.js").Sprite;
+  /** Head sprite is attached to the visual head bone, not the torso. */
+  readonly head: import("pixi.js").Sprite;
   readonly character: import("pixi.js").Sprite;
+  /** Full source-cell height after fitting, used as the rig's normalized unit. */
+  characterHeight: number;
   readonly statusFx: import("pixi.js").Graphics;
   readonly roleId: OfficeRoleId;
   visualState: OfficeVisualState;
@@ -126,9 +153,15 @@ export interface OfficeCharacterLayerNode {
 export const OFFICE_LAYER_Z = Object.freeze({
   background: 0,
   deskBack: 10,
-  character: 20,
-  display: 30,
-  deskFront: 40,
+  display: 20,
+  // The desk sits behind the character; the front edge no longer masks the
+  // torso because the chair back is the intentional foreground occluder.
+  deskFront: 25,
+  character: 30,
+  // The complete seat/base is above the character's lower body so its column
+  // and casters remain visible; chairFront is the backrest occluder.
+  chair: 35,
+  chairFront: 45,
   status: 50,
 } as const);
 
@@ -175,10 +208,17 @@ export function computeOfficeContainedBounds(viewport: OfficeViewport, sourceWid
   return { width: fittedWidth, height: fittedHeight, x: (width - fittedWidth) / 2, y: (height - fittedHeight) / 2, scale };
 }
 
+/** Use the complete responsive canvas as the shared grid artboard. */
+export function computeOfficeStageBounds(viewport: OfficeViewport): OfficeContainedBounds {
+  const width = Math.max(1, Number.isFinite(viewport.width) ? viewport.width : 1);
+  const height = Math.max(1, Number.isFinite(viewport.height) ? viewport.height : 1);
+  return { x: 0, y: 0, width, height, scale: 1 };
+}
+
 /**
- * Resolve the same seven 3+4 anchors for every visual layer.  The normalized
- * anchor source remains office-layout.ts; this helper only maps it into the
- * contained background bounds so independent textures cannot drift.
+ * Resolve the same seven responsive grid anchors for every visual layer. The
+ * normalized anchor source remains office-layout.ts; this helper maps it into
+ * the shared artboard so independent textures cannot drift.
  */
 export function computeOfficeLayerAnchors(
   bounds: Pick<OfficeContainedBounds, "x" | "y" | "width" | "height">,
@@ -198,14 +238,25 @@ export function findOfficeAssetEntry(manifest: OfficeAssetManifest, id: string):
   return manifest.assets.find((asset) => asset.id === id);
 }
 
-export function officeAssetUrl(path: string): string {
-  if (/^(?:https?:|data:|blob:|\/)/u.test(path)) return path;
-  return officeAssetPath(path);
+export function officeAssetUrl(path: string, baseURI?: string): string {
+  const assetPath = /^(?:https?:|data:|blob:|\/)/u.test(path) ? path : officeAssetPath(path);
+  // Pixi's root-relative resolver drops the host for Tauri's custom protocol.
+  // A standard absolute URL preserves it in both the browser and native app.
+  return baseURI ? new URL(assetPath, baseURI).href : assetPath;
 }
 
 export async function loadOfficeTexture(context: OfficeLayerContext, path: string): Promise<Texture> {
   if (context.loadTexture) return context.loadTexture(path);
-  return Assets.load<Texture>(officeAssetUrl(path));
+  // Tauri's CSP disallows blob workers. Pixi's image-bitmap worker probe does
+  // not reject on CSP failure, so it can leave every scene layer pending.
+  // Decode on the main thread instead, without relaxing the native CSP.
+  Assets.setPreferences({ preferWorkers: false });
+  // All approved raster layers use the same filtering. Mipmaps retain smooth
+  // edges when the high-resolution chair/displays shrink to workstation size.
+  return Assets.load<Texture>({
+    src: officeAssetUrl(path, globalThis.document?.baseURI),
+    data: { scaleMode: "linear", autoGenerateMipmaps: true },
+  });
 }
 
 export function reportOfficeLayerError(context: Pick<OfficeLayerContext, "callbacks">, error: unknown): void {

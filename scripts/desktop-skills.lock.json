@@ -16,12 +16,12 @@
     {
       "id": "dashi-ppt",
       "repo": "chuspeeism/dashi-ppt-skill",
-      "version": "0.4.11",
-      "commit": "7cb23347f91cda1a5519eafc8c040704e389535a",
+      "version": "0.4.14",
+      "commit": "21dc7e5fc8c3a0d7f6a94948153dd1ee954f4e64",
       "branch": "main",
       "skillPath": "skills/dashi-ppt",
       "stagingName": "dashi-ppt-acquire",
-      "directoryDigest": "6ed05190a86a18c72a04eb83d35e458a04e4f5c093e9341fc9dab07e3c87de58"
+      "directoryDigest": "3bda580773c1062caa84e1cf947c91eb60ec20c89c063021356cb2a1d7e0a3b3"
     }
   ]
 }

@@ -6,6 +6,7 @@ import "./tailwind.css";
 import "@coworkany/workbench-ui/styles.css";
 import "./styles.css";
 import "./native-questions.css";
+import "./cheapbuddy-account.css";
 import "./styles-macos.css";
 import "./virtual-office/virtual-office.css";
 

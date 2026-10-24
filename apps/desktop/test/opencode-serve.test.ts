@@ -6,6 +6,29 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { OpenCodeServeClient } from "../runtime/opencode-serve";
 
+test("retiring a managed daemon during pre-spawn startup prevents it from starting or restarting", async () => {
+  const runtimeDirectory = await mkdtemp(resolve(tmpdir(), "coworkany-opencode-retire-"));
+  const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");
+  const client = new OpenCodeServeClient(process.execPath, runtimeDirectory, [fixture]);
+  try {
+    const starting = client.ensureStarted(runtimeDirectory, { CHEAPBUDDY_API_KEY: "fixture-private-key" });
+    await client.retire();
+    await assert.rejects(starting, /opencode_serve_retired/u);
+    await assert.rejects(client.ensureStarted(runtimeDirectory, { CHEAPBUDDY_API_KEY: "another-fixture-key" }), /opencode_serve_retired/u);
+  } finally { await client.stop(); await rm(runtimeDirectory, { recursive: true, force: true }); }
+});
+
+test("retiring a running managed daemon permanently drops its retained credential environment", async () => {
+  const runtimeDirectory = await mkdtemp(resolve(tmpdir(), "coworkany-opencode-retire-running-"));
+  const fixture = resolve(process.cwd(), "test/fixtures/fake-opencode-serve.mjs");
+  const client = new OpenCodeServeClient(process.execPath, runtimeDirectory, [fixture]);
+  try {
+    await client.createOrResumeSession(runtimeDirectory, undefined, { model: "cheapbuddy/deepseek/deepseek-v4.1-flash" }, { CHEAPBUDDY_API_KEY: "fixture-private-key" });
+    await client.retire();
+    await assert.rejects(client.createOrResumeSession(runtimeDirectory, undefined, { model: "cheapbuddy/glm-5.3" }, {}), /opencode_serve_retired/u);
+  } finally { await client.stop(); await rm(runtimeDirectory, { recursive: true, force: true }); }
+});
+
 test("desktop OpenCode uses the asynchronous serve-session contract", () => {
   const source = readFileSync(resolve(process.cwd(), "runtime/opencode-serve.ts"), "utf8");
   const hostSource = readFileSync(resolve(process.cwd(), "runtime/host.ts"), "utf8");

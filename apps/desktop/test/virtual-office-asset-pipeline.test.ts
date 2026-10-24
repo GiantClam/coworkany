@@ -53,26 +53,29 @@ test("converts the approved source families into deterministic runtime assets", 
       "characters",
       "workstations",
       "workstations-front",
+      "chair",
       "displays",
       "rig",
     ]);
     assert.deepEqual(manifest.assets.map((asset) => asset.sha256), secondManifest.assets.map((asset) => asset.sha256));
 
-    const expectedDimensions = {
-      office: [2172, 724],
-      characters: [896, 128],
-      workstations: [896, 288],
-      "workstations-front": [896, 288],
-      displays: [1536, 1024],
+    const expectedImages = {
+      office: { dimensions: [2172, 724], format: "webp" },
+      characters: { dimensions: [1792, 256], format: "webp" },
+      workstations: { dimensions: [1792, 576], format: "webp" },
+      "workstations-front": { dimensions: [1792, 576], format: "webp" },
+      chair: { dimensions: [715, 1047], format: "png" },
+      displays: { dimensions: [1536, 1024], format: "webp" },
     } as const;
-    for (const [id, [width, height]] of Object.entries(expectedDimensions)) {
+    for (const [id, { dimensions: [width, height], format }] of Object.entries(expectedImages)) {
       const asset = manifest.assets.find((entry) => entry.id === id);
       assert.ok(asset, `manifest entry missing: ${id}`);
       assert.equal(asset.width, width);
       assert.equal(asset.height, height);
-      assert.equal(asset.format, "webp");
+      assert.equal(asset.format, format);
       assert.equal(asset.hasAlpha, true);
       const metadata = await sharp(resolve(first, asset.path)).metadata();
+      assert.equal(metadata.format, format);
       assert.equal(metadata.width, width);
       assert.equal(metadata.height, height);
       assert.equal(metadata.hasAlpha, true);

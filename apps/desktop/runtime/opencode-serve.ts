@@ -1,16 +1,22 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { createRedactedLogWriter } from "./provider-credentials";
 import { createOpenCodeServeEventState, createOpenCodeServePromptPayload, createOpenCodeServeSessionPayload, normalizeOpenCodeServeEvent, openCodeServePermissionPath, openCodeServeSessionPath, openCodeServeSessionStatusPath, openCodeServeSessionsPath, readOpenCodeServeSessionId, type OpenCodeRuntimeEvent, type OpenCodeServeEventState, type OpenCodeQuestionRequest } from "@coworkany/runtime-contracts/opencode";
 
 type Provider = { readonly id?: string; readonly source?: string; readonly model?: string; readonly apiKey?: string; readonly reasoningEffort?: string };
 type EventSink = (event: OpenCodeRuntimeEvent) => void;
 const DEFAULT_STALLED_RUN_TIMEOUT_MS = 300_000;
+const PPT_STALLED_INITIAL_TIMEOUT_MS = 30 * 60_000;
+const PPT_STALLED_POST_GOAL_TIMEOUT_MS = 10 * 60_000;
 const STALL_CHECK_INTERVAL_MS = 500;
 const PROMPT_SUBMISSION_ACTIVITY_GRACE_MS = 250;
 type ActiveRun = {
   readonly runId: string;
   readonly sessionId: string;
+  readonly workspacePath: string;
   readonly sink: EventSink;
   readonly serveEvents: OpenCodeServeEventState;
   readonly messageIds: Set<string>;
@@ -18,6 +24,7 @@ type ActiveRun = {
   readonly resolveCompletion: () => void;
   readonly turnStartedAt: number;
   readonly submittedMessageId: string;
+  readonly skillId?: string;
   userMessageId?: string;
   readonly userMessageIds: Set<string>;
   readonly ignoredMessageIds: Set<string>;
@@ -65,6 +72,23 @@ function isPreviewServerTool(part: Record<string, unknown>) {
     input?.script,
   ];
   return candidates.some(value => /start-preview-server\.mjs|preview:start|render_goal_deck|(?:svg_editor|confirm_ui|spec_review)[\\/]server\.py|(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+(?:dev|preview|start)(?:\s|$)|(?:^|\s)(?:vite|next\s+dev|python(?:3)?\s+-m\s+http\.server|npx\s+serve)(?:\s|$)/iu.test(String(value ?? "")));
+}
+
+function hasPresentationGoalProgress(workspacePath: string) {
+  const outputRoot = join(workspacePath, "output");
+  if (!existsSync(outputRoot)) return false;
+  const pending = [outputRoot];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    if (!directory) continue;
+    let entries;
+    try { entries = readdirSync(directory, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.isFile() && (entry.name === "page-content-pack.json" || entry.name === "goal.json")) return true;
+      if (entry.isDirectory()) pending.push(join(directory, entry.name));
+    }
+  }
+  return false;
 }
 
 function isRecoverablePromptSubmissionError(error: unknown) {
@@ -136,6 +160,7 @@ export class OpenCodeServeClient {
   private password = "";
   private baseUrl = "";
   private stopping = false;
+  private retired = false;
   private streamAbort: AbortController | undefined;
   private startPromise: Promise<void> | undefined;
   private runtimeEnvironment: Record<string, string | undefined> = { NODE_ENV: process.env.NODE_ENV ?? "production" };
@@ -179,12 +204,14 @@ export class OpenCodeServeClient {
   }
 
   async ensureStarted(workspacePath: string, environment: Record<string, string | undefined>) {
+    if (this.retired) throw new Error("opencode_serve_retired");
     // OpenCode loads OPENCODE_CONFIG_CONTENT and provider credentials only at
     // process start. Reuse the process while its effective config is stable,
     // but restart it before a turn that selects a different model/provider.
     const requestedSignature = runtimeEnvironmentSignature(environment);
     if (this.startPromise) {
       await this.startPromise;
+      if (this.retired) throw new Error("opencode_serve_retired");
       if (this.child && this.child.exitCode === null && this.runtimeWorkspace === workspacePath && this.runtimeEnvironmentSignature === requestedSignature) return;
     }
     // A child process can exist before startServe has completed its health
@@ -199,7 +226,9 @@ export class OpenCodeServeClient {
 
   private async startServe(workspacePath: string, environment: Record<string, string | undefined>) {
     await mkdir(this.runtimeDirectory, { recursive: true });
+    if (this.retired) throw new Error("opencode_serve_retired");
     this.port = await this.findFreePort();
+    if (this.retired) throw new Error("opencode_serve_retired");
     this.username = `coworkany-${randomBytes(8).toString("hex")}`;
     this.password = randomBytes(32).toString("base64url");
     this.baseUrl = `http://127.0.0.1:${this.port}`;
@@ -233,13 +262,15 @@ export class OpenCodeServeClient {
       detached: process.platform !== "win32",
     }) as ChildProcess;
     this.child = child;
-    child.stderr?.on("data", (chunk: Buffer) => {
-      const diagnostic = chunk.toString("utf8");
-      process.stderr.write(`[opencode-serve] ${diagnostic.slice(-2048)}`);
-    });
-    child.once("close", () => { this.streamAbort?.abort(); this.streamAbort = undefined; if (!this.stopping) for (const active of this.active.values()) this.reportServeExit(active); });
+    const diagnosticWriter = createRedactedLogWriter((line) => {
+      for (const [name, value] of Object.entries(isolatedEnvironment)) if (name.endsWith("_API_KEY") && value) line = line.split(value).join("[redacted]");
+      return line;
+    }, line => process.stderr.write(`[opencode-serve] ${line.slice(-2048)}`));
+    child.stderr?.on("data", (chunk: Buffer) => diagnosticWriter.write(chunk.toString("utf8")));
+    child.once("close", () => { diagnosticWriter.flush(); this.streamAbort?.abort(); this.streamAbort = undefined; if (!this.stopping) for (const active of this.active.values()) this.reportServeExit(active); });
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
+      if (this.retired) throw new Error("opencode_serve_retired");
       try { const response = await this.request("/global/health", {}, 2_000); if (response.ok) { this.startEventStream(workspacePath); return; } } catch { /* retry until the bounded deadline */ }
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
@@ -313,7 +344,7 @@ export class OpenCodeServeClient {
     // suffix. Supplying one ties the persisted user to this request even when
     // the server's wall clock is a millisecond behind the desktop's.
     const submittedMessageId = `msg_${(BigInt(turnStartedAt) * BigInt(0x1000) + BigInt(1)).toString(16).slice(-12).padStart(12, "0")}${randomBytes(7).toString("hex")}`;
-    const active: ActiveRun = { runId, sessionId, sink, serveEvents: createOpenCodeServeEventState(), messageIds: new Set(), userMessageIds: new Set(), ignoredMessageIds: new Set(), questionIds: new Set(), pendingQuestionIds: new Set(), pendingFrames: new Map(), previewToolCallIds: new Set(), completion, resolveCompletion, turnStartedAt, submittedMessageId, promptSubmitted: false, assistantMessageSeen: false, assistantFinalMessageSeen: false, lastMessagePollAt: 0, busySeen: false, activitySeen: false, lastActivityAt: turnStartedAt, completed: false };
+    const active: ActiveRun = { runId, sessionId, workspacePath, sink, serveEvents: createOpenCodeServeEventState(), messageIds: new Set(), userMessageIds: new Set(), ignoredMessageIds: new Set(), questionIds: new Set(), pendingQuestionIds: new Set(), pendingFrames: new Map(), previewToolCallIds: new Set(), completion, resolveCompletion, turnStartedAt, submittedMessageId, skillId: skillId?.trim().toLowerCase(), promptSubmitted: false, assistantMessageSeen: false, assistantFinalMessageSeen: false, lastMessagePollAt: 0, busySeen: false, activitySeen: false, lastActivityAt: turnStartedAt, completed: false };
     this.active.set(runId, active);
     let abortPromise: Promise<void> | undefined;
     const abort = () => { abortPromise ??= this.abort(sessionId); };
@@ -483,6 +514,13 @@ export class OpenCodeServeClient {
     }
   }
 
+  /** Logout permanently closes this client, including an in-progress startup before spawn. */
+  async retire() {
+    this.retired = true;
+    this.runtimeEnvironment = { NODE_ENV: process.env.NODE_ENV ?? "production" };
+    await this.stop();
+  }
+
   private complete(active: ActiveRun) {
     if (active.completed) return;
     active.completed = true;
@@ -502,7 +540,8 @@ export class OpenCodeServeClient {
   }
 
   private async watchForStall(active: ActiveRun, signal: AbortSignal) {
-    if (this.promptStallTimeoutMs <= 0) return;
+    const isPresentationSkill = active.skillId === "dashi-ppt" || active.skillId === "ppt-master";
+    if (!isPresentationSkill && this.promptStallTimeoutMs <= 0) return;
     while (!active.completed && !active.failed && !signal.aborted) {
       await new Promise((resolve) => setTimeout(resolve, STALL_CHECK_INTERVAL_MS));
       if (!active.promptSubmitted || !active.busySeen || active.idleSeen) continue;
@@ -514,7 +553,10 @@ export class OpenCodeServeClient {
       // A native question is intentional user-blocking work. The lack of
       // model events while the user is deciding is not a stalled run.
       if (active.pendingQuestionIds.size > 0) continue;
-      if (Date.now() - active.lastActivityAt < this.promptStallTimeoutMs) continue;
+      const stallTimeoutMs = isPresentationSkill
+        ? (hasPresentationGoalProgress(active.workspacePath) ? PPT_STALLED_POST_GOAL_TIMEOUT_MS : PPT_STALLED_INITIAL_TIMEOUT_MS)
+        : this.promptStallTimeoutMs;
+      if (stallTimeoutMs <= 0 || Date.now() - active.lastActivityAt < stallTimeoutMs) continue;
       const message = "OpenCode run made no progress and was stopped. Retry the task.";
       active.failed = message;
       active.sink({ event: "runtime_error", code: "opencode_prompt_stalled", message, retryable: true, runId: active.runId });

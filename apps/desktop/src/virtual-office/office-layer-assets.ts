@@ -14,6 +14,13 @@ export interface OfficeAssetRegionLike {
   readonly width?: number;
   readonly height?: number;
 }
+
+export type OfficeCharacterPart = "body" | "head";
+
+/** Cropping ratios stay independent of the runtime atlas's pixel density. */
+export const OFFICE_CHARACTER_HEAD_HEIGHT_FACTOR = 0.58;
+export const OFFICE_CHARACTER_BODY_START_FACTOR = 0.4;
+
 function regionsOf(asset: OfficeAssetManifestEntry | undefined): readonly OfficeAssetRegionLike[] {
   if (!asset || !Array.isArray((asset as OfficeAssetManifestEntry & { regions?: unknown }).regions)) return [];
   return ((asset as OfficeAssetManifestEntry & { regions?: unknown }).regions as unknown[]).filter((region): region is OfficeAssetRegionLike => Boolean(region && typeof region === "object"));
@@ -67,6 +74,38 @@ export function atlasCellRectangle(
   return new Rectangle(column * cellWidth, row * cellHeight, cellWidth, cellHeight);
 }
 
+/** Resolve the complete source cell before deriving any cropped character part. */
+export function roleCellRectangle(
+  asset: OfficeAssetManifestEntry | undefined,
+  roleId: OfficeRoleId,
+  roleIndex: number,
+  state?: string,
+  stateIndex = 0,
+): Rectangle | undefined {
+  const regionFrame = regionRectangle(findOfficeRegion(asset, { roleId, state }));
+  return regionFrame ?? atlasCellRectangle(asset, roleId, roleIndex, stateIndex);
+}
+
+/**
+ * Derive overlapping head/body frames from a full role cell. The overlap keeps
+ * the neck seam covered while allowing the head slot to rotate independently.
+ */
+export function characterPartRectangle(
+  asset: OfficeAssetManifestEntry | undefined,
+  roleId: OfficeRoleId,
+  roleIndex: number,
+  part: OfficeCharacterPart,
+  state?: string,
+  stateIndex = 0,
+): Rectangle | undefined {
+  const cell = roleCellRectangle(asset, roleId, roleIndex, state, stateIndex);
+  if (!cell) return undefined;
+  const headHeight = Math.max(1, Math.round(cell.height * OFFICE_CHARACTER_HEAD_HEIGHT_FACTOR));
+  const bodyY = Math.max(0, Math.min(cell.height - 1, Math.round(cell.height * OFFICE_CHARACTER_BODY_START_FACTOR)));
+  if (part === "head") return new Rectangle(cell.x, cell.y, cell.width, headHeight);
+  return new Rectangle(cell.x, cell.y + bodyY, cell.width, Math.max(1, cell.height - bodyY));
+}
+
 export function createRoleTexture(
   source: TextureSource,
   asset: OfficeAssetManifestEntry | undefined,
@@ -75,10 +114,20 @@ export function createRoleTexture(
   state: string | undefined,
   stateIndex: number,
 ): Texture {
-  const region = findOfficeRegion(asset, { roleId, state });
-  const regionFrame = regionRectangle(region);
-  if (regionFrame) return new Texture({ source, frame: regionFrame });
-  const frame = atlasCellRectangle(asset, roleId, roleIndex, stateIndex);
+  const frame = roleCellRectangle(asset, roleId, roleIndex, state, stateIndex);
+  return frame ? new Texture({ source, frame }) : new Texture({ source });
+}
+
+export function createRolePartTexture(
+  source: TextureSource,
+  asset: OfficeAssetManifestEntry | undefined,
+  roleId: OfficeRoleId,
+  roleIndex: number,
+  part: OfficeCharacterPart,
+  state?: string,
+  stateIndex = 0,
+): Texture {
+  const frame = characterPartRectangle(asset, roleId, roleIndex, part, state, stateIndex);
   return frame ? new Texture({ source, frame }) : new Texture({ source });
 }
 

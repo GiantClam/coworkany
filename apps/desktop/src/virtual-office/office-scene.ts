@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Text } from "pixi.js";
+import { Application, Container, Graphics } from "pixi.js";
 import type { OfficeFrameMode, OfficeFramePolicy } from "./frame-policy";
 import { createOfficeFramePolicy } from "./frame-policy";
 import type {
@@ -11,7 +11,7 @@ import type {
   OfficeWorkItemKey,
 } from "./types";
 import { loadOfficeAssetManifest } from "./asset-registry";
-import { OFFICE_ROLE_ORDER } from "./office-layout";
+import { OFFICE_ROLE_COLUMNS, OFFICE_ROLE_ORDER } from "./office-layout";
 import {
   createOfficeBackgroundLayer,
   type OfficeBackgroundLayerHandle,
@@ -20,6 +20,10 @@ import {
   createOfficeDeskLayer,
   type OfficeDeskLayerHandle,
 } from "./office-desk-layer";
+import {
+  createOfficeChairLayer,
+  type OfficeChairLayerHandle,
+} from "./office-chair-layer";
 import {
   createOfficeDisplayLayer,
   type OfficeDisplayLayerHandle,
@@ -45,13 +49,11 @@ export interface OfficeSceneHandle {
 }
 
 const colors = {
-  ink: 0x26362f,
   paper: 0xf8faf5,
   gold: 0xf0b64b,
   muted: 0x87938c,
   green: 0x41ae83,
   red: 0xd86b72,
-  blue: 0x5aa9c9,
 } as const;
 const DEVICE_SLOT_LIMIT = 3;
 
@@ -69,16 +71,13 @@ function statusColor(status: OfficeStatus): number {
 interface OfficeDeviceNode {
   readonly root: Container;
   readonly marker: Graphics;
-  readonly label: Text;
   device?: OfficeDeviceState;
 }
 
 interface OfficeRoleNode {
   readonly root: Container;
   readonly hit: Graphics;
-  readonly label: Text;
   readonly devices: readonly OfficeDeviceNode[];
-  readonly overflow: Text;
   anchor: OfficeRoleAnchor;
 }
 
@@ -135,6 +134,7 @@ export async function mountOfficeScene(container: HTMLElement, snapshot: OfficeS
 
   let background: OfficeBackgroundLayerHandle;
   let desk: OfficeDeskLayerHandle;
+  let chair: OfficeChairLayerHandle;
   let character: OfficeCharacterLayerHandle;
   let display: OfficeDisplayLayerHandle;
   const layers: OfficeLayerHandle[] = [];
@@ -143,6 +143,8 @@ export async function mountOfficeScene(container: HTMLElement, snapshot: OfficeS
     layers.push(background);
     desk = await createOfficeDeskLayer(layerContext);
     layers.push(desk);
+    chair = await createOfficeChairLayer(layerContext);
+    layers.push(chair);
     character = await createOfficeCharacterLayer(layerContext);
     layers.push(character);
     display = await createOfficeDisplayLayer(layerContext);
@@ -190,21 +192,10 @@ export async function mountOfficeScene(container: HTMLElement, snapshot: OfficeS
     }));
     roleRoot.addChild(hit);
 
-    const label = new Text({
-      text: callbacks.roleLabel(roleId),
-      style: { fill: colors.ink, fontSize: 10, fontFamily: "IBM Plex Sans, sans-serif", align: "center" },
-    });
-    label.anchor.set(0.5, 0);
-    roleRoot.addChild(label);
-
     const devices = Array.from({ length: DEVICE_SLOT_LIMIT }, (_, deviceIndex) => {
       const deviceRoot = new Container();
       const marker = new Graphics();
       deviceRoot.addChild(marker);
-      const deviceLabel = new Text({ text: "", style: { fill: colors.ink, fontSize: 8, fontFamily: "IBM Plex Sans, sans-serif", align: "center" } });
-      deviceLabel.anchor.set(0.5, 0);
-      deviceLabel.position.set(0, 8);
-      deviceRoot.addChild(deviceLabel);
       deviceRoot.eventMode = "static";
       deviceRoot.cursor = "pointer";
       deviceRoot.on("pointertap", (event) => guarded(() => {
@@ -214,13 +205,10 @@ export async function mountOfficeScene(container: HTMLElement, snapshot: OfficeS
         if (device) callbacks.onActivate(device.workItemKey);
       }));
       roleRoot.addChild(deviceRoot);
-      return { root: deviceRoot, marker, label: deviceLabel };
+      return { root: deviceRoot, marker };
     });
 
-    const overflow = new Text({ text: "", style: { fill: colors.muted, fontSize: 9, fontFamily: "IBM Plex Sans, sans-serif", align: "center" } });
-    overflow.anchor.set(0.5, 0);
-    roleRoot.addChild(overflow);
-    const node: OfficeRoleNode = { root: roleRoot, hit, label, devices, overflow, anchor: { x: 0, y: 0 } };
+    const node: OfficeRoleNode = { root: roleRoot, hit, devices, anchor: { x: 0, y: 0 } };
     roleNodes.set(roleId, node);
     interactionRoot.addChild(roleRoot);
     return node;
@@ -251,10 +239,8 @@ export async function mountOfficeScene(container: HTMLElement, snapshot: OfficeS
       const anchor = anchors.get(roleId) ?? { x: 0, y: 0 };
       node.anchor = anchor;
       node.root.position.set(anchor.x, anchor.y);
-      const hitRadius = Math.max(22, Math.min(58, (viewportSize(container, app).width / OFFICE_ROLE_ORDER.length) * 0.42));
+      const hitRadius = Math.max(20, Math.min(58, (viewportSize(container, app).width / OFFICE_ROLE_COLUMNS) * 0.42));
       node.hit.clear().roundRect(-hitRadius, -hitRadius * 1.25, hitRadius * 2, hitRadius * 1.25, 12).fill({ color: colors.gold, alpha: 0.001 });
-      node.label.position.set(0, 8);
-      node.label.text = callbacks.roleLabel(roleId);
       const slots = getOfficeDeviceSlots(state);
       slots.devices.forEach((device, deviceIndex) => {
         const deviceNode = node.devices[deviceIndex];
@@ -263,7 +249,6 @@ export async function mountOfficeScene(container: HTMLElement, snapshot: OfficeS
         deviceNode.root.visible = true;
         deviceNode.root.position.set((deviceIndex - (slots.devices.length - 1) / 2) * 34, 25);
         deviceNode.marker.clear().circle(0, 0, 7).fill({ color: statusColor(device.visualStatus), alpha: 0.92 });
-        deviceNode.label.text = callbacks.statusLabel(device.visualStatus);
       });
       for (let deviceIndex = slots.devices.length; deviceIndex < node.devices.length; deviceIndex += 1) {
         const deviceNode = node.devices[deviceIndex];
@@ -272,15 +257,13 @@ export async function mountOfficeScene(container: HTMLElement, snapshot: OfficeS
           deviceNode.root.visible = false;
         }
       }
-      node.overflow.text = slots.overflowCount > 0 ? `+${slots.overflowCount}` : "";
-      node.overflow.visible = slots.overflowCount > 0;
-      node.overflow.position.set(0, 45);
     }
   };
 
   const render = (next: OfficeSnapshot) => {
     background.update(next);
     desk.update(next);
+    chair.update(next);
     character.update(next);
     display.update(next);
     renderOverlay(next);
@@ -304,6 +287,7 @@ export async function mountOfficeScene(container: HTMLElement, snapshot: OfficeS
     layerContext.reducedMotion = reduced;
     background.setReducedMotion?.(reduced);
     desk.setReducedMotion?.(reduced);
+    chair.setReducedMotion?.(reduced);
     character.setReducedMotion?.(reduced);
     display.setReducedMotion?.(reduced);
     callbacks.onModeChange?.(mode);
@@ -323,9 +307,11 @@ export async function mountOfficeScene(container: HTMLElement, snapshot: OfficeS
   app.ticker.add(() => guarded(() => {
     const mode = policy?.getMode();
     if (mode === "hidden" || mode === "reduced-motion") return;
-    // Only the character layer needs a per-frame tick; desks/displays are
-    // updated on snapshots and remain deterministic under idle throttling.
+    // Desks remain snapshot-driven. Characters animate their rig each frame;
+    // display chrome gets a cheap renderer-only tick so active progress bars
+    // pulse without reprojection of business state.
     character.update(latestSnapshot);
+    display.tick?.();
   }));
 
   const userActivity = () => guarded(() => policy?.markActivity());

@@ -12,6 +12,8 @@ export interface OfficeCompositionOptions {
   readonly capabilities: OfficeCapabilities;
   readonly agentDirectoryReader: AgentDirectoryReader;
   readonly mediaRuntimeReader?: MediaRuntimeReader;
+  /** Keep the empty studio readable as a calm, fully staffed idle scene. */
+  readonly defaultIdle?: boolean;
   readonly reportDiagnostic?: (code: string, detail?: string) => void;
   readonly clock?: OfficeClock;
 }
@@ -39,7 +41,7 @@ export function createOfficeComposition(options: OfficeCompositionOptions): Offi
   });
   const adapters = roles.map((role) => role.roleId === "agent-center" ? createAgentRunsAdapter(options.agentDirectoryReader) : createRoleRunAdapter(role.roleId));
   const store = createOfficeStore({
-    createProjector: () => createOfficeProjector({ clock, roles, unavailableRoleIds }),
+    createProjector: () => createOfficeProjector({ clock, roles, unavailableRoleIds, defaultIdle: options.defaultIdle }),
     source,
     healthSources: [createAgentDirectoryHealthSource(options.agentDirectoryReader), ...createCapabilityHealthSources(options.capabilities, options.mediaRuntimeReader)],
     adapters,

@@ -5,6 +5,7 @@ import {
   type OfficeBackgroundLayerHandle,
   type OfficeLayerContext,
   computeOfficeContainedBounds,
+  computeOfficeStageBounds,
   computeOfficeLayerAnchors,
   destroyOfficeLayerContainer,
   findOfficeAssetEntry,
@@ -24,9 +25,9 @@ function textureDimension(texture: Texture, dimension: "width" | "height", fallb
 }
 
 /**
- * Create the independent panoramic background layer.  The background owns no
- * business state; update() only recalculates the contained rect and shared
- * anchors so desk, display, and character layers stay pixel-aligned.
+ * Keep a transparent stage layer as the single owner of the shared responsive
+ * anchors. The previous panorama baked in seven 3+4 podiums, so the studio
+ * surface now comes from the stage itself and each workstation is independent.
  */
 export async function createOfficeBackgroundLayer(context: OfficeLayerContext): Promise<OfficeBackgroundLayerHandle> {
   const layerRoot = new Container();
@@ -56,17 +57,21 @@ export async function createOfficeBackgroundLayer(context: OfficeLayerContext): 
   const sourceHeight = Math.max(1, asset.height || textureDimension(texture, "height", 1));
   const background = new Sprite(texture);
   background.anchor.set(0.5, 0.5);
-  background.alpha = 1;
+  // The old panorama baked in the 3+4 podium arrangement. Keep the asset in
+  // the manifest for replacement compatibility, but do not paint that base.
+  background.visible = false;
   layerRoot.addChild(background);
 
-  let layout = computeOfficeContainedBounds(getOfficeViewport(context), sourceWidth, sourceHeight);
+  let layout = computeOfficeStageBounds(getOfficeViewport(context));
+  let backgroundLayout = computeOfficeContainedBounds(getOfficeViewport(context), sourceWidth, sourceHeight);
   let anchors = computeOfficeLayerAnchors(layout);
 
   const resize = () => {
-    layout = computeOfficeContainedBounds(getOfficeViewport(context), sourceWidth, sourceHeight);
+    layout = computeOfficeStageBounds(getOfficeViewport(context));
+    backgroundLayout = computeOfficeContainedBounds(getOfficeViewport(context), sourceWidth, sourceHeight);
     anchors = computeOfficeLayerAnchors(layout);
-    background.position.set(layout.x + (sourceWidth * layout.scale) / 2, layout.y + (sourceHeight * layout.scale) / 2);
-    background.scale.set(layout.scale);
+    background.position.set(backgroundLayout.x + (sourceWidth * backgroundLayout.scale) / 2, backgroundLayout.y + (sourceHeight * backgroundLayout.scale) / 2);
+    background.scale.set(backgroundLayout.scale);
   };
   resize();
 

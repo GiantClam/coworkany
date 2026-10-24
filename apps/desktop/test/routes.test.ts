@@ -119,7 +119,7 @@ test("desktop workflow and media entry points expose the configured model select
   assert.match(appSource, /function DesktopWriterCloudWorkspace\([\s\S]*?const \{[^}]*model, models,[\s\S]*?<WorkbenchPromptInput[^\n]*model=\{model\} onModelChange=\{onModelChange\} reasoningEffort=\{reasoningEffort\}/);
   assert.match(appSource, /<DesktopWorkflowWorkspace[\s\S]*?model=\{activeModel\} models=\{activeModels\}[\s\S]*?onModelChange=\{onModelChange\}/);
   assert.match(appSource, /const providerForWorkflowNode = \(nodeType: string, selectedProviderId\?: string\)/);
-  assert.match(appSource, /<DesktopWorkflowWorkspace[\s\S]*?modelForNode=\{\(nodeType, providerId\) => providerForWorkflowNode\(nodeType, providerId\)\.model\}[\s\S]*?modelsForNode=\{\(nodeType, providerId\) => modelOptionsForProvider\(config, providerForWorkflowNode\(nodeType, providerId\)\) \?\? \[\]\}[\s\S]*?providersForNode=\{\(nodeType\) => Object\.values\(config\.providers \?\? \{\}\)\.filter/);
+  assert.match(appSource, /<DesktopWorkflowWorkspace[\s\S]*?modelForNode=\{\(nodeType, providerId\) => providerForWorkflowNode\(nodeType, providerId\)\.model\}[\s\S]*?modelsForNode=\{\(nodeType, providerId\) => modelOptionsForProvider\(config, providerForWorkflowNode\(nodeType, providerId\), capabilityForWorkflowAction\(nodeType\)\) \?\? \[\]\}[\s\S]*?providersForNode=\{\(nodeType\) => Object\.values\(config\.providers \?\? \{\}\)\.filter/);
   assert.match(appSource, /<DesktopMediaWorkspace[\s\S]*?model=\{activeModel\} models=\{activeModels\}[\s\S]*?onModelChange=\{onModelChange\}/);
   assert.match(appSource, /hostWorkflowDefinition = bindWorkflowProviderDefaults\(hostDefinitionInput, launchConfig\)/);
   assert.match(appSource, /const hostDefinitionInput = rawWorkflowDefinition/);
@@ -210,6 +210,24 @@ test("task center opens the task entry and restores the requested media capabili
   assert.match(appSource, /metadata\?\.entryPath/u);
   assert.match(appSource, /const requestedFeature = new URLSearchParams\(routeQuery\)/u);
   assert.match(appSource, /window\.location\.search/u);
+});
+
+test("dashboard home is delegated to the renderer-neutral office boundary", () => {
+  const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+  const homeSource = readFileSync(resolve(process.cwd(), "src/home/DesktopHome.tsx"), "utf8");
+  const officePageSource = readFileSync(resolve(process.cwd(), "src/home/DesktopVirtualOffice.tsx"), "utf8");
+  const compositionSource = readFileSync(resolve(process.cwd(), "src/virtual-office/office-composition.ts"), "utf8");
+  assert.match(appSource, /<DesktopHome\s+composition=\{officeComposition\}/u);
+  assert.match(appSource, /<DesktopVirtualOffice\s+composition=\{officeComposition\}/u);
+  assert.doesNotMatch(appSource, /from ["']pixi\.js["']/u);
+  assert.match(homeSource, /showVirtualOffice/u);
+  assert.match(officePageSource, /<DesktopHome[\s\S]*showVirtualOffice/u);
+  assert.match(homeSource, /composition\.start\(\)/u);
+  assert.match(homeSource, /composition\.stop\(\)/u);
+  assert.match(compositionSource, /createRunRecordSource/u);
+  assert.match(compositionSource, /createOfficeStore/u);
+  assert.match(compositionSource, /createRoleRunAdapter/u);
+  assert.match(compositionSource, /enabledOfficeRoles/u);
 });
 
 test("workspace model and reasoning changes persist to the selected capability profile", () => {
@@ -344,7 +362,7 @@ test("desktop sidebar matches the online assistant navigation hierarchy and visu
   assert.match(shellSource, /aria-expanded=\{/u);
   assert.match(shellSource, /setAssistantSessionsExpanded/u);
   assert.doesNotMatch(shellSource, /session\.updatedLabel/u);
-  assert.match(shellSource, /wb-sidebar-context-label/u);
+  assert.doesNotMatch(shellSource, /wb-sidebar-context-label/u);
   assert.match(shellStyles, /\.wb-brand-mark \{[^}]*width: 40px;[^}]*height: 40px;[^}]*coworkany-icon-64\.png[^}]*contain no-repeat/u);
   assert.match(shellStyles, /\.wb-nav-item \{[^}]*min-height: 40px;[^}]*border-radius: 6px;/u);
   assert.match(shellStyles, /\.wb-nav-item-active \{[^}]*color: var\(--wb-primary[^}]*background: var\(--wb-foreground/u);
@@ -429,10 +447,9 @@ test("desktop Agent Center includes the complete online built-in and imported ca
 test("desktop-only runtime status does not alter the cloud sidebar geometry", () => {
   const sharedSource = readFileSync(resolve(process.cwd(), "../../packages/workbench-ui/src/components.tsx"), "utf8");
   const localeSource = readFileSync(resolve(process.cwd(), "src/i18n.ts"), "utf8");
-  assert.match(sharedSource, /localLabel \? <div className="wb-sidebar-context-label"/);
+  assert.doesNotMatch(sharedSource, /localLabel/u);
   assert.match(sharedSource, /status \? <div className="wb-status"/);
-  assert.match(localeSource, /localWorkspace: "本地工作区 · FULL ACCESS"/);
-  assert.match(localeSource, /localWorkspace: "LOCAL WORKSPACE · FULL ACCESS"/);
+  assert.doesNotMatch(localeSource, /localWorkspace:/u);
 });
 
 test("local Skill preference is persisted in config while hidden from the cloud composer row", () => {
@@ -845,7 +862,7 @@ test("desktop settings keep Vault embeddings local unless the user explicitly se
 test("desktop settings automatically persist config changes without requiring the save button", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
   assert.match(appSource, /const settingsConfigSaveTimerRef = useRef<number \| null>\(null\)/);
-  assert.match(appSource, /function persistSettingsConfig\(nextConfig: DesktopConfig, immediate = false\)/);
+  assert.match(appSource, /function persistSettingsConfig\(nextConfig: DesktopConfig, immediate = false, strict = false\)/);
   assert.match(appSource, /settingsConfigSaveQueueRef\.current = settingsConfigSaveQueueRef\.current/);
   assert.match(appSource, /window\.setTimeout\(\(\) => \{[\s\S]*?void write\(\);[\s\S]*?\}, 450\)/);
   assert.match(appSource, /设置已自动保存到本机 config\.json/);
@@ -976,11 +993,11 @@ test("desktop chat keeps the message surface full-height behind a floating compo
   const styleSource = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
   assert.match(styleSource, /\.workspace\.workspace-immersive:has\(\.chat-canvas\) \{ height: 100%; min-height: 0; \}/);
   assert.match(styleSource, /\.chat-canvas \{ min-height: 0; height: 100%;/);
-  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-scroll \{ position: absolute; inset: 0;/);
-  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column \{ display: flex; height: 100%;/);
-  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-composer-dock \{ position: absolute;/);
-  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column > \.wb-ai-message-surface \.ai-elements-conversation-content \{ padding-bottom: calc\(1rem \+ var\(--chat-composer-clearance\)\);/);
-  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column > \.wb-ai-message-surface \.ai-elements-conversation-scroll-button \{ bottom: calc\(var\(--chat-composer-clearance\) - 0\.5rem\);/);
+  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-scroll \{[^}]*position: absolute;[^}]*inset: 0;/);
+  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column \{[^}]*display: flex;[^}]*height: 100%;/);
+  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-composer-dock \{[^}]*position: absolute;/);
+  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column > \.wb-ai-message-surface \.ai-elements-conversation-content \{[^}]*padding-bottom: calc\(1rem \+ var\(--chat-composer-clearance\)\);/);
+  assert.match(styleSource, /\.chat-workspace-section:not\(\.writer-cloud-workspace\) \.chat-message-column > \.wb-ai-message-surface \.ai-elements-conversation-scroll-button \{[^}]*bottom: calc\(var\(--chat-composer-clearance\) - 0\.5rem\);/);
   assert.match(appSource, /new ResizeObserver\(updateComposerClearance\)/);
   assert.match(appSource, /section\.style\.setProperty\("--chat-composer-clearance"/);
 });

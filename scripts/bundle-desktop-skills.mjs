@@ -187,11 +187,14 @@ const desktopPreviewPolicy = `
 
 When running inside CoworkAny desktop, preview UI belongs to the current conversation. Start or reuse the skill's own loopback preview server, wait for its health check, and use only its plain HTTP loopback URL (\`http://127.0.0.1:<port>/\`) in tool output and the final response. Never use \`https://localhost\`, \`.local\`, or a self-signed HTTPS URL in CoworkAny; the desktop does not trust that certificate. Never launch or instruct the user to launch a system/external browser. For every ppt-master preview, confirmation, or review server, pass \`--no-browser\`. Keep export and download available through the embedded preview.
 `;
-for (const skillTarget of [pptTarget, dashiTarget]) {
-  const skillFile = join(skillTarget, "SKILL.md");
-  const content = await readFile(skillFile, "utf8");
-  if (!content.includes("## CoworkAny desktop preview contract")) await writeFile(skillFile, `${content.trimEnd()}${desktopPreviewPolicy}`, "utf8");
-}
+// Dashi's desktop preview constraints are enforced by the patched launcher,
+// host environment (BROWSER=none), and export CORS bridge. Keep them out of
+// the model-visible Dashi skill prompt so long-running generation does not
+// spend its turn auditing desktop plumbing. PPT Master keeps its legacy
+// contract until its own launcher bridge is moved to host enforcement.
+const pptSkillFile = join(pptTarget, "SKILL.md");
+const pptContent = await readFile(pptSkillFile, "utf8");
+if (!pptContent.includes("## CoworkAny desktop preview contract")) await writeFile(pptSkillFile, `${pptContent.trimEnd()}${desktopPreviewPolicy}`, "utf8");
 const catalogOutput = join(repoRoot, "apps", "desktop", "dist-runtime", "skill-catalog.json");
 const catalog = JSON.parse(await readFile(catalogOutput, "utf8"));
 const pptDigest = createHash("sha256").update(await readFile(join(pptTarget, "SKILL.md"))).digest("hex");

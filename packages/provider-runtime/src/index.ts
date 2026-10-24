@@ -1,4 +1,4 @@
-export type ProviderSource = "local" | "openai-compatible";
+export type ProviderSource = "local" | "openai-compatible" | "cheapbuddy";
 
 export interface ProviderConfig {
   readonly id: string;
@@ -21,7 +21,7 @@ export function resolveProviderRequest(config: ProviderConfig): ProviderRequestC
   const providerId = config.id.trim() || "local";
   const model = config.model.trim();
   if (!model) throw new Error("model_required");
-  if (config.source === "openai-compatible" && !config.baseUrl?.trim()) throw new Error("base_url_required");
+  if ((config.source === "openai-compatible" || config.source === "cheapbuddy") && !config.baseUrl?.trim()) throw new Error("base_url_required");
   return { providerId, model, ...(config.baseUrl?.trim() ? { baseUrl: config.baseUrl.trim().replace(/\/$/u, "") } : {}), ...(config.apiKey ? { apiKey: config.apiKey } : {}), ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}) };
 }
 

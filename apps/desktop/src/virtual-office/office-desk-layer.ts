@@ -1,13 +1,13 @@
 import { Container, Sprite, type Texture } from "pixi.js";
 import type { OfficeRoleId, OfficeRoleState, OfficeSnapshot } from "./types";
-import { OFFICE_ROLE_ORDER } from "./office-layout";
+import { OFFICE_ROLE_COLUMNS, OFFICE_ROLE_ORDER } from "./office-layout";
 import {
   OFFICE_LAYER_Z,
   type OfficeDeskLayerHandle,
   type OfficeDeskLayerNode,
   type OfficeDeskVariant,
   type OfficeLayerContext,
-  computeOfficeContainedBounds,
+  computeOfficeStageBounds,
   computeOfficeLayerAnchors,
   destroyOfficeLayerContainer,
   findOfficeAssetEntry,
@@ -16,6 +16,7 @@ import {
   reportOfficeLayerError,
 } from "./office-layer-types";
 import { createRoleTexture } from "./office-layer-assets";
+import { OFFICE_WORKSTATION_LOGICAL_WIDTH } from "./asset-registry";
 
 export type { OfficeDeskLayerHandle, OfficeDeskLayerNode, OfficeDeskVariant, OfficeLayerContext, OfficeLayerHandle } from "./office-layer-types";
 
@@ -32,14 +33,13 @@ function sourceOf(texture: Texture): import("pixi.js").TextureSource {
 
 function officeBounds(context: OfficeLayerContext) {
   const viewport = getOfficeViewport(context);
-  const office = findOfficeAssetEntry(context.manifest, "office");
-  return computeOfficeContainedBounds(viewport, office?.width ?? viewport.width, office?.height ?? viewport.height);
+  return computeOfficeStageBounds(viewport);
 }
 
 function roleSize(texture: Texture, maxWidth: number): { width: number; height: number } {
   const width = Math.max(1, texture.width || 128);
   const height = Math.max(1, texture.height || 96);
-  const scale = Math.min(1, maxWidth / width);
+  const scale = Math.min(OFFICE_WORKSTATION_LOGICAL_WIDTH, maxWidth) / width;
   return { width: width * scale, height: height * scale };
 }
 
@@ -125,7 +125,7 @@ export async function createOfficeDeskLayer(context: OfficeLayerContext): Promis
   const resize = () => {
     anchors = computeOfficeLayerAnchors(officeBounds(context));
     const viewport = getOfficeViewport(context);
-    const maxWidth = Math.max(56, Math.min(190, (viewport.width / OFFICE_ROLE_ORDER.length) * 0.92));
+    const maxWidth = Math.max(36, Math.min(190, (viewport.width / OFFICE_ROLE_COLUMNS) * 0.9));
     for (const roleId of OFFICE_ROLE_ORDER) {
       const node = nodes.get(roleId);
       if (!node) continue;

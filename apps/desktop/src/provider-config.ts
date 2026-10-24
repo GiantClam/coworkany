@@ -7,6 +7,10 @@ export type DesktopProviderConfig = {
   readonly model?: string;
   readonly models?: readonly string[];
   readonly apiKey?: string;
+  /** Opaque OS credential-store reference; only the desktop Host resolves it. */
+  readonly credentialRef?: string;
+  /** Independent choices when one account serves several model capabilities. */
+  readonly capabilityModels?: CapabilityModelSelections;
   readonly reasoningEffort?: string;
   /** OpenCode provider request timeout in milliseconds; false disables it. */
   readonly timeout?: number | false;
@@ -25,6 +29,7 @@ export type DesktopProviderConfig = {
 };
 
 export type ProviderCapability = "text" | "image" | "video" | "audio";
+export type CapabilityModelSelections = Partial<Record<ProviderCapability, { readonly model?: string; readonly models: readonly string[] }>>;
 export type DesktopProviderProfiles = Readonly<Record<string, DesktopProviderConfig>>;
 export type DesktopProviderDefaults = Partial<Record<ProviderCapability, string>>;
 
@@ -34,7 +39,7 @@ export type ImportedProviderConfig = {
   readonly defaults?: DesktopProviderDefaults;
 };
 
-const providerStringFields = ["id", "source", "baseUrl", "model", "apiKey", "reasoningEffort", "skillId", "endpoint", "queryEndpoint", "workflowId", "digitalHumanWorkflowId", "videoEnhanceWorkflowId"] as const;
+const providerStringFields = ["id", "source", "baseUrl", "model", "apiKey", "credentialRef", "reasoningEffort", "skillId", "endpoint", "queryEndpoint", "workflowId", "digitalHumanWorkflowId", "videoEnhanceWorkflowId"] as const;
 const providerCapabilities = new Set<ProviderCapability>(["text", "image", "video", "audio"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -47,6 +52,7 @@ function parseImportedProvider(value: unknown, fallbackId: string): DesktopProvi
     if (field in value && value[field] !== undefined && typeof value[field] !== "string") throw new Error(`provider_import_field_invalid:${field}`);
   }
   if ("models" in value && (!Array.isArray(value.models) || !value.models.every((model) => typeof model === "string"))) throw new Error("provider_import_models_invalid");
+  if ("capabilityModels" in value && (!isRecord(value.capabilityModels) || Object.entries(value.capabilityModels).some(([capability, selection]) => !providerCapabilities.has(capability as ProviderCapability) || !isRecord(selection) || !Array.isArray(selection.models) || !selection.models.every((model) => typeof model === "string") || (selection.model !== undefined && typeof selection.model !== "string")))) throw new Error("provider_import_capability_models_invalid");
   if ("capabilities" in value && (!Array.isArray(value.capabilities) || !value.capabilities.every((capability) => typeof capability === "string" && providerCapabilities.has(capability as ProviderCapability)))) throw new Error("provider_import_capabilities_invalid");
   if ("workflows" in value && (!Array.isArray(value.workflows) || !value.workflows.every((workflow) => isRecord(workflow)
     && typeof workflow.id === "string" && workflow.id.trim()
@@ -58,7 +64,9 @@ function parseImportedProvider(value: unknown, fallbackId: string): DesktopProvi
     && (!('outputSchema' in workflow) || Array.isArray(workflow.outputSchema))))) throw new Error("provider_import_workflows_invalid");
   const id = typeof value.id === "string" && value.id.trim() ? value.id.trim() : fallbackId.trim();
   if (!id) throw new Error("provider_import_id_required");
-  return { ...value, id } as DesktopProviderConfig;
+  const imported = { ...value, id, ...(value.capabilityModels ? { capabilityModels: normalizeCapabilityModels(value.capabilityModels) } : {}) } as DesktopProviderConfig;
+  if (imported.credentialRef) { const { apiKey: _apiKey, ...referenced } = imported; return referenced; }
+  return imported;
 }
 
 export function parseProviderImport(value: unknown): ImportedProviderConfig {
@@ -100,8 +108,8 @@ export function configuredTextModelSelectionId(providerId: string, modelId: stri
 export function configuredTextModelOptions(config: ProviderConfigContainer): ConfiguredTextModelOption[] {
   return configuredProviderEntries(config).flatMap(([providerId, provider]) => {
     if (!supportsProviderCapability(provider, "text")) return [];
-    const models = provider.models !== undefined
-      ? configuredModelOptions(provider)
+    const models = provider.capabilityModels?.text || provider.models !== undefined
+      ? configuredModelOptions(provider, "text")
       : (provider.model?.trim() ? [provider.model.trim()] : []);
     return models.map((modelId) => ({
       id: configuredTextModelSelectionId(providerId, modelId),
@@ -129,7 +137,7 @@ export function selectConfiguredTextModel<T extends ProviderConfigContainer>(con
     return {
       ...config,
       defaults: { ...config.defaults, text: providerId },
-      providers: { ...config.providers, [providerId]: { ...profile, model: modelId } },
+      providers: { ...config.providers, [providerId]: setProviderCapabilityModel(profile, "text", modelId) },
     } as T;
   }
   const fallbackId = config.provider.id?.trim() || config.provider.source?.trim() || "default";
@@ -137,7 +145,7 @@ export function selectConfiguredTextModel<T extends ProviderConfigContainer>(con
   return {
     ...config,
     defaults: { ...config.defaults, text: providerId },
-    provider: { ...config.provider, model: modelId },
+    provider: setProviderCapabilityModel(config.provider, "text", modelId),
   } as T;
 }
 
@@ -181,11 +189,12 @@ export function usableRunningHubWorkflowId(value: unknown): string | undefined {
 }
 
 /** Keep configured provider models canonical across every desktop surface. */
-export function configuredModelOptions(provider: DesktopProviderConfig): string[] {
-  return [...new Set((provider.models ?? []).map((model) => model.trim()).filter(Boolean))];
+export function configuredModelOptions(provider: DesktopProviderConfig, capability?: ProviderCapability): string[] {
+  return [...new Set((capability && provider.capabilityModels?.[capability] ? provider.capabilityModels[capability]!.models : provider.models ?? []).map((model) => model.trim()).filter(Boolean))];
 }
 
-export function modelOptionsForProvider(config: ProviderConfigContainer, provider: DesktopProviderConfig): readonly string[] | undefined {
+export function modelOptionsForProvider(config: ProviderConfigContainer, provider: DesktopProviderConfig, capability?: ProviderCapability): readonly string[] | undefined {
+  if (capability && provider.capabilityModels?.[capability]) return configuredModelOptions(provider, capability);
   if (provider.models !== undefined) {
     const configured = configuredModelOptions(provider);
     // Older persisted profiles may only have `model` and no model catalog.
@@ -199,22 +208,25 @@ export function modelOptionsForProvider(config: ProviderConfigContainer, provide
   return configured.length ? configured : (config.provider.model?.trim() ? [config.provider.model.trim()] : []);
 }
 
-export function preferredConfiguredModel(provider: DesktopProviderConfig): string {
-  const models = configuredModelOptions(provider);
-  const selected = provider.model?.trim() ?? "";
+export function preferredConfiguredModel(provider: DesktopProviderConfig, capability?: ProviderCapability): string {
+  const models = configuredModelOptions(provider, capability);
+  const selected = (capability && provider.capabilityModels?.[capability] ? provider.capabilityModels[capability]!.model : provider.model)?.trim() ?? "";
   return models.includes(selected) ? selected : (models[0] ?? selected);
 }
 
-export function providerForId(config: ProviderConfigContainer, providerId?: string | null): ResolvedDesktopProviderConfig {
+export function providerForId(config: ProviderConfigContainer, providerId?: string | null, capability?: ProviderCapability): ResolvedDesktopProviderConfig {
   const id = providerId?.trim() ?? "";
   const selected = (id && config.providers?.[id]) || config.provider;
   const resolvedId = selected.id?.trim() || id || config.provider.id?.trim() || "local";
-  const resolvedModel = preferredConfiguredModel(selected);
-  if (selected.id === resolvedId && selected.model === resolvedModel) return selected as ResolvedDesktopProviderConfig;
+  const selection = capability ? selected.capabilityModels?.[capability] : undefined;
+  if (capability && capability !== "text" && (selected.source ?? selected.id) === "cheapbuddy" && !selection) return { ...selected, id: resolvedId, model: "", models: [] };
+  const resolvedModel = preferredConfiguredModel(selected, capability);
+  if (!selection && selected.id === resolvedId && selected.model === resolvedModel) return selected as ResolvedDesktopProviderConfig;
   return {
     ...selected,
     id: resolvedId,
     model: resolvedModel,
+    ...(selection ? { models: configuredModelOptions(selected, capability) } : {}),
   };
 }
 
@@ -223,15 +235,41 @@ export function providerForCapability(config: ProviderConfigContainer, capabilit
   const selected = selectedId ? config.providers?.[selectedId] : undefined;
   if (selected && !supportsProviderCapability(selected, capability)) {
     const compatible = Object.entries(config.providers ?? {}).find(([id, provider]) => id !== selectedId && supportsProviderCapability(provider, capability));
-    if (compatible) return providerForId(config, compatible[0]);
+    if (compatible) return providerForId(config, compatible[0], capability);
   }
   if (!selectedId) {
     const compatible = Object.entries(config.providers ?? {})
       .filter(([, provider]) => supportsProviderCapability(provider, capability))
       .sort(([left], [right]) => left.localeCompare(right))[0];
-    if (compatible) return providerForId(config, compatible[0]);
+    if (compatible) return providerForId(config, compatible[0], capability);
   }
-  return providerForId(config, selectedId);
+  return providerForId(config, selectedId, capability);
+}
+
+/** Normalize persisted capability catalogs without mixing media into text. */
+export function normalizeCapabilityModels(value: unknown): CapabilityModelSelections | undefined {
+  if (!isRecord(value)) return undefined;
+  const result: CapabilityModelSelections = {};
+  for (const capability of providerCapabilities) {
+    const entry = value[capability];
+    if (!isRecord(entry) || !Array.isArray(entry.models)) continue;
+    const models = [...new Set(entry.models.filter((model): model is string => typeof model === "string").map((model) => model.trim()).filter(Boolean))];
+    const requested = typeof entry.model === "string" ? entry.model.trim() : "";
+    result[capability] = { models, model: models.includes(requested) ? requested : models[0] ?? "" };
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+export function setProviderCapabilityModels(provider: DesktopProviderConfig, capability: ProviderCapability, values: readonly string[], selected?: string): DesktopProviderConfig {
+  const models = [...new Set(values.map((model) => model.trim()).filter(Boolean))];
+  const requested = selected ?? provider.capabilityModels?.[capability]?.model ?? (capability === "text" ? provider.model : undefined);
+  const model = requested && models.includes(requested) ? requested : models[0] ?? "";
+  return { ...provider, capabilityModels: { ...provider.capabilityModels, [capability]: { models, model } }, ...(capability === "text" ? { models, model } : {}) };
+}
+
+export function setProviderCapabilityModel(provider: DesktopProviderConfig, capability: ProviderCapability, model: string): DesktopProviderConfig {
+  if (!provider.capabilityModels) return { ...provider, model };
+  return setProviderCapabilityModels(provider, capability, provider.capabilityModels[capability]?.models ?? configuredModelOptions(provider), model);
 }
 
 export function capabilityForWorkflowAction(action: string): ProviderCapability {
@@ -253,6 +291,7 @@ export function supportsProviderCapability(provider: DesktopProviderConfig, capa
     : [];
   if (explicit.length) return explicit.includes(capability);
   const source = (provider.source ?? provider.id ?? "").trim().toLowerCase();
+  if (source === "cheapbuddy") return capability === "text" || capability === "image" || capability === "video";
   if (isPptokenProvider(provider)) return capability === "text" || capability === "image";
   const identity = [provider.id, provider.model, provider.endpoint, provider.queryEndpoint]
     .filter((value) => typeof value === "string")

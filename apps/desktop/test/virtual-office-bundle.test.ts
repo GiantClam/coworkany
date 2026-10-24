@@ -11,7 +11,11 @@ async function fixture(staticSource: string) {
   await writeFile(resolve(dist, "index.html"), '<script type="module" src="./assets/index.js"></script>');
   await writeFile(resolve(dist, "assets/index.js"), 'import "./desktop-app.js";');
   await writeFile(resolve(dist, "assets/desktop-app.js"), staticSource);
-  await writeFile(resolve(dist, "assets/office-scene-test.js"), 'import { Application } from "pixi.js";');
+  await writeFile(resolve(dist, "assets/office-scene-test.js"), [
+    'import { Application } from "pixi.js";',
+    'const rendererRoots = ["virtual-office-background", "virtual-office-desk-back", "virtual-office-chairs", "virtual-office-displays", "virtual-office-characters"];',
+    'export { rendererRoots };',
+  ].join("\n"));
   await mkdir(resolve(dist, ".vite"));
   await writeFile(resolve(dist, ".vite/manifest.json"), JSON.stringify({ main: { file: "assets/index.js", isEntry: true, imports: [] } }));
   return dist;
@@ -43,6 +47,26 @@ test("bundle verifier accepts a clean static closure with a dynamic Pixi scene",
     const result = await validateBundle({ distDir: dist });
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.deepEqual(result.staticFiles.sort(), ["desktop-app.js", "index.js"]);
+    assert.deepEqual(result.rendererModules, { background: 1, desk: 1, chair: 1, display: 1, character: 1 });
+  } finally {
+    await rm(dist, { recursive: true, force: true });
+  }
+});
+
+test("bundle verifier rejects an incomplete or duplicated renderer root set", async () => {
+  const dist = await fixture("export const ready = true;");
+  try {
+    const scenePath = resolve(dist, "assets/office-scene-test.js");
+    await writeFile(scenePath, [
+      'import { Application } from "pixi.js";',
+      'const rendererRoots = ["virtual-office-background", "virtual-office-desk-back", "virtual-office-chairs", "virtual-office-displays", "virtual-office-displays"];',
+      'export { rendererRoots };',
+    ].join("\n"));
+    const result = await validateBundle({ distDir: dist });
+    assert.equal(result.ok, false);
+    assert.equal(result.rendererModulesPresent, false);
+    assert.equal(result.rendererModules.character, 0);
+    assert.equal(result.rendererModules.display, 2);
   } finally {
     await rm(dist, { recursive: true, force: true });
   }
