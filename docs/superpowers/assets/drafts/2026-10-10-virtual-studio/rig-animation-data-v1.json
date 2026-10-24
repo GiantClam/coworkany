@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "assetId": "virtual-studio-character-rig",
+  "sourcePreview": "rig-preview-v1.png",
+  "coordinateSystem": {
+    "unit": "normalized-to-character-height",
+    "origin": "root-at-hip-center",
+    "positiveY": "down",
+    "rotation": "degrees-clockwise"
+  },
+  "bones": [
+    { "name": "root", "parent": null, "length": 0.0, "x": 0.0, "y": 0.0, "rotation": 0.0 },
+    { "name": "torso", "parent": "root", "length": 0.34, "x": 0.0, "y": -0.02, "rotation": 0.0 },
+    { "name": "head", "parent": "torso", "length": 0.31, "x": 0.0, "y": -0.30, "rotation": 0.0 },
+    { "name": "arm.l", "parent": "torso", "length": 0.22, "x": -0.16, "y": -0.04, "rotation": 8.0 },
+    { "name": "arm.r", "parent": "torso", "length": 0.22, "x": 0.16, "y": -0.04, "rotation": -8.0 },
+    { "name": "hand.l", "parent": "arm.l", "length": 0.14, "x": -0.08, "y": 0.18, "rotation": 4.0 },
+    { "name": "hand.r", "parent": "arm.r", "length": 0.14, "x": 0.08, "y": 0.18, "rotation": -4.0 },
+    { "name": "prop", "parent": "hand.r", "length": 0.12, "x": 0.02, "y": 0.05, "rotation": 0.0 }
+  ],
+  "slots": [
+    { "name": "body", "bone": "torso", "zIndex": 10, "blend": "normal" },
+    { "name": "head", "bone": "head", "zIndex": 20, "blend": "normal" },
+    { "name": "prop", "bone": "prop", "zIndex": 30, "blend": "normal" },
+    { "name": "statusFx", "bone": "root", "zIndex": 40, "blend": "additive" }
+  ],
+  "textureRegions": {
+    "body": "character.{roleId}.back.body",
+    "head": "character.{roleId}.back.head",
+    "prop": "character.{roleId}.back.prop",
+    "statusFx": "effects.status.{status}"
+  },
+  "clips": {
+    "idle": {
+      "durationMs": 2200,
+      "loop": true,
+      "tracks": {
+        "root": [{ "t": 0.0, "y": 0.0 }, { "t": 0.5, "y": -0.008 }, { "t": 1.0, "y": 0.0 }],
+        "torso": [{ "t": 0.0, "rotation": 0.0 }, { "t": 0.5, "rotation": 1.2 }, { "t": 1.0, "rotation": 0.0 }],
+        "head": [{ "t": 0.0, "rotation": -0.8 }, { "t": 0.5, "rotation": 0.8 }, { "t": 1.0, "rotation": -0.8 }]
+      }
+    },
+    "walk": {
+      "durationMs": 900,
+      "loop": true,
+      "tracks": {
+        "root": [{ "t": 0.0, "x": -0.012, "y": 0.0 }, { "t": 0.5, "x": 0.012, "y": -0.012 }, { "t": 1.0, "x": -0.012, "y": 0.0 }],
+        "torso": [{ "t": 0.0, "rotation": -2.0 }, { "t": 0.5, "rotation": 2.0 }, { "t": 1.0, "rotation": -2.0 }],
+        "head": [{ "t": 0.0, "rotation": 1.0 }, { "t": 0.5, "rotation": -1.0 }, { "t": 1.0, "rotation": 1.0 }],
+        "arm.l": [{ "t": 0.0, "rotation": -18.0 }, { "t": 0.5, "rotation": 16.0 }, { "t": 1.0, "rotation": -18.0 }],
+        "arm.r": [{ "t": 0.0, "rotation": 16.0 }, { "t": 0.5, "rotation": -18.0 }, { "t": 1.0, "rotation": 16.0 }]
+      }
+    },
+    "work": {
+      "durationMs": 1200,
+      "loop": true,
+      "tracks": {
+        "root": [{ "t": 0.0, "y": 0.0 }, { "t": 0.5, "y": -0.004 }, { "t": 1.0, "y": 0.0 }],
+        "torso": [{ "t": 0.0, "rotation": 0.0 }, { "t": 0.5, "rotation": -1.0 }, { "t": 1.0, "rotation": 0.0 }],
+        "arm.l": [{ "t": 0.0, "rotation": 10.0 }, { "t": 0.45, "rotation": 16.0 }, { "t": 1.0, "rotation": 10.0 }],
+        "arm.r": [{ "t": 0.0, "rotation": -12.0 }, { "t": 0.35, "rotation": -20.0 }, { "t": 0.7, "rotation": -8.0 }, { "t": 1.0, "rotation": -12.0 }],
+        "hand.r": [{ "t": 0.0, "rotation": -5.0 }, { "t": 0.35, "rotation": 7.0 }, { "t": 0.7, "rotation": -7.0 }, { "t": 1.0, "rotation": -5.0 }],
+        "prop": [{ "t": 0.0, "rotation": -2.0 }, { "t": 0.5, "rotation": 4.0 }, { "t": 1.0, "rotation": -2.0 }]
+      }
+    },
+    "thinking": {
+      "durationMs": 1600,
+      "loop": true,
+      "tracks": {
+        "head": [{ "t": 0.0, "rotation": -4.0 }, { "t": 0.35, "rotation": 2.0 }, { "t": 0.7, "rotation": 5.0 }, { "t": 1.0, "rotation": -4.0 }],
+        "arm.r": [{ "t": 0.0, "rotation": -8.0 }, { "t": 0.25, "rotation": -28.0 }, { "t": 0.75, "rotation": -28.0 }, { "t": 1.0, "rotation": -8.0 }],
+        "hand.r": [{ "t": 0.0, "rotation": -4.0 }, { "t": 0.3, "rotation": 12.0 }, { "t": 0.7, "rotation": 12.0 }, { "t": 1.0, "rotation": -4.0 }],
+        "prop": [{ "t": 0.0, "rotation": 0.0 }, { "t": 0.5, "rotation": 5.0 }, { "t": 1.0, "rotation": 0.0 }]
+      }
+    },
+    "waiting": {
+      "durationMs": 1800,
+      "loop": true,
+      "tracks": {
+        "root": [{ "t": 0.0, "y": 0.0 }, { "t": 0.5, "y": 0.006 }, { "t": 1.0, "y": 0.0 }],
+        "head": [{ "t": 0.0, "rotation": 0.0 }, { "t": 0.5, "rotation": 3.0 }, { "t": 1.0, "rotation": 0.0 }],
+        "arm.l": [{ "t": 0.0, "rotation": 13.0 }, { "t": 0.5, "rotation": 8.0 }, { "t": 1.0, "rotation": 13.0 }],
+        "arm.r": [{ "t": 0.0, "rotation": -13.0 }, { "t": 0.5, "rotation": -8.0 }, { "t": 1.0, "rotation": -13.0 }]
+      }
+    },
+    "completed": {
+      "durationMs": 1400,
+      "loop": false,
+      "tracks": {
+        "root": [{ "t": 0.0, "y": 0.0 }, { "t": 0.22, "y": -0.035 }, { "t": 0.5, "y": 0.0 }, { "t": 1.0, "y": 0.0 }],
+        "torso": [{ "t": 0.0, "rotation": 0.0 }, { "t": 0.35, "rotation": -3.0 }, { "t": 0.7, "rotation": 3.0 }, { "t": 1.0, "rotation": 0.0 }],
+        "arm.l": [{ "t": 0.0, "rotation": 12.0 }, { "t": 0.35, "rotation": -22.0 }, { "t": 0.7, "rotation": 12.0 }, { "t": 1.0, "rotation": 12.0 }],
+        "arm.r": [{ "t": 0.0, "rotation": -12.0 }, { "t": 0.35, "rotation": 22.0 }, { "t": 0.7, "rotation": -12.0 }, { "t": 1.0, "rotation": -12.0 }],
+        "statusFx": [{ "t": 0.0, "opacity": 0.0 }, { "t": 0.25, "opacity": 1.0 }, { "t": 1.0, "opacity": 0.0 }]
+      }
+    },
+    "error": {
+      "durationMs": 1200,
+      "loop": false,
+      "tracks": {
+        "root": [{ "t": 0.0, "x": 0.0 }, { "t": 0.15, "x": -0.018 }, { "t": 0.3, "x": 0.018 }, { "t": 0.45, "x": -0.014 }, { "t": 0.6, "x": 0.014 }, { "t": 1.0, "x": 0.0 }],
+        "head": [{ "t": 0.0, "rotation": 0.0 }, { "t": 0.35, "rotation": -7.0 }, { "t": 0.7, "rotation": 7.0 }, { "t": 1.0, "rotation": 0.0 }],
+        "arm.l": [{ "t": 0.0, "rotation": 12.0 }, { "t": 0.5, "rotation": 20.0 }, { "t": 1.0, "rotation": 12.0 }],
+        "arm.r": [{ "t": 0.0, "rotation": -12.0 }, { "t": 0.5, "rotation": -20.0 }, { "t": 1.0, "rotation": -12.0 }],
+        "statusFx": [{ "t": 0.0, "opacity": 0.0 }, { "t": 0.2, "opacity": 1.0 }, { "t": 0.65, "opacity": 1.0 }, { "t": 1.0, "opacity": 0.0 }]
+      }
+    }
+  },
+  "reducedMotion": {
+    "enabledByDefaultWhen": "prefers-reduced-motion",
+    "staticPoseByClip": {
+      "idle": "idle",
+      "walk": "idle",
+      "work": "work",
+      "thinking": "thinking",
+      "waiting": "waiting",
+      "completed": "completed",
+      "error": "error"
+    },
+    "disableStatusFx": true
+  },
+  "runtimeNotes": [
+    "Mirror arm.l/arm.r and hand.l/hand.r for roles whose prop is held on the left.",
+    "Character atlas regions remain role-parametric until the approved source sheets are sliced into runtime textures.",
+    "Keep the desk front edge above body and prop slots; display status effects stay independently replaceable."
+  ]
+}

@@ -1092,7 +1092,7 @@ test("desktop exposes Full Access compatibility and the Agent approval protocol 
   assert.match(appSource, /Full Access/);
   assert.match(appSource, /API Key[^\n]*config\.json/);
   assert.match(appSource, /不会写入 SQLite、日志或诊断包/);
-  assert.match(appSource, /it is not written to SQLite, logs, or diagnostics/);
+  assert.match(appSource, /(?:it|they) (?:is|are) not written to SQLite, logs, or diagnostics/);
   assert.match(appSource, /function SettingsSecretInput\(/);
   assert.match(appSource, /<input type="password" value=\{value\} autoComplete="off"/);
   assert.doesNotMatch(appSource, /settings-secret-toggle/);
@@ -1164,7 +1164,7 @@ test("desktop media and asset artifact reveals consume the WorkbenchClient file 
   assert.match(tauriSource, /fn open_artifact_with\(/);
   assert.match(tauriSource, /fn open_with_installed_program\(target: &Path\)/);
   assert.match(tauriSource, /fn open_artifact_default\([\s\S]*?open_with_default_program\(&target\)/);
-  assert.match(tauriSource, /fn read_artifact\([\s\S]*?artifacts::inspect\(&root, &relative_path, &mime_type\)/);
+  assert.match(tauriSource, /fn read_artifact\([\s\S]*?locate_trusted_artifact\(&app, &relative_path, &mime_type\)/);
   assert.match(tauriSource, /MAX_PREVIEW_BYTES: u64 = 64 \* 1024 \* 1024/);
   assert.match(tauriSource, /fn open_with_default_program\(target: &Path\)/);
   assert.doesNotMatch(tauriSource, /open_artifact_default[\s\S]*?Command::new\("cmd\.exe"\)/);
