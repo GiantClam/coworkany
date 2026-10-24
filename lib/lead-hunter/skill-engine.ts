@@ -17,7 +17,7 @@ const LEAD_HUNTER_SKILL_MODEL =
   process.env.LEAD_HUNTER_SKILL_MODEL ||
   process.env.WRITER_TEXT_MODEL ||
   process.env.WRITER_SKILL_MODEL ||
-  "gpt-4-mini"
+  "claude-sonnet-5.1"
 
 const DEFAULT_MAX_SEARCH_QUERIES_COMPANY = 14
 const DEFAULT_MAX_SEARCH_QUERIES_CONTACT = 12

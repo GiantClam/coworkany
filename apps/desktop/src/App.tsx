@@ -23,7 +23,7 @@ import { buildAgencyAgentGroups } from "./agency-agent-catalog";
 import { closeDesktopMediaTab, createDesktopMediaTab, openDesktopMediaTab, syncDesktopMediaTabModel, type DesktopMediaTabState } from "./media-tabs";
 import { PROVIDER_PLATFORM_OPTIONS, platformIdForProvider, providerPlatformForId } from "./provider-platforms";
 import { capabilityEnglish, desktopCopy, desktopWriterCopy, homeGroupLabels, mediaEnglish, mediaFieldEnglish, mediaOptionEnglish, mediaPlaceholderEnglish, mediaSubmitEnglish, mediaSummaryEnglish, quickPromptsForDesktopRoute, resolveDesktopLocale, workflowActionEnglish, writerContentTypeEnglish, writerLanguageEnglish, writerModeEnglish, writerPlatformEnglish, type DesktopLocalePreference } from "./i18n";
-import { capabilityForWorkflowAction, configuredModelOptions, configuredProviderEntries, configuredTextModelOptions, configuredTextModelSelectionId, isDevelopmentRunningHubWorkflowId, isMediaProviderConfigured, modelOptionsForProvider, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, requiresConfiguredProviderForWorkflowAction, selectConfiguredTextModel, setProviderCapabilityModel, setProviderCapabilityModels, supportsProviderCapability, supportsRunningHubWorkflowCapability, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "./provider-config";
+import { capabilityForWorkflowAction, configuredModelOptions, configuredProviderEntries, configuredTextModelOptions, configuredTextModelSelectionId, filterDeprecatedModelIds, isDevelopmentRunningHubWorkflowId, isMediaProviderConfigured, modelOptionsForProvider, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, requiresConfiguredProviderForWorkflowAction, selectConfiguredTextModel, setProviderCapabilityModel, setProviderCapabilityModels, supportsProviderCapability, supportsRunningHubWorkflowCapability, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "./provider-config";
 import { CHEAPBUDDY, createCheapBuddyProvider, mergeCheapBuddyProvider } from "./cheapbuddy";
 import { CheapBuddyAccountPanel } from "./cheapbuddy-account";
 import { SIGNED_OUT_CHEAPBUDDY_STATE, type CheapBuddyAccountAction, type CheapBuddyAccountState } from "./cheapbuddy-contract";
@@ -3564,7 +3564,9 @@ function DesktopProviderEditorModal({ target, profile, locale, onClose, onSave, 
   const isCheapBuddy = platform?.id === CHEAPBUDDY.id;
   const runningHubWorkflowModels = [...new Set(draft.workflows.map((workflow) => workflow.remoteWorkflowId.trim()).filter(Boolean))];
   const legacyModels = profile?.capabilityModels?.[target.capability]?.models ?? profile?.models ?? (profile?.model ? [profile.model] : []);
-  const modelChoices = isRunningHub ? runningHubWorkflowModels : [...new Set([...discoveredModelIds, ...draft.modelIds, ...legacyModels])];
+  const modelChoices = isRunningHub ? runningHubWorkflowModels : target.capability === "text"
+    ? filterDeprecatedModelIds([...discoveredModelIds, ...draft.modelIds, ...legacyModels])
+    : [...new Set([...discoveredModelIds, ...draft.modelIds, ...legacyModels])];
   const useModelSelect = modelChoices.length > 0;
   const discoverModels = (automatic = false) => {
     const baseUrl = draft.baseUrl.trim();

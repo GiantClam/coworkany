@@ -1,3 +1,5 @@
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
+
 function normalize(value: string | null | undefined) {
   return typeof value === "string" ? value.trim() : ""
 }
@@ -17,6 +19,7 @@ export function resolveOpenCodeModelHint(input: {
 }) {
   const modelId = normalize(input.modelId)
   if (!modelId) return null
+  if (isDeprecatedTextModelId(modelId)) throw new Error("deprecated_text_model_unavailable")
 
   const providerId = normalize(input.providerId).toLowerCase()
   const providerKey = providerId ? normalizeOpenCodeProviderKey(providerId) : ""

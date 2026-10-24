@@ -9,31 +9,31 @@ import {
   AI_ENTRY_NORMAL_DEFAULT_MODEL_HINT,
   AI_ENTRY_PPT_ASSISTANT_DEFAULT_MODEL_HINT,
   AI_ENTRY_PPT_AGENT_IDS,
-  AI_ENTRY_SONNET_46_MODEL_HINT,
+  AI_ENTRY_CLAUDE_51_MODEL_HINT,
   isAiEntryPptAgentId,
   isConsultingAdvisorEntryMode,
   pickConsultingModelId,
   pickAgentDefaultModelId,
   pickPptAssistantDefaultModelId,
-  pickSonnet46ModelId,
+  pickClaude51ModelId,
   resolvePptAssistantModelSelection,
   resolveConsultingModelMode,
   shouldLockConsultingAdvisorModel,
 } from "./model-policy"
 
-test("pickSonnet46ModelId prefers non-thinking variant across separator styles", () => {
-  const selected = pickSonnet46ModelId([
+test("pickClaude51ModelId selects Claude 5.1 and rejects retired Claude 4 models", () => {
+  const selected = pickClaude51ModelId([
     { id: "anthropic/claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
-    { id: "claude-sonnet-4.6:thinking", name: "Claude Sonnet 4.6 Thinking" },
-    { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+    { id: "claude-sonnet-5.1:thinking", name: "Claude Sonnet 5.1 Thinking" },
+    { id: "claude-sonnet-5.1", name: "Claude Sonnet 5.1" },
   ])
 
-  assert.equal(selected, "claude-sonnet-4.6")
+  assert.equal(selected, "claude-sonnet-5.1")
 })
 
-test("pickSonnet46ModelId returns null when sonnet-4.6 model does not exist", () => {
-  const selected = pickSonnet46ModelId([
-    { id: "openai/gpt-5.4", name: "GPT 5.4" },
+test("pickClaude51ModelId returns null when sonnet-5.1 model does not exist", () => {
+  const selected = pickClaude51ModelId([
+    { id: "openai/gpt-6.1-sol", name: "GPT 6.1 Sol" },
     { id: "google/gemini-3-flash-preview", name: "Gemini 3 Flash Preview" },
   ])
 
@@ -84,14 +84,14 @@ test("pickPptAssistantDefaultModelId defaults PPT assistant to PPToken Grok-4.5"
   assert.equal(selected, "pptoken::grok-4.5")
 })
 
-test("PPT assistant keeps the current conversation model before applying its default", () => {
+test("PPT assistant drops a retired conversation model before applying its default", () => {
   assert.equal(
     resolvePptAssistantModelSelection({
       currentModelId: "pptoken::gpt-5.4",
       availableModelIds: ["deepseek::deepseek-v4-pro", "pptoken::gpt-5.4"],
       defaultModelId: "pptoken::gpt-5.4",
     }),
-    "pptoken::gpt-5.4",
+    "deepseek::deepseek-v4-pro",
   )
   assert.equal(
     resolvePptAssistantModelSelection({
@@ -99,11 +99,11 @@ test("PPT assistant keeps the current conversation model before applying its def
       availableModelIds: ["deepseek::deepseek-v4-pro", "pptoken::gpt-5.4"],
       defaultModelId: "pptoken::gpt-5.4",
     }),
-    "pptoken::gpt-5.4",
+    "deepseek::deepseek-v4-pro",
   )
 })
 
-test("PPT assistant restores a persisted conversation model when model loading races", () => {
+test("PPT assistant drops a retired persisted conversation model when model loading races", () => {
   assert.equal(
     resolvePptAssistantModelSelection({
       currentModelId: null,
@@ -111,7 +111,7 @@ test("PPT assistant restores a persisted conversation model when model loading r
       availableModelIds: ["deepseek::deepseek-v4-pro", "pptoken::gpt-5.4"],
       defaultModelId: "deepseek::deepseek-v4-pro",
     }),
-    "pptoken::gpt-5.4",
+    "deepseek::deepseek-v4-pro",
   )
 })
 
@@ -163,6 +163,6 @@ test("consulting entry mode detection and lock flag", () => {
   assert.equal(AI_ENTRY_NORMAL_DEFAULT_MODEL_HINT, "deepseek-v4-pro")
   assert.equal(AI_ENTRY_CONSULTING_QUALITY_MODEL_HINT, "deepseek-v4-pro")
   assert.equal(AI_ENTRY_AGENT_DEFAULT_MODEL_HINT, "deepseek-v4-pro")
-  assert.equal(AI_ENTRY_SONNET_46_MODEL_HINT, "claude-sonnet-4.6")
+  assert.equal(AI_ENTRY_CLAUDE_51_MODEL_HINT, "claude-sonnet-5.1")
   assert.equal(AI_ENTRY_PPT_ASSISTANT_DEFAULT_MODEL_HINT, "grok-4.5")
 })

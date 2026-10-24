@@ -17,8 +17,8 @@ ARTIFACT_DIR = Path("artifacts") / "ai-entry" / SCENARIO
 ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_AGENT_MODEL_ID = "grok-4.5"
-SWITCHABLE_MODEL_ID = "gpt-5.5"
-DEFAULT_NORMAL_MODEL_ID = "gpt-5.4"
+SWITCHABLE_MODEL_ID = "gpt-6-sol"
+DEFAULT_NORMAL_MODEL_ID = "gpt-6.1-sol"
 KNOWLEDGE_DATASET_ID = 101
 KNOWLEDGE_DATASET_NAME = "品牌规范"
 ATTACHMENT_ARTIFACT_ID = 501
@@ -135,8 +135,8 @@ def run():
                                 "family": "openai",
                                 "label": "OpenAI",
                                 "models": [
-                                    {"id": DEFAULT_NORMAL_MODEL_ID, "name": "GPT 5.4"},
-                                    {"id": SWITCHABLE_MODEL_ID, "name": "GPT 5.5"},
+                                    {"id": DEFAULT_NORMAL_MODEL_ID, "name": "GPT 6.1 Sol"},
+                                    {"id": SWITCHABLE_MODEL_ID, "name": "GPT 6 Sol"},
                                 ],
                             },
                         ],

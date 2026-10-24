@@ -51,36 +51,36 @@ test("worker preview schema accepts official ppt-master example ids", () => {
   assert.equal(parsed.templateId, "ppt169_general_dark_tech_claude_code_auto_mode")
 })
 
-test("worker preview schema accepts pptoken GPT-5.6 Sol as a remote worker model", () => {
+test("worker preview schema accepts pptoken GPT-6.1 Sol as a remote worker model", () => {
   const parsed = previewRequestSchema.parse({
-    requestId: "req_deepseek_v4_pro",
+    requestId: "req_gpt_6_1_sol",
     prompt: "Build a tech company introduction deck",
     scenario: "sales-deck",
     language: "zh-CN",
-    model: "gpt-5.6-sol",
+    model: "gpt-6.1-sol",
     templateMode: "single-template",
     templateId: "ppt169_general_dark_tech_claude_code_auto_mode",
     allowMockFallback: false,
     runtimeProfile: "railway-linux",
   })
 
-  assert.equal(parsed.model, "gpt-5.6-sol")
+  assert.equal(parsed.model, "gpt-6.1-sol")
 })
 
-test("worker preview schema accepts pptoken GPT-5.4 as a remote worker model", () => {
-  const parsed = previewRequestSchema.parse({
-    requestId: "req_gpt_5_4",
+test("worker preview schema rejects retired GPT-5.6 and earlier models", () => {
+  for (const model of ["gpt-5.6-sol", "gpt-5.4", "openai/gpt-5.4-mini"]) {
+    assert.throws(() => previewRequestSchema.parse({
+    requestId: `req_${model}`,
     prompt: "Build a tech company introduction deck",
     scenario: "sales-deck",
     language: "zh-CN",
-    model: "gpt-5.4",
+    model,
     templateMode: "single-template",
     templateId: "ppt169_general_dark_tech_claude_code_auto_mode",
     allowMockFallback: false,
     runtimeProfile: "railway-linux",
-  })
-
-  assert.equal(parsed.model, "gpt-5.4")
+    }))
+  }
 })
 
 test("worker preview schema accepts DeepSeek v4 flash", () => {
@@ -99,8 +99,8 @@ test("worker preview schema accepts DeepSeek v4 flash", () => {
   assert.equal(parsed.model, "deepseek-v4-flash")
 })
 
-test("worker preview schema normalizes the legacy OpenAI mini model alias", () => {
-  const parsed = previewRequestSchema.parse({
+test("worker preview schema rejects retired OpenAI mini aliases", () => {
+  assert.throws(() => previewRequestSchema.parse({
     requestId: "req_openai_gpt_5_4_mini",
     prompt: "Build a tech company introduction deck",
     scenario: "sales-deck",
@@ -110,9 +110,7 @@ test("worker preview schema normalizes the legacy OpenAI mini model alias", () =
     templateId: "ppt169_general_dark_tech_claude_code_auto_mode",
     allowMockFallback: false,
     runtimeProfile: "railway-linux",
-  })
-
-  assert.equal(parsed.model, "deepseek-v4-pro")
+  }))
 })
 
 test("worker preview schema accepts explicit runtime slide overrides", () => {
@@ -121,7 +119,7 @@ test("worker preview schema accepts explicit runtime slide overrides", () => {
     prompt: "Build a tech company introduction deck",
     scenario: "sales-deck",
     language: "zh-CN",
-    runtimeSlideModel: "gpt-5.4",
+    runtimeSlideModel: "gpt-6.1-sol",
     runtimeSlideProvider: "pptoken",
     templateMode: "single-template",
     templateId: "ppt169_general_dark_tech_claude_code_auto_mode",
@@ -129,8 +127,24 @@ test("worker preview schema accepts explicit runtime slide overrides", () => {
     runtimeProfile: "railway-linux",
   })
 
-  assert.equal(parsed.runtimeSlideModel, "gpt-5.4")
+  assert.equal(parsed.runtimeSlideModel, "gpt-6.1-sol")
   assert.equal(parsed.runtimeSlideProvider, "pptoken")
+})
+
+test("worker preview schema rejects retired GPT and Claude runtime slide models", () => {
+  for (const runtimeSlideModel of ["gpt-5.6-sol", "claude-sonnet-4-6"]) {
+    assert.throws(() => previewRequestSchema.parse({
+      requestId: `req_${runtimeSlideModel}`,
+      prompt: "Build a tech company introduction deck",
+      scenario: "sales-deck",
+      language: "zh-CN",
+      runtimeSlideModel,
+      templateMode: "single-template",
+      templateId: "ppt169_general_dark_tech_claude_code_auto_mode",
+      allowMockFallback: false,
+      runtimeProfile: "railway-linux",
+    }))
+  }
 })
 
 test("worker preview schema still rejects unknown template ids", () => {

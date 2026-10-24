@@ -65,7 +65,7 @@ export function bindWorkflowProviderDefaults(definition: WorkflowDefinitionEnvel
       // workflow ID list; direct endpoint profiles keep their normal models.
       const configuredModels = registeredWorkflows.length
         ? registeredWorkflows.map((workflow) => workflow.remoteWorkflowId)
-        : configuredModelOptions(provider);
+        : configuredModelOptions(provider, capability);
       const hasConfiguredCatalog = registeredWorkflows.length > 0 || provider.models !== undefined || provider.capabilityModels?.[capability] !== undefined;
       const selectedNodeModel = typeof nodeConfig.selectedModelId === "string" && nodeConfig.selectedModelId.trim()
         ? nodeConfig.selectedModelId.trim()

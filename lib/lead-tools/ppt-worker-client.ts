@@ -8,6 +8,7 @@ import {
   getPptWorkerRuntimeProfile,
 } from "@/lib/lead-tools/config"
 import { isPptWorkerTemplateSupported } from "@/lib/lead-tools/ppt-worker-capabilities"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 import type {
   PptWorkerExportRequest,
   PptWorkerModelValue,
@@ -23,10 +24,10 @@ const PPT_WORKER_SUPPORTED_MODELS: PptWorkerModelValue[] = [
   "MiniMax-M3",
   "deepseek-v4-pro",
   "deepseek-v4-flash",
-  "gpt-5.4",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
+  "gpt-6-astra",
+  "gpt-6-luna",
+  "gpt-6-sol",
+  "gpt-6.1-sol",
   "step-3.7-flash",
 ]
 
@@ -37,6 +38,11 @@ function normalizeWorkerBaseUrl(baseUrl: string) {
 function normalizeWorkerModelValue(value: unknown) {
   if (typeof value !== "string") return ""
   return value.trim()
+}
+
+function normalizeWorkerRuntimeSlideModel(value: unknown) {
+  const normalized = normalizeWorkerModelValue(value)
+  return normalized && isDeprecatedTextModelId(normalized) ? "gpt-6.1-sol" : normalized || undefined
 }
 
 function isSupportedPptWorkerModel(value: string): value is PptWorkerModelValue {
@@ -99,6 +105,7 @@ function buildPreviewRequestBody(input: Omit<PptWorkerPreviewRequest, "runtimePr
     ...input,
     templateMode,
     model: normalizePptWorkerPreviewModel(input.model),
+    runtimeSlideModel: normalizeWorkerRuntimeSlideModel(input.runtimeSlideModel),
     runtimeProfile: getPptWorkerRuntimeProfile(),
   }
 }

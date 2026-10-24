@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 const DEFAULT_MODELS = [
-  "claude-opus-4.7",
-  "claude-sonnet-4.6",
-  "claude-haiku-4.5",
-  "gpt-5.5",
-  "gpt-5.4",
-  "gpt-5.4-mini",
+  "claude-opus-5.1",
+  "claude-sonnet-5.1",
+  "claude-haiku-5.1",
+  "gpt-6.1-sol",
+  "gpt-6-sol",
+  "gpt-6-luna",
   "gemini-3.1-pro-preview",
   "gemini-3-flash-preview",
   "MiniMax-M2.7",

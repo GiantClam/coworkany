@@ -15,6 +15,7 @@ import { discoverProviderModels } from "../src/provider-model-discovery";
 import { CHEAPBUDDY } from "../src/cheapbuddy";
 import type { CheapBuddyAccountAction } from "../src/cheapbuddy-contract";
 import { normalizeCapabilityModels, type DesktopProviderConfig, type ProviderCapability } from "../src/provider-config";
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy";
 import { CheapBuddyAccountService } from "./cheapbuddy-account";
 import { ManagedProviderRuntime, createRedactedLogWriter, managedProviderFailure, qualifiedOpenCodeModel, resolveProviderCredentials } from "./provider-credentials";
 import type { RunningHubWorkflowRegistration } from "../src/runninghub-workflow";
@@ -734,6 +735,8 @@ async function runOpenCode(command: HostCommand, session?: { readonly workspaceP
   try { managedProviderRuntime.assertCurrent(generation); provider = await resolveHostProvider(requestedProvider); managedProviderRuntime.assertCurrent(generation); }
   catch (error) { return fail(command, "provider_credentials_unavailable", error instanceof Error ? error.message : "cheapbuddy_sign_in_required"); }
   const activeProvider = provider;
+  const selectedModel = (modelHint || activeProvider?.model || "").trim();
+  if (isDeprecatedTextModelId(selectedModel)) return fail(command, "deprecated_model", "The selected text model is retired. Choose a GPT-6+ or Claude 5.1+ model.");
   if (!(activeProvider?.model?.trim() || modelHint?.trim())) return fail(command, "text_provider_model_required", "Configure a text Provider and model before sending.");
   const executable = typeof command.payload?.executable === "string" ? command.payload.executable : defaultOpenCodeExecutable();
   const workspacePath = session?.workspacePath ?? (workspacePathFromPayload(command.payload?.workspacePath) || process.cwd());
@@ -813,6 +816,7 @@ async function runDirectTextCapability(command: HostCommand, executorId: string,
   if (!baseUrl) throw new Error("text_provider_configuration_required");
   const model = typeof config.model === "string" ? config.model : provider?.model ?? "";
   if (!model) throw new Error("text_provider_model_required");
+  if (isDeprecatedTextModelId(model)) throw new Error("deprecated_model");
   const prompt = [typeof config.prompt === "string" ? config.prompt : "", typeof config.script === "string" ? config.script : "", typeof config.text === "string" ? config.text : "", typeof inputs.text === "string" ? inputs.text : ""].filter(Boolean).join("\n\n").trim();
   if (!prompt) throw new Error("text_prompt_required");
   const defaultTextEndpoint = `/${["chat", "completions"].join("/")}`;
@@ -1718,6 +1722,7 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   // media profile supplies transport credentials, but must not overwrite the
   // model selected on an individual image node.
   const modelId = requestedModel || profile?.model || "default";
+  if (isDeprecatedTextModelId(modelId)) throw new Error("deprecated_model");
   diagnosticLog("workflow_provider_selected", { nodeKey, executorId, providerId: provider, source: profile?.source ?? provider, model: modelId, hasBaseUrl: Boolean(baseUrl), hasApiKey: Boolean(apiKey?.trim()), workflowCapability: workflowCapability ?? null, registeredWorkflow: registeredWorkflow?.id ?? null }, runId);
   const mediaInput = buildMediaCapabilityInput(executorId, config, inputs);
   if (executorId === "video_generate" && !registeredWorkflow) assertVideoMediaCapability(resolveVideoMediaCapabilities(providerKind, modelId), mediaInput);

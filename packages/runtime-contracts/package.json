@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./opencode": "./src/opencode.ts"
+    "./opencode": "./src/opencode.ts",
+    "./model-policy": "./src/model-policy.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",

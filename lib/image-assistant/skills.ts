@@ -11,12 +11,12 @@ export const IMAGE_ASSISTANT_TEXT_MODEL =
   process.env.IMAGE_ASSISTANT_TEXT_MODEL ||
   process.env.WRITER_TEXT_MODEL ||
   process.env.WRITER_SKILL_MODEL ||
-  "gpt-4-mini"
+  "claude-sonnet-5.1"
 export const IMAGE_ASSISTANT_SKILL_MODEL =
   process.env.IMAGE_ASSISTANT_SKILL_MODEL ||
   process.env.WRITER_SKILL_MODEL ||
   process.env.WRITER_TEXT_MODEL ||
-  "gpt-4-mini"
+  "claude-sonnet-5.1"
 
 type ImageAssistantSkillDefinition = ImageAssistantSkillSelection & {
   description: string

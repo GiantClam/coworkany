@@ -1,4 +1,5 @@
 import { createOpenAI } from "@ai-sdk/openai"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 export type AiEntryProviderId =
   | "deepseek"
@@ -90,9 +91,9 @@ const DEFAULT_AIBERM_BASE_URL = "https://aiberm.com/v1"
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 const DEFAULT_PPTOKEN_BASE_URL = "https://api.pptoken.org/v1"
 const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-const DEFAULT_MODEL = "openai/gpt-5.4-mini"
-const DEFAULT_PPTOKEN_MODEL = "gpt-5.6-luna"
-const DEFAULT_OPENROUTER_MODEL = "openai/gpt-4.1-mini"
+const DEFAULT_MODEL = "deepseek-v4-pro"
+const DEFAULT_PPTOKEN_MODEL = "gpt-6.1-sol"
+const DEFAULT_OPENROUTER_MODEL = "deepseek/deepseek-v4-pro"
 const PROVIDER_MODEL_LIST_CACHE_TTL_MS = parsePositiveInt(
   process.env.AI_ENTRY_PROVIDER_MODEL_LIST_CACHE_TTL_MS,
   30 * 60 * 1000,
@@ -717,6 +718,9 @@ async function buildProviderRuntimes(
 ): Promise<AiEntryProviderRuntime[]> {
   const preferredProviderId = options?.preferredProviderId || null
   const preferredModel = normalizeText(options?.preferredModel || undefined)
+  if (preferredModel && isDeprecatedTextModelId(preferredModel)) {
+    throw new Error("deprecated_text_model_unavailable")
+  }
   const forcePreferredProvider = Boolean(options?.forcePreferredProvider && preferredProviderId)
   const disableProviderFailover = Boolean(options?.disableProviderFailover)
   const forceModelAcrossProviders = Boolean(
@@ -731,7 +735,9 @@ async function buildProviderRuntimes(
       ? options.providerConfigs.filter((item) => item.apiKey && item.baseURL)
       : null
 
-  let configs = explicitProviderConfigs || getConfiguredAiEntryProviders()
+  let configs = (explicitProviderConfigs || getConfiguredAiEntryProviders()).filter(
+    (item) => !isDeprecatedTextModelId(item.model),
+  )
   if (configs.length === 0) return []
 
   const routingModel = preferredModel || getAiEntryDefaultModel()

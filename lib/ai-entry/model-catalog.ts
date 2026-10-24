@@ -15,9 +15,10 @@ import {
   AI_ENTRY_NORMAL_DEFAULT_MODEL_HINT,
   normalizeModelFingerprint,
 } from "@/lib/ai-entry/model-policy"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 const CACHE_TTL_MS = 30 * 60 * 1000
-const CATALOG_FILTER_CACHE_VERSION = "v9"
+const CATALOG_FILTER_CACHE_VERSION = "v10"
 const PRIORITY_PROVIDER_FAMILIES = ["anthropic", "openai", "deepseek", "gemini", "minimax", "xai"] as const
 const ALLOWED_PROVIDER_FAMILIES = [
   "anthropic",
@@ -29,16 +30,10 @@ const ALLOWED_PROVIDER_FAMILIES = [
 ] as const
 const ALLOWED_PROVIDER_FAMILY_SET = new Set<string>(ALLOWED_PROVIDER_FAMILIES)
 const ALLOWED_DISPLAY_MODEL_IDS = [
-  "claude-opus-4.6",
-  "claude-opus-4.7",
-  "claude-sonnet-4.6",
-  "claude-haiku-4.5",
-  "gpt-5.5",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-  "gpt-5.4",
-  "gpt-5.4-mini",
+  "gpt-6-astra",
+  "gpt-6-luna",
+  "gpt-6-sol",
+  "gpt-6.1-sol",
   "deepseek-v4-pro",
   "deepseek-v4-flash",
   "grok-4.5",
@@ -195,45 +190,25 @@ const VERIFIED_PROVIDER_MODEL_IDS: Partial<Record<AiEntryProviderId, string[]>> 
   ],
   pptoken: [
     "grok-4.5",
-    "gpt-5.6-luna",
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-6.1-sol",
   ],
   openrouter: [
     "grok-4.5",
-    "claude-opus-4.6",
-    "claude-opus-4.7",
-    "claude-sonnet-4.6",
-    "claude-haiku-4.5",
     "gemini-3.1-pro-preview",
     "gemini-3-flash-preview",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.5",
     "MiniMax-M2.7",
   ],
   aiberm: [
-    "claude-opus-4.6",
-    "claude-opus-4.7",
-    "claude-sonnet-4.6",
-    "claude-haiku-4.5",
     "gemini-3.1-pro-preview",
     "gemini-3-flash-preview",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.5",
     "MiniMax-M2.7",
   ],
   crazyroute: [
-    "claude-opus-4.6",
-    "claude-opus-4.7",
-    "claude-sonnet-4.6",
-    "claude-haiku-4.5",
     "gemini-3.1-pro-preview",
     "gemini-3-flash-preview",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.5",
     "MiniMax-M2.7",
   ],
 }
@@ -721,11 +696,16 @@ function dedupeEquivalentModelIds(models: ParsedModel[]) {
 }
 
 function isHighTierDisplayModel(input: { id: string; name: string }) {
-  return Boolean(findAllowedDisplayModelId(input.id, input.name))
+  if (isDeprecatedTextModelId(input.id) || isDeprecatedTextModelId(input.name)) return false
+  if (normalizeModelFingerprint(`${input.id} ${input.name}`).includes("thinking")) return false
+  if (findAllowedDisplayModelId(input.id, input.name)) return true
+  return /(?:^|[^a-z0-9])(?:gpt|claude(?:[-_\s]?(?:opus|sonnet|haiku|instant))?)[-_\s]?\d/iu.test(
+    `${input.id} ${input.name}`,
+  )
 }
 
 function filterHighTierDisplayModels(models: ParsedModel[]) {
-  return models.filter((model) =>
+  return models.filter((model) => !isDeprecatedTextModelId(model.id) &&
     isHighTierDisplayModel({
       id: model.id,
       name: model.name,
@@ -742,7 +722,7 @@ function pickPreferredNormalChatModelId(
     explicitDefault,
     normalizeText(process.env.AI_ENTRY_NORMAL_FAST_MODEL),
     AI_ENTRY_NORMAL_DEFAULT_MODEL_HINT,
-    "claude-sonnet-4.6",
+    "claude-sonnet",
   ].filter(Boolean)
 
   const scoreModel = (model: AiEntryModelOption, hint: string) => {
@@ -769,7 +749,7 @@ function pickPreferredNormalChatModelId(
   }
 
   const configuredDefaultFingerprint = equivalentModelFingerprint(configuredDefaultModel)
-  const configuredDefaultIsStale = configuredDefaultFingerprint.includes("claudehaiku")
+  const configuredDefaultIsStale = isDeprecatedTextModelId(configuredDefaultModel)
   if (configuredDefaultFingerprint && !configuredDefaultIsStale) {
     const configuredDefaultCandidate = models.find((model) => {
       const fingerprints = [

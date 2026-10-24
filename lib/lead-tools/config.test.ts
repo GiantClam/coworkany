@@ -319,10 +319,10 @@ test("ppt worker base url upgrades preview runtime and transport defaults", () =
   }
 })
 
-test("ppt runtime slide config defaults to gpt-5.4 and prefers explicit overrides", () => {
+test("ppt runtime slide config defaults to GPT-6.1 Sol and prefers explicit overrides", () => {
   const previousTimeout = process.env.PPT_MASTER_SLIDE_TIMEOUT_MS
   const previousScopedTimeout = process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN
-  const previousScopedModelTimeout = process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN_GPT_5_4
+  const previousScopedModelTimeout = process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN_GPT_6_1_SOL
   const previousRuntimeScopedTimeout = process.env.LEAD_TOOLS_PPT_RUNTIME_SLIDE_TIMEOUT_MS
   const previousFallback = process.env.PPT_MASTER_ALLOW_EMERGENCY_FALLBACK
   const previousRuntimeSlideModel = process.env.LEAD_TOOLS_PPT_RUNTIME_SLIDE_MODEL
@@ -332,7 +332,7 @@ test("ppt runtime slide config defaults to gpt-5.4 and prefers explicit override
   try {
     delete process.env.PPT_MASTER_SLIDE_TIMEOUT_MS
     delete process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN
-    delete process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN_GPT_5_4
+    delete process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN_GPT_6_1_SOL
     delete process.env.LEAD_TOOLS_PPT_RUNTIME_SLIDE_TIMEOUT_MS
     delete process.env.PPT_MASTER_ALLOW_EMERGENCY_FALLBACK
     delete process.env.LEAD_TOOLS_PPT_RUNTIME_SLIDE_MODEL
@@ -340,31 +340,31 @@ test("ppt runtime slide config defaults to gpt-5.4 and prefers explicit override
     delete process.env.LEAD_TOOLS_PPT_PREVIEW_PROVIDER
 
     assert.equal(getPptMasterSlideTimeoutMs(), 12 * 60 * 1000)
-    assert.equal(resolvePptMasterSlideTimeoutMs({ provider: "pptoken", model: "gpt-5.4" }), 12 * 60 * 1000)
+    assert.equal(resolvePptMasterSlideTimeoutMs({ provider: "pptoken", model: "gpt-6.1-sol" }), 12 * 60 * 1000)
     assert.equal(allowPptMasterEmergencyFallback(), false)
-    assert.equal(getLeadToolPptRuntimeSlideModel(), "gpt-5.4")
+    assert.equal(getLeadToolPptRuntimeSlideModel(), "gpt-6.1-sol")
     assert.equal(getLeadToolPptRuntimeSlideProvider(), "")
     assert.equal(getLeadToolPptPreviewProvider(), "")
 
     process.env.PPT_MASTER_SLIDE_TIMEOUT_MS = "180000"
     process.env.PPT_MASTER_ALLOW_EMERGENCY_FALLBACK = "true"
-    process.env.LEAD_TOOLS_PPT_RUNTIME_SLIDE_MODEL = "gpt-5.4"
+    process.env.LEAD_TOOLS_PPT_RUNTIME_SLIDE_MODEL = "gpt-6.1-sol"
     process.env.LEAD_TOOLS_PPT_RUNTIME_SLIDE_PROVIDER = "glm"
     process.env.LEAD_TOOLS_PPT_PREVIEW_PROVIDER = "minimax"
 
     assert.equal(getPptMasterSlideTimeoutMs(), 180000)
-    assert.equal(resolvePptMasterSlideTimeoutMs({ provider: "pptoken", model: "gpt-5.4" }), 6 * 60 * 1000)
+    assert.equal(resolvePptMasterSlideTimeoutMs({ provider: "pptoken", model: "gpt-6.1-sol" }), 180000)
 
     process.env.LEAD_TOOLS_PPT_RUNTIME_SLIDE_TIMEOUT_MS = "240000"
-    assert.equal(resolvePptMasterSlideTimeoutMs({ provider: "pptoken", model: "gpt-5.4" }), 6 * 60 * 1000)
+    assert.equal(resolvePptMasterSlideTimeoutMs({ provider: "pptoken", model: "gpt-6.1-sol" }), 240000)
 
     process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN = "300000"
-    assert.equal(resolvePptMasterSlideTimeoutMs({ provider: "pptoken", model: "gpt-5.4" }), 300000)
+    assert.equal(resolvePptMasterSlideTimeoutMs({ provider: "pptoken", model: "gpt-6.1-sol" }), 300000)
 
-    process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN_GPT_5_4 = "420000"
-    assert.equal(resolvePptMasterSlideTimeoutMs({ provider: "pptoken", model: "gpt-5.4" }), 420000)
+    process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN_GPT_6_1_SOL = "420000"
+    assert.equal(resolvePptMasterSlideTimeoutMs({ provider: "pptoken", model: "gpt-6.1-sol" }), 420000)
     assert.equal(allowPptMasterEmergencyFallback(), true)
-    assert.equal(getLeadToolPptRuntimeSlideModel(), "gpt-5.4")
+    assert.equal(getLeadToolPptRuntimeSlideModel(), "gpt-6.1-sol")
     assert.equal(getLeadToolPptRuntimeSlideProvider(), "glm")
     assert.equal(getLeadToolPptPreviewProvider(), "minimax")
   } finally {
@@ -381,9 +381,9 @@ test("ppt runtime slide config defaults to gpt-5.4 and prefers explicit override
     }
 
     if (previousScopedModelTimeout === undefined) {
-      delete process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN_GPT_5_4
+      delete process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN_GPT_6_1_SOL
     } else {
-      process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN_GPT_5_4 = previousScopedModelTimeout
+      process.env.PPT_MASTER_SLIDE_TIMEOUT_MS_PPTOKEN_GPT_6_1_SOL = previousScopedModelTimeout
     }
 
     if (previousRuntimeScopedTimeout === undefined) {

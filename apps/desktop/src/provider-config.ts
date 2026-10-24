@@ -1,4 +1,5 @@
 import type { RunningHubWorkflowRegistration } from "./runninghub-workflow";
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy";
 
 export type DesktopProviderConfig = {
   readonly id?: string;
@@ -38,6 +39,10 @@ export type ImportedProviderConfig = {
   readonly providers: DesktopProviderProfiles;
   readonly defaults?: DesktopProviderDefaults;
 };
+
+export function filterDeprecatedModelIds(values: readonly string[], capability: ProviderCapability = "text"): string[] {
+  return [...new Set(values.map((model) => model.trim()).filter((model) => model && (capability !== "text" || !isDeprecatedTextModelId(model))))];
+}
 
 const providerStringFields = ["id", "source", "baseUrl", "model", "apiKey", "credentialRef", "reasoningEffort", "skillId", "endpoint", "queryEndpoint", "workflowId", "digitalHumanWorkflowId", "videoEnhanceWorkflowId"] as const;
 const providerCapabilities = new Set<ProviderCapability>(["text", "image", "video", "audio"]);
@@ -110,7 +115,7 @@ export function configuredTextModelOptions(config: ProviderConfigContainer): Con
     if (!supportsProviderCapability(provider, "text")) return [];
     const models = provider.capabilityModels?.text || provider.models !== undefined
       ? configuredModelOptions(provider, "text")
-      : (provider.model?.trim() ? [provider.model.trim()] : []);
+      : filterDeprecatedModelIds(provider.model?.trim() ? [provider.model.trim()] : []);
     return models.map((modelId) => ({
       id: configuredTextModelSelectionId(providerId, modelId),
       label: modelId,
@@ -190,28 +195,29 @@ export function usableRunningHubWorkflowId(value: unknown): string | undefined {
 
 /** Keep configured provider models canonical across every desktop surface. */
 export function configuredModelOptions(provider: DesktopProviderConfig, capability?: ProviderCapability): string[] {
-  return [...new Set((capability && provider.capabilityModels?.[capability] ? provider.capabilityModels[capability]!.models : provider.models ?? []).map((model) => model.trim()).filter(Boolean))];
+  const models = capability && provider.capabilityModels?.[capability] ? provider.capabilityModels[capability]!.models : provider.models ?? [];
+  return filterDeprecatedModelIds(models, capability ?? "text");
 }
 
 export function modelOptionsForProvider(config: ProviderConfigContainer, provider: DesktopProviderConfig, capability?: ProviderCapability): readonly string[] | undefined {
   if (capability && provider.capabilityModels?.[capability]) return configuredModelOptions(provider, capability);
   if (provider.models !== undefined) {
-    const configured = configuredModelOptions(provider);
+    const configured = configuredModelOptions(provider, capability);
     // Older persisted profiles may only have `model` and no model catalog.
     // Keep that active model selectable instead of rendering an empty menu.
-    return configured.length ? configured : (provider.model?.trim() ? [provider.model.trim()] : []);
+    return configured.length ? configured : (provider.model?.trim() && ((capability !== undefined && capability !== "text") || !isDeprecatedTextModelId(provider.model)) ? [provider.model.trim()] : []);
   }
   const providerId = provider.id?.trim();
   const fallbackId = config.provider.id?.trim();
   if (!(provider === config.provider || (providerId && fallbackId && providerId === fallbackId))) return undefined;
-  const configured = configuredModelOptions(config.provider);
-  return configured.length ? configured : (config.provider.model?.trim() ? [config.provider.model.trim()] : []);
+  const configured = configuredModelOptions(config.provider, capability);
+  return configured.length ? configured : (config.provider.model?.trim() && ((capability !== undefined && capability !== "text") || !isDeprecatedTextModelId(config.provider.model)) ? [config.provider.model.trim()] : []);
 }
 
 export function preferredConfiguredModel(provider: DesktopProviderConfig, capability?: ProviderCapability): string {
   const models = configuredModelOptions(provider, capability);
   const selected = (capability && provider.capabilityModels?.[capability] ? provider.capabilityModels[capability]!.model : provider.model)?.trim() ?? "";
-  return models.includes(selected) ? selected : (models[0] ?? selected);
+  return models.includes(selected) ? selected : (models[0] ?? ((capability === undefined || capability === "text") && isDeprecatedTextModelId(selected) ? "" : selected));
 }
 
 export function providerForId(config: ProviderConfigContainer, providerId?: string | null, capability?: ProviderCapability): ResolvedDesktopProviderConfig {
@@ -253,7 +259,7 @@ export function normalizeCapabilityModels(value: unknown): CapabilityModelSelect
   for (const capability of providerCapabilities) {
     const entry = value[capability];
     if (!isRecord(entry) || !Array.isArray(entry.models)) continue;
-    const models = [...new Set(entry.models.filter((model): model is string => typeof model === "string").map((model) => model.trim()).filter(Boolean))];
+    const models = filterDeprecatedModelIds(entry.models.filter((model): model is string => typeof model === "string"), capability);
     const requested = typeof entry.model === "string" ? entry.model.trim() : "";
     result[capability] = { models, model: models.includes(requested) ? requested : models[0] ?? "" };
   }
@@ -261,15 +267,18 @@ export function normalizeCapabilityModels(value: unknown): CapabilityModelSelect
 }
 
 export function setProviderCapabilityModels(provider: DesktopProviderConfig, capability: ProviderCapability, values: readonly string[], selected?: string): DesktopProviderConfig {
-  const models = [...new Set(values.map((model) => model.trim()).filter(Boolean))];
+  const models = filterDeprecatedModelIds(values, capability);
   const requested = selected ?? provider.capabilityModels?.[capability]?.model ?? (capability === "text" ? provider.model : undefined);
   const model = requested && models.includes(requested) ? requested : models[0] ?? "";
   return { ...provider, capabilityModels: { ...provider.capabilityModels, [capability]: { models, model } }, ...(capability === "text" ? { models, model } : {}) };
 }
 
 export function setProviderCapabilityModel(provider: DesktopProviderConfig, capability: ProviderCapability, model: string): DesktopProviderConfig {
-  if (!provider.capabilityModels) return { ...provider, model };
-  return setProviderCapabilityModels(provider, capability, provider.capabilityModels[capability]?.models ?? configuredModelOptions(provider), model);
+  if (!provider.capabilityModels) {
+    const selected = capability === "text" && isDeprecatedTextModelId(model) ? configuredModelOptions(provider, capability)[0] ?? "" : model;
+    return { ...provider, model: selected };
+  }
+  return setProviderCapabilityModels(provider, capability, provider.capabilityModels[capability]?.models ?? configuredModelOptions(provider, capability), model);
 }
 
 export function capabilityForWorkflowAction(action: string): ProviderCapability {

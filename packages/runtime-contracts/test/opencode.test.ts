@@ -14,11 +14,15 @@ import {
   readOpenCodeServeSessionId,
 } from "../src/opencode";
 
-test("builds an explicit OpenCode model command", () => {
-  assert.deepEqual(buildOpenCodeCommand({ modelHint: "gpt-5.4" }), {
+test("builds an explicit OpenCode GPT-6 model command", () => {
+  assert.deepEqual(buildOpenCodeCommand({ modelHint: "gpt-6.1-sol" }), {
     command: "opencode",
-    args: ["run", "--format", "json", "--model", "pptoken/gpt-5.4"],
+    args: ["run", "--format", "json", "--model", "pptoken/gpt-6.1-sol"],
   });
+  assert.throws(
+    () => buildOpenCodeCommand({ modelHint: "gpt-5.4" }),
+    { message: "deprecated_text_model_unavailable" },
+  );
 });
 
 test("parses fragmented text, tool, and usage events", () => {
@@ -330,6 +334,10 @@ test("builds serve paths and strict payloads", () => {
     system: "system",
     parts: [{ type: "text", text: "hello" }],
   });
+  assert.throws(
+    () => createOpenCodeServePromptPayload({ prompt: "hello", providerId: "provider", modelId: "claude-sonnet-5.0" }),
+    { message: "deprecated_text_model_unavailable" },
+  );
   assert.equal(readOpenCodeServeSessionId({ data: { id: "session-1" } }), "session-1");
 });
 

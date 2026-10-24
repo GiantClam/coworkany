@@ -10,6 +10,7 @@ import {
   type WorkflowAiOperationGroup,
   type WorkflowAiProviderOption,
 } from "@coworkany/workbench-client";
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy";
 import {
   applyWorkflowAiCommands,
   layoutWorkflowDeterministically,
@@ -23,6 +24,7 @@ import {
   type WorkflowDefinitionEnvelope,
 } from "@coworkany/workflow-core";
 import {
+  filterDeprecatedModelIds,
   configuredModelOptions,
   supportsProviderCapability,
   type DesktopProviderConfig,
@@ -125,7 +127,8 @@ function makeId(prefix: string) {
 
 function providerIsAvailable(provider: DesktopProviderConfig) {
   const source = (provider.source ?? provider.id ?? "").trim().toLowerCase();
-  const hasModel = Boolean(provider.model?.trim() || configuredModelOptions(provider).length || provider.workflows?.length || provider.workflowId?.trim());
+  const capabilities: ProviderCapability[] = ["text", "image", "video", "audio"];
+  const hasModel = Boolean(provider.model?.trim() || capabilities.some((capability) => configuredModelOptions(provider, capability).length) || provider.workflows?.length || provider.workflowId?.trim());
   const hasEndpoint = source === "local" || Boolean(provider.baseUrl?.trim() || provider.endpoint?.trim() || provider.queryEndpoint?.trim());
   return hasModel && hasEndpoint;
 }
@@ -136,7 +139,7 @@ export function workflowAiProviderOptions(providers: readonly DesktopProviderCon
     .filter((provider) => supportsProviderCapability(provider, "text"))
     .map((provider, index) => {
       const id = provider.id?.trim() || provider.source?.trim() || `provider-${index + 1}`;
-      const models = [...new Set([provider.model, ...configuredModelOptions(provider)].filter((value): value is string => Boolean(value?.trim())).map((value) => value.trim()))];
+      const models = filterDeprecatedModelIds([provider.model, ...configuredModelOptions(provider, "text")].filter((value): value is string => Boolean(value?.trim())));
       const estimatedCost = (provider as ProviderWithEstimate).estimatedCost;
       return {
         id,
@@ -383,13 +386,26 @@ function operationNeedsApproval(commands: readonly WorkflowAiCommand[], definiti
 
 function workflowExecutionProviders(providers: readonly DesktopProviderConfig[]): WorkflowAiProviderOption[] {
   const capabilities: ProviderCapability[] = ["text", "image", "video", "audio"];
-  return providers.filter(providerIsAvailable).map((provider, index) => ({
-    id: provider.id?.trim() || provider.source?.trim() || `provider-${index + 1}`,
-    label: (provider as ProviderWithEstimate).label?.trim() || provider.id?.trim() || provider.source?.trim() || `provider-${index + 1}`,
-    models: [...new Set([provider.model, ...configuredModelOptions(provider)].filter((value): value is string => Boolean(value?.trim())).map((value) => value.trim()))],
-    capabilities: capabilities.filter((capability) => supportsProviderCapability(provider, capability)),
-    available: true,
-  }));
+  return providers.filter(providerIsAvailable).map((provider, index) => {
+    const supportedCapabilities = capabilities.filter((capability) => supportsProviderCapability(provider, capability));
+    const selectedModel = provider.model?.trim();
+    const selectedModelAllowed = selectedModel && (
+      provider.capabilityModels
+        ? supportedCapabilities.some((capability) => provider.capabilityModels?.[capability]?.model === selectedModel && configuredModelOptions(provider, capability).includes(selectedModel))
+        : supportedCapabilities.some((capability) => capability !== "text" || !isDeprecatedTextModelId(selectedModel))
+    );
+    const models = [
+      ...(selectedModelAllowed ? [selectedModel] : []),
+      ...supportedCapabilities.flatMap((capability) => configuredModelOptions(provider, capability)),
+    ];
+    return {
+      id: provider.id?.trim() || provider.source?.trim() || `provider-${index + 1}`,
+      label: (provider as ProviderWithEstimate).label?.trim() || provider.id?.trim() || provider.source?.trim() || `provider-${index + 1}`,
+      models: [...new Set(models)],
+      capabilities: supportedCapabilities,
+      available: true,
+    };
+  });
 }
 
 function templateMatchKey(match: ReturnType<typeof matchGoldenWorkflowTemplates>[number]) {

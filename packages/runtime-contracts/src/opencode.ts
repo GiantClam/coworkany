@@ -1,3 +1,5 @@
+import { isDeprecatedTextModelId } from "./model-policy"
+
 const MAX_LINE_BYTES = 2 * 1024 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 1024;
 const MAX_TOOL_NAME_LENGTH = 80;
@@ -154,6 +156,7 @@ export interface OpenCodeServePromptPayloadInput {
 function openCodeServeModel(input: { readonly providerId?: string; readonly modelId?: string }): OpenCodeServeModel | undefined {
   const providerID = readString(input.providerId);
   const modelID = readString(input.modelId);
+  if (modelID && isDeprecatedTextModelId(modelID)) throw new Error("deprecated_text_model_unavailable");
   return providerID && modelID ? { providerID, modelID } : undefined;
 }
 
@@ -207,11 +210,12 @@ export function readOpenCodeServeSessionId(payload: unknown) {
 export function buildOpenCodeCommand(input: OpenCodeCommandInput): { command: "opencode"; args: string[] } {
   const args = ["run", "--format", "json"];
   const modelHint = typeof input.modelHint === "string" ? input.modelHint.trim() : "";
+  if (modelHint && isDeprecatedTextModelId(modelHint)) throw new Error("deprecated_text_model_unavailable");
   const normalizedModel = modelHint.includes("/")
     ? modelHint
     : /^deepseek(?:[-_.]|$)/iu.test(modelHint)
       ? `deepseek/${modelHint}`
-      : modelHint === "gpt-5.4" || modelHint === "grok-4.5"
+      : /^gpt-6(?:[.-](?:1|astra|luna|sol))?(?:$|[-_.])/iu.test(modelHint) || modelHint === "grok-4.5"
         ? `pptoken/${modelHint}`
         : /^minimax[-_]/iu.test(modelHint)
           ? `minimax/${modelHint}`

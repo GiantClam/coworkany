@@ -45,7 +45,7 @@ function normalizeText(raw: unknown) {
 }
 
 function toPreviewRequestModel(raw: string): PptPreviewModelValue | undefined {
-  if (raw === "MiniMax-M2.7-highspeed" || raw === "MiniMax-M3" || raw === "gpt-5.4" || raw === "step-3.7-flash") {
+  if (raw === "MiniMax-M2.7-highspeed" || raw === "MiniMax-M3" || raw === "gpt-6.1-sol" || raw === "step-3.7-flash") {
     return raw
   }
 

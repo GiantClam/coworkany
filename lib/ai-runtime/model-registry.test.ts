@@ -22,6 +22,16 @@ test("listModels exposes every capability with unique model ids", () => {
   }
 })
 
+test("text capability defaults to GPT-6.1 and does not resolve retired GPT-5 IDs", () => {
+  assert.equal(getDefaultModelId("text.generate"), "openai:text:gpt-6.1-sol")
+  assert.equal(getModelDefinition("openai:text:gpt-6.1-sol")?.providerMetadata?.nativeModel, "gpt-6.1-sol")
+  assert.equal(getModelDefinition("openai:text:gpt-5.4-mini"), null)
+  assert.equal(
+    findModelByCapabilityAndAlias({ capability: "text.generate", value: "gpt-5.4-mini" }),
+    null,
+  )
+})
+
 test("every model default value is valid for its parameter schema", () => {
   for (const model of listModels()) {
     const defaults = Object.fromEntries(

@@ -179,7 +179,7 @@ function DashboardLayoutContent({ children }: DashboardLayoutProps) {
   const aiEntryLabel = sharedRouteLabel("/dashboard/ai", locale)
   const consultingAdvisorLabel = sharedRouteLabel("/dashboard/ai?entry=consulting-advisor", locale)
   const consultingAdvisorHref = "/dashboard/ai?entry=consulting-advisor"
-  // Brand/Growth advisors are served by the AI Entry skill chain (claude-sonnet-4.6),
+  // Brand/Growth advisors are served by the AI Entry skill chain (DeepSeek V4 Pro),
   // not the Dify workflow. Lock the model via entry=consulting-advisor.
   const brandAdvisorHref = "/dashboard/ai?agent=executive-brand&entry=consulting-advisor"
   const growthAdvisorHref = "/dashboard/ai?agent=executive-growth&entry=consulting-advisor"

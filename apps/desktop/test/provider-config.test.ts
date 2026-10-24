@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { configuredModelOptions, configuredProviderEntries, configuredTextModelOptions, configuredTextModelSelectionId, isDevelopmentRunningHubWorkflowId, modelOptionsForProvider, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, selectConfiguredTextModel, supportsProviderCapability, usableRunningHubWorkflowId, type DesktopProviderConfig } from "../src/provider-config";
+import { configuredModelOptions, configuredProviderEntries, configuredTextModelOptions, configuredTextModelSelectionId, isDevelopmentRunningHubWorkflowId, modelOptionsForProvider, normalizeCapabilityModels, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, selectConfiguredTextModel, supportsProviderCapability, usableRunningHubWorkflowId, type DesktopProviderConfig } from "../src/provider-config";
 
 const text: DesktopProviderConfig = { id: "text", model: "text/model", baseUrl: "https://text.test/v1" };
 const image: DesktopProviderConfig = { id: "image", model: "image/model", baseUrl: "https://image.test/v1" };
@@ -56,10 +56,31 @@ test("configured model lists are canonical and prefer the first configured model
   assert.deepEqual(modelOptionsForProvider({ provider }, provider), ["text/model-a", "text/model-b"]);
 });
 
-test("legacy profiles without a model catalog still expose the active model", () => {
+test("legacy profiles without a model catalog hide retired text models", () => {
   const provider: DesktopProviderConfig = { id: "text", source: "openai-compatible", model: "gpt-5.4" };
-  assert.deepEqual(modelOptionsForProvider({ provider }, provider), ["gpt-5.4"]);
-  assert.deepEqual(modelOptionsForProvider({ provider, providers: { text: provider }, defaults: { text: "text" } }, provider), ["gpt-5.4"]);
+  assert.deepEqual(modelOptionsForProvider({ provider }, provider), []);
+  assert.deepEqual(modelOptionsForProvider({ provider, providers: { text: provider }, defaults: { text: "text" } }, provider), []);
+});
+
+test("configured text model options keep GPT-6 and Claude 5.1 while filtering retired versions", () => {
+  const config = {
+    provider: { ...text, models: ["gpt-5.6-sol", "gpt-6.1-sol", "claude-sonnet-4-6", "claude-sonnet-5.1"] },
+  };
+  assert.deepEqual(configuredTextModelOptions(config).map((item) => item.modelId), ["gpt-6.1-sol", "claude-sonnet-5.1"]);
+});
+
+test("retired text-model policy does not remove media model IDs", () => {
+  const models = { text: { model: "gpt-6.1-sol", models: ["gpt-5.4", "gpt-6.1-sol"] }, image: { model: "gpt-4o", models: ["gpt-4o", "gpt-5.4-vision"] } };
+  const provider: DesktopProviderConfig = {
+    id: "mixed",
+    source: "openai-compatible",
+    capabilities: ["text", "image"],
+    model: "gpt-6.1-sol",
+    capabilityModels: models,
+  };
+  assert.deepEqual(configuredModelOptions(provider, "text"), ["gpt-6.1-sol"]);
+  assert.deepEqual(configuredModelOptions(provider, "image"), ["gpt-4o", "gpt-5.4-vision"]);
+  assert.deepEqual(normalizeCapabilityModels(models)?.image?.models, ["gpt-4o", "gpt-5.4-vision"]);
 });
 
 test("same-capability provider profiles keep independent model catalogs and defaults", () => {

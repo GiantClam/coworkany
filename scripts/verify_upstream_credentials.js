@@ -89,7 +89,7 @@ function summarizeResult(name, result) {
 async function verifyOpenAiCompatibleProvider(input) {
   const apiKey = input.apiKey || ""
   const baseUrl = (input.baseUrl || "").replace(/\/$/, "")
-  const model = input.model || "gpt-4-mini"
+  const model = input.model || "gpt-6.1-sol"
 
   if (!apiKey) {
     return {
@@ -123,7 +123,7 @@ async function verifyAiberm() {
     envKeyName: "AIBERM_API_KEY",
     apiKey: process.env.AIBERM_API_KEY || process.env.WRITER_AIBERM_API_KEY || "",
     baseUrl: process.env.AIBERM_BASE_URL || "https://aiberm.com/v1",
-    model: process.env.WRITER_TEXT_MODEL || process.env.AI_ENTRY_AIBERM_MODEL || "gpt-4-mini",
+    model: process.env.WRITER_TEXT_MODEL || process.env.AI_ENTRY_AIBERM_MODEL || "claude-sonnet-5.1",
   })
 }
 
@@ -141,7 +141,7 @@ async function verifyCrazyroute() {
       process.env.CRAZYROUTER_BASE_URL ||
       process.env.AI_ENTRY_CRAZYROUTE_BASE_URL ||
       "https://crazyrouter.com/v1",
-    model: process.env.AI_ENTRY_CRAZYROUTE_MODEL || "gpt-4-mini",
+    model: process.env.AI_ENTRY_CRAZYROUTE_MODEL || "gpt-6.1-sol",
   })
 }
 

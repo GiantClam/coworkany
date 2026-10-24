@@ -1,7 +1,9 @@
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
+
 export const AI_ENTRY_CONSULTING_ENTRY_MODE = "consulting-advisor"
 export const AI_ENTRY_NORMAL_DEFAULT_MODEL_HINT = "deepseek-v4-pro"
 export const AI_ENTRY_CONSULTING_QUALITY_MODEL_HINT = "deepseek-v4-pro"
-export const AI_ENTRY_SONNET_46_MODEL_HINT = "claude-sonnet-4.6"
+export const AI_ENTRY_CLAUDE_51_MODEL_HINT = "claude-sonnet-5.1"
 /**
  * Editable PPT is an OpenCode + native ppt-master session. Prefer the
  * PPToken Grok route; the Railway runtime owns any provider fallback.
@@ -77,7 +79,7 @@ function pickModelByHint(models: ModelCandidate[], modelHint: string) {
   const candidates = models
     .map((item) => {
       const id = normalizeText(item.id)
-      if (!id || !isModelHintMatch(item, modelHint)) return null
+      if (!id || isDeprecatedTextModelId(id) || !isModelHintMatch(item, modelHint)) return null
       const fingerprint = normalizeModelFingerprint(buildModelCandidateText(item))
       const providerId = normalizeText(item.providerId).toLowerCase()
       return {
@@ -143,8 +145,8 @@ export function pickConsultingModelId(
   return pickModelByHint(models, getConsultingModelHint(mode))
 }
 
-export function pickSonnet46ModelId(models: ModelCandidate[]) {
-  return pickModelByHint(models, AI_ENTRY_SONNET_46_MODEL_HINT)
+export function pickClaude51ModelId(models: ModelCandidate[]) {
+  return pickModelByHint(models, AI_ENTRY_CLAUDE_51_MODEL_HINT)
 }
 
 export function getPptAssistantDefaultModelHint() {
@@ -163,7 +165,7 @@ export function pickPptAssistantDefaultModelId(models: ModelCandidate[]) {
   const matched = models
     .map((item) => {
       const id = normalizeText(item.id)
-      if (!id || !isModelHintMatch(item, modelHint)) return null
+      if (!id || isDeprecatedTextModelId(id) || !isModelHintMatch(item, modelHint)) return null
       const providerId = normalizeText(item.providerId).toLowerCase()
       return {
         id,
@@ -200,17 +202,19 @@ export function resolvePptAssistantModelSelection(input: {
   availableModelIds: string[]
   defaultModelId?: string | null
 }) {
+  const availableModelIds = input.availableModelIds.filter((modelId) => !isDeprecatedTextModelId(modelId))
   const currentModelId = normalizeText(input.currentModelId)
-  if (currentModelId && input.availableModelIds.includes(currentModelId)) {
+  if (currentModelId && !isDeprecatedTextModelId(currentModelId) && availableModelIds.includes(currentModelId)) {
     return currentModelId
   }
 
   const conversationModelId = normalizeText(input.conversationModelId)
-  if (conversationModelId && input.availableModelIds.includes(conversationModelId)) {
+  if (conversationModelId && !isDeprecatedTextModelId(conversationModelId) && availableModelIds.includes(conversationModelId)) {
     return conversationModelId
   }
 
-  return normalizeText(input.defaultModelId) || input.availableModelIds[0] || null
+  const defaultModelId = normalizeText(input.defaultModelId)
+  return (defaultModelId && !isDeprecatedTextModelId(defaultModelId) ? defaultModelId : "") || availableModelIds[0] || null
 }
 
 export function isConsultingAdvisorEntryMode(value: unknown) {

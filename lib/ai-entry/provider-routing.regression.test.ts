@@ -51,12 +51,12 @@ test("pptoken resolves separate GPT and Grok credentials by model", async () => 
     {
       AI_ENTRY_PPTOKEN_API_KEY: "gpt-account-key",
       AI_ENTRY_PPTOKEN_BASE_URL: "https://gpt.pptoken.example/v1",
-      AI_ENTRY_PPTOKEN_MODEL: "gpt-5.4",
+      AI_ENTRY_PPTOKEN_MODEL: "gpt-6.1-sol",
       AI_ENTRY_PPTOKEN_GROK_API_KEY: "grok-account-key",
       AI_ENTRY_PPTOKEN_GROK_BASE_URL: "https://grok.pptoken.example/v1",
     },
     async () => {
-      const gpt = getConfiguredAiEntryProviderForModel("pptoken", "gpt-5.4")
+      const gpt = getConfiguredAiEntryProviderForModel("pptoken", "gpt-6.1-sol")
       const grok = getConfiguredAiEntryProviderForModel("pptoken", "grok-4.5")
 
       assert.equal(gpt?.apiKey, "gpt-account-key")
@@ -76,7 +76,7 @@ test("pptoken Grok resolution fails closed when its dedicated key is missing", a
     },
     async () => {
       assert.equal(getConfiguredAiEntryProviderForModel("pptoken", "grok-4.5"), null)
-      assert.equal(getConfiguredAiEntryProviderForModel("pptoken", "gpt-5.4")?.apiKey, "gpt-account-key")
+      assert.equal(getConfiguredAiEntryProviderForModel("pptoken", "gpt-6.1-sol")?.apiKey, "gpt-account-key")
     },
   )
 })
@@ -89,7 +89,7 @@ test("provider order: non-openai defaults prefer deepseek when it is configured"
       AI_ENTRY_DEEPSEEK_MODEL: "deepseek-v4-pro",
       AI_ENTRY_AIBERM_API_KEY: "aiberm-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "gpt-6.1-sol",
       AI_ENTRY_NORMAL_DEFAULT_MODEL: "deepseek-v4-pro",
     },
     async () => {
@@ -140,11 +140,6 @@ async function withProviderEnv<T>(
     }
     resetRoutingState()
   }
-}
-
-function isEquivalentGpt53CodexModel(modelId: string) {
-  const normalized = modelId.toLowerCase().replace(/[^a-z0-9]+/g, "")
-  return normalized.includes("gpt53codex")
 }
 
 async function withMockFetch<T>(
@@ -301,6 +296,7 @@ test("fallback chain: selected model -> same provider default -> next provider d
 test("provider order: system defaults no longer auto-inject openrouter", async () => {
   await withProviderEnv(
     {
+      AI_ENTRY_NORMAL_DEFAULT_MODEL: "gpt-6.1-sol",
       AI_ENTRY_PPTOKEN_API_KEY: "test-key-p",
       AI_ENTRY_PPTOKEN_BASE_URL: "https://pptoken.example/v1",
       AI_ENTRY_PPTOKEN_MODEL: "pptoken/default-chat-model",
@@ -351,7 +347,7 @@ test("provider order: non-openai system defaults keep only configured fallback p
           return params.providerOrder
         },
         {
-          preferredModel: "anthropic/claude-sonnet-4.6",
+          preferredModel: "anthropic/claude-sonnet-6.1",
         },
       )
 
@@ -367,13 +363,13 @@ test("explicit preferred provider ignores degraded routing start state", async (
     {
       AI_ENTRY_PPTOKEN_API_KEY: "test-key-p",
       AI_ENTRY_PPTOKEN_BASE_URL: "https://pptoken.example/v1",
-      AI_ENTRY_PPTOKEN_MODEL: "gpt-5.4",
+      AI_ENTRY_PPTOKEN_MODEL: "gpt-6.1-sol",
       AI_ENTRY_AIBERM_API_KEY: "test-key-a",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "gpt-6.1-sol",
       AI_ENTRY_CRAZYROUTE_API_KEY: "test-key-c",
       AI_ENTRY_CRAZYROUTE_BASE_URL: "https://crazy.example/v1",
-      AI_ENTRY_CRAZYROUTE_MODEL: "gpt-5.4",
+      AI_ENTRY_CRAZYROUTE_MODEL: "gpt-6.1-sol",
     },
     async () => {
       const routingState = globalThis as {
@@ -395,13 +391,13 @@ test("explicit preferred provider ignores degraded routing start state", async (
         },
         {
           preferredProviderId: "pptoken",
-          preferredModel: "gpt-5.5",
+          preferredModel: "gpt-6.1-sol",
         },
       )
 
       assert.equal(result.providerId, "pptoken")
-      assert.equal(result.model, "gpt-5.5")
-      assert.deepEqual(attempts, ["pptoken:gpt-5.5"])
+      assert.equal(result.model, "gpt-6.1-sol")
+      assert.deepEqual(attempts, ["pptoken:gpt-6.1-sol"])
     },
   )
 })
@@ -409,6 +405,7 @@ test("explicit preferred provider ignores degraded routing start state", async (
 test("provider fallback: pptoken degrades to aiberm then crazyroute", async () => {
   await withProviderEnv(
     {
+      AI_ENTRY_NORMAL_DEFAULT_MODEL: "gpt-6.1-sol",
       AI_ENTRY_PPTOKEN_API_KEY: "test-key-p",
       AI_ENTRY_PPTOKEN_BASE_URL: "https://pptoken.example/v1",
       AI_ENTRY_PPTOKEN_MODEL: "pptoken/default-chat-model",
@@ -447,6 +444,7 @@ test("provider fallback: pptoken degrades to aiberm then crazyroute", async () =
 test("quoted provider base urls are sanitized before fallback execution", async () => {
   await withProviderEnv(
     {
+      AI_ENTRY_NORMAL_DEFAULT_MODEL: "gpt-6.1-sol",
       AI_ENTRY_PPTOKEN_API_KEY: "test-key-p",
       AI_ENTRY_PPTOKEN_BASE_URL: "\"https://pptoken.example/v1\"",
       AI_ENTRY_PPTOKEN_MODEL: "pptoken/default-chat-model",
@@ -483,7 +481,7 @@ test("same-provider model fallback preserves dotted gpt model ids before generat
     {
       AI_ENTRY_PPTOKEN_API_KEY: "test-key-p",
       AI_ENTRY_PPTOKEN_BASE_URL: "https://pptoken.example/v1",
-      AI_ENTRY_PPTOKEN_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_PPTOKEN_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
       const attempts: string[] = []
@@ -491,23 +489,23 @@ test("same-provider model fallback preserves dotted gpt model ids before generat
       const result = await executeAiEntryWithProviderFailover(
         async (params) => {
           attempts.push(`${params.providerId}:${params.model}`)
-          if (params.model === "gpt-5.4") {
+          if (params.model === "gpt-6.1-sol") {
             throw new Error("selected model unavailable")
           }
           return "ok"
         },
         {
           preferredProviderId: "pptoken",
-          preferredModel: "gpt-5.4",
+          preferredModel: "gpt-6.1-sol",
           forcePreferredProvider: true,
         },
       )
 
       assert.equal(result.providerId, "pptoken")
-      assert.equal(result.model, "openai/gpt-5.4")
+      assert.equal(result.model, "openai/gpt-6.1-sol")
       assert.deepEqual(attempts, [
-        "pptoken:gpt-5.4",
-        "pptoken:openai/gpt-5.4",
+        "pptoken:gpt-6.1-sol",
+        "pptoken:openai/gpt-6.1-sol",
       ])
     },
   )
@@ -519,7 +517,7 @@ test("provider order: non-openai models skip pptoken and use aiberm then crazyro
       AI_ENTRY_NORMAL_DEFAULT_MODEL: "google/gemini-3-flash-preview",
       AI_ENTRY_PPTOKEN_API_KEY: "test-key-p",
       AI_ENTRY_PPTOKEN_BASE_URL: "https://pptoken.example/v1",
-      AI_ENTRY_PPTOKEN_MODEL: "openai/gpt-5.4-mini",
+      AI_ENTRY_PPTOKEN_MODEL: "openai/gpt-6.1-sol",
       AI_ENTRY_AIBERM_API_KEY: "test-key-a",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
       AI_ENTRY_AIBERM_MODEL: "google/gemini-3-flash-preview",
@@ -657,7 +655,7 @@ test("force model across providers: non-openai models stay on aiberm/crazyroute 
       AI_ENTRY_CRAZYROUTE_MODEL: "google/gemini-3-flash-preview",
       AI_ENTRY_PPTOKEN_API_KEY: "test-key-p",
       AI_ENTRY_PPTOKEN_BASE_URL: "https://pptoken.example/v1",
-      AI_ENTRY_PPTOKEN_MODEL: "openai/gpt-5.4-mini",
+      AI_ENTRY_PPTOKEN_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
       await withMockFetch(
@@ -722,12 +720,12 @@ test("force model across providers: non-openai models stay on aiberm/crazyroute 
   )
 })
 
-test("force model across providers: aiberm prefers catalog runtime id for sonnet 4.6", async () => {
+test("force model across providers: aiberm prefers catalog runtime id for sonnet 6.1", async () => {
   await withProviderEnv(
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key-a",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "claude-sonnet-4.5",
+      AI_ENTRY_AIBERM_MODEL: "claude-sonnet-6.1",
     },
     async () => {
       await withMockFetch(
@@ -735,9 +733,9 @@ test("force model across providers: aiberm prefers catalog runtime id for sonnet
           new Response(
             JSON.stringify({
               data: [
-                { id: "anthropic/claude-sonnet-4.6" },
-                { id: "claude-sonnet-4-6" },
-                { id: "claude-sonnet-4.6-thinking" },
+                { id: "anthropic/claude-sonnet-6.1" },
+                { id: "claude-sonnet-6-1" },
+                { id: "claude-sonnet-6.1-thinking" },
               ],
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
@@ -752,91 +750,49 @@ test("force model across providers: aiberm prefers catalog runtime id for sonnet
             },
             {
               preferredProviderId: "aiberm",
-              preferredModel: "claude-sonnet-4.6",
+              preferredModel: "claude-sonnet-6.1",
               forceModelAcrossProviders: true,
               disableSameProviderModelFallback: true,
             },
           )
 
           assert.equal(result.providerId, "aiberm")
-          assert.equal(result.model, "claude-sonnet-4.6")
-          assert.deepEqual(attempts, ["aiberm:claude-sonnet-4.6"])
+          assert.equal(result.model, "claude-sonnet-6.1")
+          assert.deepEqual(attempts, ["aiberm:claude-sonnet-6.1"])
         },
       )
     },
   )
 })
 
-test("consulting model fallback: aiberm keeps gpt-5.3-codex across providers", async () => {
+test("retired GPT-5.3 Codex is rejected before provider execution", async () => {
   await withProviderEnv(
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key-a",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
       AI_ENTRY_CRAZYROUTE_API_KEY: "test-key-c",
       AI_ENTRY_CRAZYROUTE_BASE_URL: "https://crazy.example/v1",
-      AI_ENTRY_CRAZYROUTE_MODEL: "openai/gpt-5.3",
+      AI_ENTRY_CRAZYROUTE_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
-      await withMockFetch(
-        (async (input) => {
-          const rawUrl =
-            typeof input === "string"
-              ? input
-              : input instanceof URL
-                ? input.toString()
-                : input.url
-
-          if (rawUrl.includes("aiberm.example")) {
-            return new Response(
-              JSON.stringify({
-                data: [{ id: "openai/gpt-5.3-codex" }],
-              }),
-              { status: 200, headers: { "Content-Type": "application/json" } },
-            )
-          }
-
-          if (rawUrl.includes("crazy.example")) {
-            return new Response(
-              JSON.stringify({
-                data: [{ id: "openai/gpt-5.3-codex" }],
-              }),
-              { status: 200, headers: { "Content-Type": "application/json" } },
-            )
-          }
-
-          return new Response(JSON.stringify({ data: [] }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          })
-        }) as typeof fetch,
-        async () => {
-          const attempts: string[] = []
-          const result = await executeAiEntryWithProviderFailover(
-            async (params) => {
-              attempts.push(`${params.providerId}:${params.model}`)
-              if (params.providerId === "aiberm") {
-                throw new Error("not implemented")
-              }
-              if (params.providerId === "crazyroute") {
-                return "ok"
-              }
-              throw new Error(`unexpected provider:${params.providerId}`)
-            },
-            {
-              preferredProviderId: "aiberm",
-              preferredModel: "openai/gpt-5.3-codex",
-              forceModelAcrossProviders: true,
-              disableSameProviderModelFallback: true,
-            },
-          )
-
-          assert.equal(result.providerId, "crazyroute")
-          const [firstProvider, firstModel] = attempts[0]?.split(":") || []
-          assert.equal(firstProvider, "aiberm")
-          assert.equal(isEquivalentGpt53CodexModel(firstModel || ""), true)
-        },
+      const attempts: string[] = []
+      await assert.rejects(
+        executeAiEntryWithProviderFailover(
+          async (params) => {
+            attempts.push(`${params.providerId}:${params.model}`)
+            return "unexpected success"
+          },
+          {
+            preferredProviderId: "aiberm",
+            preferredModel: "openai/gpt-5.3-codex",
+            forceModelAcrossProviders: true,
+            disableSameProviderModelFallback: true,
+          },
+        ),
+        /deprecated_text_model_unavailable/,
       )
+      assert.deepEqual(attempts, [])
     },
   )
 })
@@ -846,10 +802,10 @@ test("direct provider failover: skip same-provider model retries on error", asyn
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key-a",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
       AI_ENTRY_CRAZYROUTE_API_KEY: "test-key-c",
       AI_ENTRY_CRAZYROUTE_BASE_URL: "https://crazy.example/v1",
-      AI_ENTRY_CRAZYROUTE_MODEL: "openai/gpt-5.3",
+      AI_ENTRY_CRAZYROUTE_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
       await withMockFetch(
@@ -865,8 +821,8 @@ test("direct provider failover: skip same-provider model retries on error", asyn
             return new Response(
               JSON.stringify({
                 data: [
-                  { id: "anthropic/claude-sonnet-4.6" },
-                  { id: "openai/gpt-5.3-codex" },
+                  { id: "anthropic/claude-sonnet-6.1" },
+                  { id: "openai/gpt-6.1-sol" },
                 ],
               }),
               { status: 200, headers: { "Content-Type": "application/json" } },
@@ -876,7 +832,7 @@ test("direct provider failover: skip same-provider model retries on error", asyn
           if (rawUrl.includes("crazy.example")) {
             return new Response(
               JSON.stringify({
-                data: [{ id: "openai/gpt-5.3-codex" }],
+                data: [{ id: "openai/gpt-6.1-sol" }],
               }),
               { status: 200, headers: { "Content-Type": "application/json" } },
             )
@@ -902,7 +858,7 @@ test("direct provider failover: skip same-provider model retries on error", asyn
             },
             {
               preferredProviderId: "aiberm",
-              preferredModel: "openai/gpt-5.3-codex",
+              preferredModel: "openai/gpt-6.1-sol",
               forceModelAcrossProviders: true,
               disableSameProviderModelFallback: true,
               directProviderFailoverOnError: true,
@@ -915,7 +871,7 @@ test("direct provider failover: skip same-provider model retries on error", asyn
             ["aiberm", "crazyroute"],
           )
           assert.equal(
-            attempts.every((item) => isEquivalentGpt53CodexModel(item.split(":")[1] || "")),
+            attempts.every((item) => item.split(":")[1]?.replace(/[^a-z0-9]/giu, "").toLowerCase() === "gpt61sol"),
             true,
           )
         },
@@ -929,10 +885,10 @@ test("policy errors skip same-provider model variants and switch provider", asyn
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key-a",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
       AI_ENTRY_CRAZYROUTE_API_KEY: "test-key-c",
       AI_ENTRY_CRAZYROUTE_BASE_URL: "https://crazy.example/v1",
-      AI_ENTRY_CRAZYROUTE_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_CRAZYROUTE_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
       await withMockFetch(
@@ -948,8 +904,8 @@ test("policy errors skip same-provider model variants and switch provider", asyn
             return new Response(
               JSON.stringify({
                 data: [
-                  { id: "openai/gpt-5.3-codex" },
-                  { id: "gpt-5-3-codex" },
+                  { id: "openai/gpt-6.1-sol" },
+                  { id: "gpt-6-1-sol" },
                 ],
               }),
               { status: 200, headers: { "Content-Type": "application/json" } },
@@ -959,7 +915,7 @@ test("policy errors skip same-provider model variants and switch provider", asyn
           if (rawUrl.includes("crazy.example")) {
             return new Response(
               JSON.stringify({
-                data: [{ id: "openai/gpt-5.3-codex" }],
+                data: [{ id: "openai/gpt-6.1-sol" }],
               }),
               { status: 200, headers: { "Content-Type": "application/json" } },
             )
@@ -982,13 +938,13 @@ test("policy errors skip same-provider model variants and switch provider", asyn
           throw policyError
         }
         if (params.providerId === "crazyroute") {
-          assert.equal(isEquivalentGpt53CodexModel(params.model), true)
+          assert.equal(params.model.replace(/[^a-z0-9]/giu, "").toLowerCase(), "gpt61sol")
           return "wrapped_ok"
         }
         throw new Error(`unexpected provider:${params.providerId}`)
       }, {
         preferredProviderId: "aiberm",
-        preferredModel: "openai/gpt-5.3-codex",
+        preferredModel: "openai/gpt-6.1-sol",
         forceModelAcrossProviders: true,
         disableSameProviderModelFallback: true,
       })
@@ -1042,13 +998,13 @@ test("explicit provider configs still allow manually configured openrouter runti
     },
     {
       preferredProviderId: "openrouter",
-      preferredModel: "claude-sonnet-4.6",
+      preferredModel: "claude-sonnet-6.1",
       providerConfigs: [
         {
           id: "openrouter",
           apiKey: "manual-openrouter-secret",
           baseURL: "https://openrouter.ai/api/v1",
-          model: "claude-sonnet-4.6",
+          model: "claude-sonnet-6.1",
         },
       ],
       forcePreferredProvider: true,
@@ -1056,7 +1012,7 @@ test("explicit provider configs still allow manually configured openrouter runti
   )
 
   assert.equal(result.providerId, "openrouter")
-  assert.equal(result.model, "claude-sonnet-4.6")
+  assert.equal(result.model, "claude-sonnet-6.1")
   assert.deepEqual(result.providerOrder, ["openrouter"])
-  assert.deepEqual(attempts, ["openrouter:claude-sonnet-4.6"])
+  assert.deepEqual(attempts, ["openrouter:claude-sonnet-6.1"])
 })

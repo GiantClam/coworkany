@@ -1,4 +1,4 @@
-import type { DesktopProviderConfig, ProviderCapability } from "./provider-config";
+import { filterDeprecatedModelIds, type DesktopProviderConfig, type ProviderCapability } from "./provider-config";
 
 export type ProviderModelDiscoveryResult = {
   readonly models: readonly string[];
@@ -185,14 +185,14 @@ function modelItems(value: unknown): readonly unknown[] {
 }
 
 /** Normalize OpenAI, Gemini, DashScope, and common proxy response envelopes. */
-export function normalizeProviderModelResponse(value: unknown, provider: Pick<DesktopProviderConfig, "source" | "id" | "baseUrl">): readonly string[] {
+export function normalizeProviderModelResponse(value: unknown, provider: Pick<DesktopProviderConfig, "source" | "id" | "baseUrl">, capability: ProviderCapability = "text"): readonly string[] {
   const models: string[] = [];
   for (const item of modelItems(value)) {
     const model = typeof item === "string" ? item.trim() : item && typeof item === "object" ? modelIdFromRecord(item as Record<string, unknown>, provider) : undefined;
     if (model && !models.includes(model)) models.push(model);
     if (models.length >= MAX_MODELS) break;
   }
-  return models;
+  return filterDeprecatedModelIds(models, capability);
 }
 
 export function normalizeProviderModelsForCapability(value: unknown, provider: ProviderModelDiscoveryInput, endpoint: string): readonly string[] {
@@ -203,7 +203,7 @@ export function normalizeProviderModelsForCapability(value: unknown, provider: P
     if (model && !models.includes(model)) models.push(model);
     if (models.length >= MAX_MODELS) break;
   }
-  return models;
+  return filterDeprecatedModelIds(models, provider.capability ?? "text");
 }
 
 function requestHeaders(provider: Pick<DesktopProviderConfig, "source" | "id" | "baseUrl" | "apiKey">): Record<string, string> {
