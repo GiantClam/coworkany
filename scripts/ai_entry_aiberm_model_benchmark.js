@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 const DEFAULT_MODELS = [
-  "claude-opus-5.1",
-  "claude-sonnet-5.1",
-  "claude-haiku-5.1",
+  "claude-opus-6.1",
+  "claude-sonnet-6.1",
+  "claude-haiku-6.1",
   "gpt-6.1-sol",
   "gpt-6-sol",
   "gpt-6-luna",

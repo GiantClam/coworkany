@@ -9,6 +9,7 @@ import { executeWorkflow, migrateWorkflowDefinitionToCurrent, splitWorkflowText 
 import { OpenCodeServeClient } from "./opencode-serve";
 import { createRpcReader, writeRpcResponse, writeRpcServiceRequest } from "./rpc";
 import { createDesktopWorkflowPorts } from "./workflow-ports";
+import { collectWorkflowArtifactValues, externalWorkflowArtifactKey, externalWorkflowArtifactReference } from "./workflow-artifact-reference";
 import { buildMediaCapabilityInput } from "./media-input";
 import { assertVideoMediaCapability, resolveVideoMediaCapabilities } from "./media-capabilities";
 import { discoverProviderModels } from "../src/provider-model-discovery";
@@ -736,7 +737,7 @@ async function runOpenCode(command: HostCommand, session?: { readonly workspaceP
   catch (error) { return fail(command, "provider_credentials_unavailable", error instanceof Error ? error.message : "cheapbuddy_sign_in_required"); }
   const activeProvider = provider;
   const selectedModel = (modelHint || activeProvider?.model || "").trim();
-  if (isDeprecatedTextModelId(selectedModel)) return fail(command, "deprecated_model", "The selected text model is retired. Choose a GPT-6+ or Claude 5.1+ model.");
+  if (isDeprecatedTextModelId(selectedModel)) return fail(command, "deprecated_model", "The selected text model is retired. Choose a GPT-6+ or Claude 6+ model.");
   if (!(activeProvider?.model?.trim() || modelHint?.trim())) return fail(command, "text_provider_model_required", "Configure a text Provider and model before sending.");
   const executable = typeof command.payload?.executable === "string" ? command.payload.executable : defaultOpenCodeExecutable();
   const workspacePath = session?.workspacePath ?? (workspacePathFromPayload(command.payload?.workspacePath) || process.cwd());
@@ -1511,6 +1512,7 @@ function assetLibraryFileName(config: Record<string, unknown>, nodeKey: string) 
 async function storeWorkflowArtifacts(workspacePath: string, runId: string, nodeKey: string, config: Record<string, unknown>, inputs: Record<string, unknown>, artifactPort: WorkflowArtifactPort) {
   const artifacts: Array<Record<string, unknown>> = [];
   const registeredPaths = new Set<string>();
+  const externalArtifactKeys = new Set<string>();
   const register = async (artifact: { readonly relativePath: string; readonly mimeType: string; readonly byteLength: number; readonly sha256: string }) => {
     if (registeredPaths.has(artifact.relativePath)) return;
     const registration = await artifactPort.register(artifact);
@@ -1534,9 +1536,18 @@ async function storeWorkflowArtifacts(workspacePath: string, runId: string, node
       sha256: typeof written.sha256 === "string" ? written.sha256 : "",
     });
   }
-  for (const value of [inputs.assets, inputs.images, inputs.videos, inputs.audios, inputs.presentations].flatMap(flattenWorkflowValues)) {
+  for (const value of collectWorkflowArtifactValues(inputs)) {
     const artifact = workflowArtifactReference(value, workspacePath);
-    if (artifact) await register(artifact);
+    if (artifact) {
+      await register(artifact);
+      continue;
+    }
+    const externalArtifact = externalWorkflowArtifactReference(value);
+    if (!externalArtifact) continue;
+    const key = externalWorkflowArtifactKey(externalArtifact);
+    if (externalArtifactKeys.has(key)) continue;
+    externalArtifactKeys.add(key);
+    artifacts.push({ ...externalArtifact, registered: true, external: true });
   }
   if (!artifacts.length) throw new Error("asset_library_store_input_required");
   return { stored: true, artifacts, artifactIds: artifacts.map((artifact) => artifact.artifactId) };

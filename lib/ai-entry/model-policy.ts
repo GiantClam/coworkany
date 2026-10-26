@@ -3,7 +3,7 @@ import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-poli
 export const AI_ENTRY_CONSULTING_ENTRY_MODE = "consulting-advisor"
 export const AI_ENTRY_NORMAL_DEFAULT_MODEL_HINT = "deepseek-v4-pro"
 export const AI_ENTRY_CONSULTING_QUALITY_MODEL_HINT = "deepseek-v4-pro"
-export const AI_ENTRY_CLAUDE_51_MODEL_HINT = "claude-sonnet-5.1"
+export const AI_ENTRY_CLAUDE_61_MODEL_HINT = "claude-sonnet-6.1"
 /**
  * Editable PPT is an OpenCode + native ppt-master session. Prefer the
  * PPToken Grok route; the Railway runtime owns any provider fallback.
@@ -145,8 +145,8 @@ export function pickConsultingModelId(
   return pickModelByHint(models, getConsultingModelHint(mode))
 }
 
-export function pickClaude51ModelId(models: ModelCandidate[]) {
-  return pickModelByHint(models, AI_ENTRY_CLAUDE_51_MODEL_HINT)
+export function pickClaude61ModelId(models: ModelCandidate[]) {
+  return pickModelByHint(models, AI_ENTRY_CLAUDE_61_MODEL_HINT)
 }
 
 export function getPptAssistantDefaultModelHint() {

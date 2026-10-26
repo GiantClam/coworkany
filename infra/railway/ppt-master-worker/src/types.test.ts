@@ -68,7 +68,7 @@ test("worker preview schema accepts pptoken GPT-6.1 Sol as a remote worker model
 })
 
 test("worker preview schema rejects retired GPT-5.6 and earlier models", () => {
-  for (const model of ["gpt-5.6-sol", "gpt-5.4", "openai/gpt-5.4-mini"]) {
+  for (const model of ["gpt-5.7-sol", "gpt-5.6-sol", "gpt-5.4", "openai/gpt-5.4-mini", "claude-sonnet-5.1"]) {
     assert.throws(() => previewRequestSchema.parse({
     requestId: `req_${model}`,
     prompt: "Build a tech company introduction deck",
@@ -132,7 +132,7 @@ test("worker preview schema accepts explicit runtime slide overrides", () => {
 })
 
 test("worker preview schema rejects retired GPT and Claude runtime slide models", () => {
-  for (const runtimeSlideModel of ["gpt-5.6-sol", "claude-sonnet-4-6"]) {
+  for (const runtimeSlideModel of ["gpt-5.7-sol", "gpt-5.6-sol", "claude-sonnet-5.1", "claude-sonnet-4-6"]) {
     assert.throws(() => previewRequestSchema.parse({
       requestId: `req_${runtimeSlideModel}`,
       prompt: "Build a tech company introduction deck",

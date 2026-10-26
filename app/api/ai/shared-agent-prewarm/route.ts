@@ -18,6 +18,7 @@ import { getConfiguredAiEntryProviders } from "@/lib/ai-entry/provider-routing"
 import { getEnterpriseTextRuntimeProviderConfigsForUser } from "@/lib/platform/enterprise-runtime-config"
 import { getCustomAgentForUser } from "@/lib/platform/custom-agents"
 import { parseCustomAgentRuntimeId } from "@/lib/platform/custom-agent-runtime-id"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 export const runtime = "nodejs"
 
@@ -102,6 +103,9 @@ export async function POST(request: NextRequest) {
   }
   const modelId = requestedModelId || (businessAgent ? "deepseek-v4-pro" : provider.model)
   if (!modelId) return NextResponse.json({ prewarmed: false, reason: "model_unavailable" })
+  if (isDeprecatedTextModelId(modelId)) {
+    return NextResponse.json({ prewarmed: false, reason: "deprecated_model" })
+  }
 
   // The durable session key includes the persisted conversation ID. Creating
   // this empty record is the only prewarm-side write; no message or artifact

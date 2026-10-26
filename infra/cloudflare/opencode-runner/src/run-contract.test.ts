@@ -53,3 +53,21 @@ test("accepts an application-defined provider without a runtime allowlist", () =
   const parsed = parseRunRequest(JSON.stringify({ runId, input: input(runId), timeoutMs: 10_000, provider: customProvider }))
   assert.equal(parsed.provider.providerId, "company-gateway")
 })
+
+test("rejects retired GPT and Claude models at the Cloudflare runtime boundary", () => {
+  const runId = "33333333-3333-4333-8333-333333333333"
+  assert.throws(
+    () => parseRunRequest(JSON.stringify({ runId, input: input(runId), timeoutMs: 10_000, provider: { ...provider, modelId: "gpt-5.7-sol" } })),
+    /run_request_provider_required/,
+  )
+  assert.throws(
+    () => parseSessionRunRequest(JSON.stringify({
+      runId,
+      sessionKey: "sess-" + "b".repeat(40),
+      input: { ...input(runId), protocolVersion: 2, sessionKey: "sess-" + "b".repeat(40), functionId: "business-content-growth", selectedSkillIds: [], selectedMcpServerIds: [], attachmentObjects: [], checkpoint: null },
+      deadlineMs: 3_600_000,
+      provider: { ...provider, modelId: "claude-sonnet-5.1" },
+    })),
+    /session_run_request_invalid/,
+  )
+})

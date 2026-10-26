@@ -113,6 +113,7 @@ import { resolveOpenCodeModelHint } from "@/lib/ai-runtime/opencode-model"
 import { normalizeReasoningEffort } from "@/lib/ai-entry/reasoning"
 import { buildAgentRuntimeSessionKey } from "@/lib/ai-runtime/session-key"
 import type { OpenCodeProviderConfig, RuntimeProjectSnapshot } from "@/lib/ai-runtime/contracts"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 export const runtime = "nodejs"
 export const maxDuration = 1800
@@ -505,6 +506,7 @@ function resolveSelectedOpenCodeProvider(input: {
   const providerId = input.providerId?.trim().toLowerCase() || ""
   const modelId = input.modelId?.trim() || ""
   if (!providerId || !modelId) return null
+  if (isDeprecatedTextModelId(modelId)) return null
 
   const configuredProviders = [
     ...getConfiguredAiEntryProviders(),
@@ -1376,6 +1378,9 @@ export async function POST(request: NextRequest) {
     const isEditablePptAgent = effectiveAgentId === "executive-ppt" || selectedSkillIds.includes("ppt-master")
     const explicitPptProviderId = requestedModelConfig?.providerId?.trim().toLowerCase()
     const explicitPptModel = requestedModelConfig?.modelId?.trim()
+    if (explicitPptModel && isDeprecatedTextModelId(explicitPptModel)) {
+      throw new Error("deprecated_text_model_unavailable")
+    }
     const hasExplicitModelSelection = Boolean(explicitPptProviderId && explicitPptModel)
     const explicitRuntimeProviderId = hasExplicitModelSelection
       ? (modelConfig?.providerId || explicitPptProviderId)

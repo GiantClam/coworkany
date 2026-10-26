@@ -9,30 +9,31 @@ import {
   AI_ENTRY_NORMAL_DEFAULT_MODEL_HINT,
   AI_ENTRY_PPT_ASSISTANT_DEFAULT_MODEL_HINT,
   AI_ENTRY_PPT_AGENT_IDS,
-  AI_ENTRY_CLAUDE_51_MODEL_HINT,
+  AI_ENTRY_CLAUDE_61_MODEL_HINT,
   isAiEntryPptAgentId,
   isConsultingAdvisorEntryMode,
   pickConsultingModelId,
   pickAgentDefaultModelId,
   pickPptAssistantDefaultModelId,
-  pickClaude51ModelId,
+  pickClaude61ModelId,
   resolvePptAssistantModelSelection,
   resolveConsultingModelMode,
   shouldLockConsultingAdvisorModel,
 } from "./model-policy"
 
-test("pickClaude51ModelId selects Claude 5.1 and rejects retired Claude 4 models", () => {
-  const selected = pickClaude51ModelId([
+test("pickClaude61ModelId selects Claude 6.1 and rejects retired Claude 5 models", () => {
+  const selected = pickClaude61ModelId([
+    { id: "anthropic/claude-sonnet-5.1", name: "Claude Sonnet 5.1" },
     { id: "anthropic/claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
-    { id: "claude-sonnet-5.1:thinking", name: "Claude Sonnet 5.1 Thinking" },
-    { id: "claude-sonnet-5.1", name: "Claude Sonnet 5.1" },
+    { id: "claude-sonnet-6.1:thinking", name: "Claude Sonnet 6.1 Thinking" },
+    { id: "claude-sonnet-6.1", name: "Claude Sonnet 6.1" },
   ])
 
-  assert.equal(selected, "claude-sonnet-5.1")
+  assert.equal(selected, "claude-sonnet-6.1")
 })
 
-test("pickClaude51ModelId returns null when sonnet-5.1 model does not exist", () => {
-  const selected = pickClaude51ModelId([
+test("pickClaude61ModelId returns null when sonnet-6.1 model does not exist", () => {
+  const selected = pickClaude61ModelId([
     { id: "openai/gpt-6.1-sol", name: "GPT 6.1 Sol" },
     { id: "google/gemini-3-flash-preview", name: "Gemini 3 Flash Preview" },
   ])
@@ -163,6 +164,6 @@ test("consulting entry mode detection and lock flag", () => {
   assert.equal(AI_ENTRY_NORMAL_DEFAULT_MODEL_HINT, "deepseek-v4-pro")
   assert.equal(AI_ENTRY_CONSULTING_QUALITY_MODEL_HINT, "deepseek-v4-pro")
   assert.equal(AI_ENTRY_AGENT_DEFAULT_MODEL_HINT, "deepseek-v4-pro")
-  assert.equal(AI_ENTRY_CLAUDE_51_MODEL_HINT, "claude-sonnet-5.1")
+  assert.equal(AI_ENTRY_CLAUDE_61_MODEL_HINT, "claude-sonnet-6.1")
   assert.equal(AI_ENTRY_PPT_ASSISTANT_DEFAULT_MODEL_HINT, "grok-4.5")
 })

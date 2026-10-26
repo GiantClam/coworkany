@@ -123,7 +123,7 @@ async function verifyAiberm() {
     envKeyName: "AIBERM_API_KEY",
     apiKey: process.env.AIBERM_API_KEY || process.env.WRITER_AIBERM_API_KEY || "",
     baseUrl: process.env.AIBERM_BASE_URL || "https://aiberm.com/v1",
-    model: process.env.WRITER_TEXT_MODEL || process.env.AI_ENTRY_AIBERM_MODEL || "claude-sonnet-5.1",
+    model: process.env.WRITER_TEXT_MODEL || process.env.AI_ENTRY_AIBERM_MODEL || "claude-sonnet-6.1",
   })
 }
 

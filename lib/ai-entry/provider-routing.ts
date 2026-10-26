@@ -661,8 +661,11 @@ export function getConfiguredAiEntryProviderForModel(
 ): AiEntryProviderConfig | null {
   const normalizedProviderId = normalizeText(providerId).toLowerCase()
   const normalizedModelId = normalizeText(modelId)
+  if (normalizedModelId && isDeprecatedTextModelId(normalizedModelId)) return null
   const provider = getRawProviderConfigs().find((item) => item.id === normalizedProviderId)
   if (!provider) return null
+
+  if (isDeprecatedTextModelId(provider.model)) return null
 
   if (normalizedProviderId !== "pptoken" || !isPptokenGrokModel(normalizedModelId)) {
     return provider.apiKey && provider.baseURL ? provider : null
@@ -692,10 +695,14 @@ export function resolveAiEntryOpenCodeProvider(input: {
 } = {}) {
   const requestedProviderId = normalizeText(input.providerId).toLowerCase()
   const requestedModelId = normalizeText(input.modelId)
+  if (requestedModelId && isDeprecatedTextModelId(requestedModelId)) return null
   const provider = requestedProviderId
     ? getConfiguredAiEntryProviderForModel(requestedProviderId, requestedModelId)
-    : getConfiguredAiEntryProviders()[0] || null
+    : getConfiguredAiEntryProviders().find(
+        (item) => !isDeprecatedTextModelId(item.model),
+      ) || null
   if (!provider) return null
+  if (isDeprecatedTextModelId(provider.model)) return null
 
   return {
     providerId: provider.id,
@@ -706,7 +713,9 @@ export function resolveAiEntryOpenCodeProvider(input: {
 }
 
 export function getAiEntryCurrentProviderConfig() {
-  const providers = getConfiguredAiEntryProviders()
+  const providers = getConfiguredAiEntryProviders().filter(
+    (provider) => !isDeprecatedTextModelId(provider.model),
+  )
   if (providers.length === 0) return null
   const state = getRoutingState()
   const index = clampIndex(state.activeIndex, providers.length - 1)

@@ -1,4 +1,5 @@
 import type { WriterRuntimeContext } from "@/lib/writer/runtime/session-runtime"
+import { isDeprecatedTextModelId } from "../../packages/runtime-contracts/src/model-policy"
 
 export type AgentRuntimeProvider = "ai-sdk-native" | "opencode"
 
@@ -146,6 +147,7 @@ export function isValidOpenCodeProviderConfig(value: unknown): value is OpenCode
   const provider = value as Partial<OpenCodeProviderConfig>
   if (typeof provider.providerId !== "string" || !provider.providerId.trim()) return false
   if (typeof provider.modelId !== "string" || !provider.modelId.trim()) return false
+  if (isDeprecatedTextModelId(provider.modelId)) return false
   if (typeof provider.baseUrl !== "string" || !provider.baseUrl.trim()) return false
   if (typeof provider.apiKey !== "string" || !provider.apiKey.trim()) return false
   try {

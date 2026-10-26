@@ -62,11 +62,11 @@ test("legacy profiles without a model catalog hide retired text models", () => {
   assert.deepEqual(modelOptionsForProvider({ provider, providers: { text: provider }, defaults: { text: "text" } }, provider), []);
 });
 
-test("configured text model options keep GPT-6 and Claude 5.1 while filtering retired versions", () => {
+test("configured text model options keep GPT-6 and Claude 6.1 while filtering retired versions", () => {
   const config = {
-    provider: { ...text, models: ["gpt-5.6-sol", "gpt-6.1-sol", "claude-sonnet-4-6", "claude-sonnet-5.1"] },
+    provider: { ...text, models: ["gpt-5.6-sol", "gpt-6.1-sol", "claude-sonnet-4-6", "claude-sonnet-5.1", "claude-sonnet-6.1"] },
   };
-  assert.deepEqual(configuredTextModelOptions(config).map((item) => item.modelId), ["gpt-6.1-sol", "claude-sonnet-5.1"]);
+  assert.deepEqual(configuredTextModelOptions(config).map((item) => item.modelId), ["gpt-6.1-sol", "claude-sonnet-6.1"]);
 });
 
 test("retired text-model policy does not remove media model IDs", () => {

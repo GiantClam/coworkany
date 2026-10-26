@@ -1,7 +1,7 @@
 const GPT_VERSION_PATTERN = /(?:^|[^a-z0-9])gpt[-_\s]?(\d+)(?:[._-](\d+))?/iu
 const CLAUDE_VERSION_PATTERN = /claude(?:[-_\s]+(?:(?:opus|sonnet|haiku|instant)[-_\s]+)?)(\d+)(?:[._-](\d+))?/iu
 
-/** GPT 5.6 and earlier, and Claude 5.0 and earlier, are retired. */
+/** GPT 5.x and earlier, and Claude 5.x and earlier, are retired. */
 export function isDeprecatedTextModelId(value: unknown): boolean {
   if (typeof value !== "string") return false
   const modelId = value.trim()
@@ -11,7 +11,7 @@ export function isDeprecatedTextModelId(value: unknown): boolean {
   if (gptVersion) {
     const major = Number(gptVersion[1])
     const minor = Number(gptVersion[2] ?? 0)
-    return major < 5 || (major === 5 && minor <= 6)
+    return major < 6
   }
 
   if (!/claude/iu.test(modelId)) return false
@@ -20,5 +20,5 @@ export function isDeprecatedTextModelId(value: unknown): boolean {
 
   const major = Number(claudeVersion[1])
   const minor = Number(claudeVersion[2] ?? 0)
-  return major < 5 || (major === 5 && minor === 0)
+  return major < 6
 }

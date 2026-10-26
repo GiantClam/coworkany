@@ -4,6 +4,7 @@ import test from "node:test"
 import {
   executeAiEntryWithProviderFailover,
   getConfiguredAiEntryProviderForModel,
+  resolveAiEntryOpenCodeProvider,
 } from "./provider-routing"
 
 const PROVIDER_ENV_KEYS = [
@@ -77,6 +78,25 @@ test("pptoken Grok resolution fails closed when its dedicated key is missing", a
     async () => {
       assert.equal(getConfiguredAiEntryProviderForModel("pptoken", "grok-4.5"), null)
       assert.equal(getConfiguredAiEntryProviderForModel("pptoken", "gpt-6.1-sol")?.apiKey, "gpt-account-key")
+    },
+  )
+})
+
+test("provider model resolution rejects retired models and skips stale defaults", async () => {
+  await withProviderEnv(
+    {
+      AI_ENTRY_DEEPSEEK_API_KEY: "deepseek-key",
+      AI_ENTRY_DEEPSEEK_BASE_URL: "https://api.deepseek.example",
+      AI_ENTRY_DEEPSEEK_MODEL: "gpt-5.7-sol",
+      AI_ENTRY_AIBERM_API_KEY: "aiberm-key",
+      AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
+      AI_ENTRY_AIBERM_MODEL: "deepseek-v4-pro",
+    },
+    async () => {
+      assert.equal(getConfiguredAiEntryProviderForModel("deepseek", "gpt-5.7-sol"), null)
+      assert.equal(resolveAiEntryOpenCodeProvider({ providerId: "deepseek", modelId: "gpt-5.7-sol" }), null)
+      assert.equal(resolveAiEntryOpenCodeProvider()?.providerId, "aiberm")
+      assert.equal(resolveAiEntryOpenCodeProvider()?.modelId, "deepseek-v4-pro")
     },
   )
 })

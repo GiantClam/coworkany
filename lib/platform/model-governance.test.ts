@@ -22,7 +22,7 @@ const runtimeProviders: RuntimeProviderLike[] = [
     scope: "text",
     configured: true,
     active: true,
-    model: "gpt-5.4-mini",
+    model: "gpt-6.1-sol",
     baseURL: "https://pptoken.example/v1",
   },
   {
@@ -30,7 +30,7 @@ const runtimeProviders: RuntimeProviderLike[] = [
     scope: "text",
     configured: true,
     active: false,
-    model: "claude-sonnet-4.6",
+    model: "claude-sonnet-6.1",
     baseURL: "https://openrouter.example/v1",
   },
   {
@@ -38,7 +38,7 @@ const runtimeProviders: RuntimeProviderLike[] = [
     scope: "text",
     configured: true,
     active: false,
-    model: "gpt-5.4",
+    model: "gpt-6.1-sol",
     baseURL: "https://aiberm.example/v1",
   },
 ]
@@ -66,14 +66,49 @@ test("buildGovernedAiEntryModelCatalog keeps only account-visible runtime models
   })
 
   assert.equal(catalog.selectedProviderId, "pptoken")
-  assert.equal(catalog.selectedModelId, "pptoken::gpt-5.4-mini")
+  assert.equal(catalog.selectedModelId, "pptoken::gpt-6.1-sol")
   assert.deepEqual(catalog.providers.map((item) => item.id), ["deepseek", "pptoken", "aiberm"])
   assert.deepEqual(catalog.models.map((item) => item.id), [
     "deepseek::deepseek-v4-pro",
     "deepseek::deepseek-v4-flash",
-    "pptoken::gpt-5.4-mini",
-    "aiberm::gpt-5.4",
+    "pptoken::gpt-6.1-sol",
+    "aiberm::gpt-6.1-sol",
   ])
+})
+
+test("buildGovernedAiEntryModelCatalog hides retired GPT and Claude defaults", () => {
+  const catalog = buildGovernedAiEntryModelCatalog({
+    user: null,
+    runtimeProviders: [
+      {
+        id: "pptoken",
+        scope: "text",
+        configured: true,
+        active: true,
+        model: "gpt-5.7-sol",
+        baseURL: "https://pptoken.example/v1",
+      },
+      {
+        id: "openrouter",
+        scope: "text",
+        configured: true,
+        active: false,
+        model: "claude-sonnet-5.1",
+        baseURL: "https://openrouter.example/v1",
+      },
+      {
+        id: "deepseek",
+        scope: "text",
+        configured: true,
+        active: false,
+        model: "deepseek-v4-pro",
+        baseURL: "https://api.deepseek.com",
+      },
+    ],
+  })
+
+  assert.equal(catalog.models.some((item) => /gpt-5|claude.*5/iu.test(item.modelId || item.id)), false)
+  assert.equal(catalog.selectedProviderId, "deepseek")
 })
 
 test("buildGovernedAiEntryModelCatalog exposes both selectable DeepSeek text models", () => {
@@ -159,7 +194,7 @@ test("buildGovernedAiEntryModelCatalog falls back when requested provider is not
   })
 
   assert.equal(catalog.selectedProviderId, "pptoken")
-  assert.equal(catalog.selectedModelId, "pptoken::gpt-5.4-mini")
+  assert.equal(catalog.selectedModelId, "pptoken::gpt-6.1-sol")
 })
 
 test("buildGovernedAiEntryModelCatalog prefers the configured default-model provider when present", () => {
@@ -227,9 +262,9 @@ test("buildGovernedAiEntryModelCatalog keeps platform models visible when enterp
     "enterprise-openai-compatible::deepseek-v4-flash",
     "deepseek::deepseek-v4-pro",
     "deepseek::deepseek-v4-flash",
-    "pptoken::gpt-5.4-mini",
-    "openrouter::claude-sonnet-4.6",
-    "aiberm::gpt-5.4",
+    "pptoken::gpt-6.1-sol",
+    "openrouter::claude-sonnet-6.1",
+    "aiberm::gpt-6.1-sol",
   ])
 })
 
