@@ -92,7 +92,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Install pinned OpenCode CLI for Windows packages
-        run: npm install --global --no-audit --no-fund opencode-ai@1.18.31
+        run: npm install --global --no-audit --no-fund opencode-ai@1.19.4
       - name: Validate Windows application
         env:
           TAURI_CONFIG: '{"bundle":{"resources":[]}}'

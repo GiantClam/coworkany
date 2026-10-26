@@ -111,9 +111,8 @@ Run CoworkAny.exe.
 Supported targets: Windows 10 22H2 and Windows 11, x64.
 Mode: $mode
 Normal mode stores application data in %LOCALAPPDATA%\CoworkAny.
-Portable mode stores application data in the data\ directory beside the executable.
+Portable mode stores application data in the data\ directory beside the executable. The release package does not include provider credentials or model configuration; configure them after launch.
 Upgrades are manual: close CoworkAny, back up the data directory in portable mode, then replace the ZIP contents. The app never downloads or replaces itself automatically.
-The portable package includes config.json and may include a plaintext API key; protect copied archives.
 External Obsidian Vault folders are not copied; the configured Vault path must remain available or be relocated after copying.
 The system WebView2 runtime is not copied; the first launch probes or repairs it on the target machine.
 "@

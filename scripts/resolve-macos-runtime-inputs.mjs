@@ -1,7 +1,12 @@
 import { access, realpath, stat } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { promisify } from "node:util";
+
+export const REQUIRED_OPENCODE_VERSION = "1.19.4";
+const execFileAsync = promisify(execFile);
 
 const ENV_NAMES = {
   node: "COWORKANY_MAC_NODE_RUNTIME_DIR",
@@ -43,6 +48,32 @@ async function firstExecutableDirectory(candidates, executable) {
   return undefined;
 }
 
+async function executableVersion(executable) {
+  try {
+    const { stdout } = await execFileAsync(executable, ["--version"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      maxBuffer: 32 * 1024,
+      env: { ...process.env, OPENCODE_DISABLE_MODELS_FETCH: "true", OPENCODE_DISABLE_AUTOUPDATE: "true" },
+    });
+    return stdout.trim().split(/\s+/u)[0] ?? "";
+  } catch {
+    return "";
+  }
+}
+
+async function firstOpenCodeDirectory(candidates) {
+  for (const candidate of candidates) {
+    const directory = await executableDirectory(candidate, "opencode");
+    if (!directory) continue;
+    const executable = join(directory, "opencode");
+    if (await executableVersion(executable) === REQUIRED_OPENCODE_VERSION) return directory;
+    const nested = join(directory, "bin", "opencode");
+    if (await executableVersion(nested) === REQUIRED_OPENCODE_VERSION) return directory;
+  }
+  return undefined;
+}
+
 async function runtimeRootFromExecutable(executable, name) {
   if (!executable) return undefined;
   const binary = await realpath(executable).catch(() => executable);
@@ -80,9 +111,10 @@ export async function resolveMacOSRuntimeInputs({
   const node = explicit.node?.trim() || await runtimeRootFromExecutable(execPath, "node");
 
   const opencodeBinary = await executableFromPath("opencode", pathEnv);
-  const opencode = explicit.opencode?.trim() || await firstExecutableDirectory(
+  const opencode = explicit.opencode?.trim()
+    ? await firstOpenCodeDirectory([explicit.opencode.trim()])
+    : await firstOpenCodeDirectory(
     [join(homeDirectory, ".opencode"), ...(opencodeBinary ? [dirname(opencodeBinary), dirname(dirname(opencodeBinary))] : [])],
-    "opencode",
   );
 
   const pythonBinary = await executableFromPath("python3", pathEnv);

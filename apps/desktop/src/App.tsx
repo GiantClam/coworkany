@@ -1071,12 +1071,15 @@ function buildLocalAgentGroups(skills: LocalSkillCatalog["skills"], locale: "zh"
   })).filter((group) => group.cards.length);
 }
 
-export function desktopExecutionPrompt(_skillId: SkillId, prompt: string, _locale: "zh" | "en") {
+export function desktopExecutionPrompt(_skillId: SkillId, prompt: string, _locale: "zh" | "en", modelId?: string | null) {
   // The selected Skill owns the task workflow. Do not append desktop-specific
   // generation, artifact, or confirmation rules to the user's message.
-  void _skillId;
-  void _locale;
-  return prompt;
+  if (_skillId !== "executive-consulting-suite") return prompt;
+  const model = typeof modelId === "string" && modelId.trim() ? modelId.trim() : _locale === "zh" ? "当前运行时选定模型" : "the runtime-selected model";
+  const guard = _locale === "zh"
+    ? `\n\n[运行时模型约束]\n本轮实际调用模型：${model}。回答中如需说明模型，只能使用这个实际模型名称；不要编造或推荐其他模型名称，也不要引用已废弃的 GPT-4.1、GPT-4.1 mini 或其他旧模型。`
+    : `\n\n[Runtime model constraint]\nThe model actually used for this turn is ${model}. If you mention a model, use only this exact model name; do not invent or recommend other models, and do not cite retired GPT-4.1, GPT-4.1 mini, or other legacy models.`;
+  return `${prompt}${guard}`;
 }
 
 export function localizedSkillSystemPrompt(_skillId: SkillId, _locale: "zh" | "en") {
@@ -4362,7 +4365,7 @@ export function App() {
       const messageAgentId = typeof messageConversationId === "string" ? conversationsRef.current.find((item) => item.id === messageConversationId)?.agent_id?.trim() : undefined;
       const selectedAgentId = messageAgentId ?? requestedAgentId;
       const executionPrompt = message.metadata?.executionPrompt ?? promptText;
-      return desktopExecutionPrompt(message.metadata?.skillId ?? resolveDesktopSkillId(activePathRef.current, selectedAgentId), executionPrompt, locale);
+      return desktopExecutionPrompt(message.metadata?.skillId ?? resolveDesktopSkillId(activePathRef.current, selectedAgentId), executionPrompt, locale, message.metadata?.modelId);
     },
     resolveAllowArtifacts: (message) => message.metadata?.allowArtifacts ?? resolveChatArtifactPolicy(message),
     resolveSystemPrompt: (message) => {
@@ -6455,7 +6458,7 @@ export function App() {
         // it can never fall through to the text/OpenCode conversation path.
         const usesOpenCodeConversation = !mediaFeatureId && actionId !== "image_generate" && (mode === "chat" || mode === "writer" || launchSelectedPath === "/dashboard");
       if (usesOpenCodeConversation && conversationId) {
-       const openCodePrompt = desktopExecutionPrompt(launchEffectiveSkillId, runtimePrompt, locale);
+       const openCodePrompt = desktopExecutionPrompt(launchEffectiveSkillId, runtimePrompt, locale, selectedProvider.model);
         const existingSessionId = conversations.find((item) => item.id === conversationId)?.opencode_session_id ?? undefined;
          const sessionResponse = await sendHostMessage({ version: 1, requestId: `${conversationId}:session:${runId}`, type: "session.create", payload: { conversationId, ...(existingSessionId ? { sessionId: existingSessionId } : {}), workspacePath: launchConfig.workspacePath, model: selectedProvider.model, provider: selectedProvider, allowArtifacts: conversationAllowsArtifacts, ...(localAgentId ? { agentId: localAgentId } : {}) } });
         if (sessionResponse.ok !== true) throw new Error(String((sessionResponse.error as { message?: string } | undefined)?.message ?? "opencode_session_unavailable"));

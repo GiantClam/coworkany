@@ -8,8 +8,8 @@ import assert from "node:assert/strict";
 import { missingMacOSRuntimeInputs, resolveMacOSRuntimeInputs } from "./resolve-macos-runtime-inputs.mjs";
 import { shouldBundlePythonRuntimeItem } from "./desktop-python-runtime.mjs";
 
-async function executable(path) {
-  await writeFile(path, "binary");
+async function executable(path, content = "binary") {
+  await writeFile(path, content);
   await chmod(path, 0o755);
 }
 
@@ -23,7 +23,7 @@ test("auto-discovers developer runtimes when explicit inputs are absent", async 
   await Promise.all([nodeRoot, pythonRoot, opencodeRoot, mediaRoot, fontRoot].map(path => mkdir(path, { recursive: true })));
   await executable(join(nodeRoot, "node"));
   await executable(join(pythonRoot, "python3"));
-  await executable(join(opencodeRoot, "opencode"));
+  await executable(join(opencodeRoot, "opencode"), "#!/bin/sh\nprintf '1.19.4\\n'\n");
   await executable(join(mediaRoot, "ffmpeg"));
   await executable(join(mediaRoot, "ffprobe"));
   await writeFile(join(fontRoot, "NotoSansCJKsc-Regular.otf"), "font");
@@ -43,6 +43,24 @@ test("auto-discovers developer runtimes when explicit inputs are absent", async 
   assert.equal(source.ffprobe.endsWith("/media/ffprobe"), true);
   assert.equal(source.font.endsWith("/Library/Fonts/NotoSansCJKsc-Regular.otf"), true);
   assert.deepEqual(missingMacOSRuntimeInputs(source), []);
+});
+
+test("rejects a stale OpenCode runtime instead of staging it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "coworkany-runtime-inputs-stale-"));
+  const opencodeRoot = join(root, "home", ".opencode", "bin");
+  await mkdir(opencodeRoot, { recursive: true });
+  await executable(join(opencodeRoot, "opencode"), "#!/bin/sh\nprintf '1.17.7\\n'\n");
+
+  const source = await resolveMacOSRuntimeInputs({
+    env: { PATH: "" },
+    platform: "darwin",
+    architecture: "arm64",
+    execPath: join(root, "missing-node"),
+    homeDirectory: join(root, "home"),
+  });
+
+  assert.equal(source.opencode, undefined);
+  assert.ok(missingMacOSRuntimeInputs(source).includes("opencode=COWORKANY_MAC_OPENCODE_RUNTIME_DIR"));
 });
 
 test("explicit runtime inputs take precedence over automatic discovery", async () => {
