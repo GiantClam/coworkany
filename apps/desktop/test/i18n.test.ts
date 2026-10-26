@@ -304,6 +304,9 @@ test("selected Skills own their interaction flow", () => {
   assert.equal(desktopExecutionPrompt("ppt-master", prompt, "zh"), prompt);
   assert.equal(desktopExecutionPrompt("dashi-ppt", prompt, "zh"), prompt);
   assert.equal(desktopExecutionPrompt("dashi-ppt", `  ${prompt}\n`, "zh"), `  ${prompt}\n`);
+  assert.match(desktopExecutionPrompt("executive-consulting-suite", prompt, "zh", "gpt-6.1-sol"), /本轮实际调用模型：gpt-6\.1-sol/u);
+  assert.match(desktopExecutionPrompt("executive-consulting-suite", prompt, "zh", "gpt-6.1-sol"), /不要编造或推荐其他模型名称/u);
+  assert.match(desktopExecutionPrompt("executive-consulting-suite", prompt, "en", "gpt-6-luna"), /The model actually used for this turn is gpt-6-luna/u);
   assert.equal(localizedSkillSystemPrompt("ppt-master", "zh"), "");
   assert.equal(localizedSkillSystemPrompt("dashi-ppt", "en"), "");
   for (const systemPrompt of [localizedSkillSystemPrompt("ppt-master", "zh"), localizedSkillSystemPrompt("dashi-ppt", "en")]) {

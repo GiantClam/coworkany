@@ -41,6 +41,13 @@ async function validateBundledPython(appPath) {
   });
 }
 
+async function assertPortableDataDirectoryIsClean(dataDirectory) {
+  const entries = await readdir(dataDirectory, { withFileTypes: true });
+  if (entries.length > 0) {
+    throw new Error(`macos_portable_data_must_be_empty:${entries.map(entry => entry.name).join(",")}`);
+  }
+}
+
 if (process.platform !== "darwin") throw new Error(`macos_portable_package_requires_darwin:${process.platform}`);
 await access(app, constants.F_OK).catch(() => { throw new Error(`macos_app_bundle_missing:${app}`); });
 const executable = join(app, "Contents", "MacOS", "coworkany");
@@ -62,11 +69,13 @@ if (internal) await writeFile(join(packagedApp, "Contents", "Resources", "intern
 if (internal) await promisify(execFile)("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", packagedApp]);
 await validateBundledPython(packagedApp);
 if (!internal) await promisify(execFile)("codesign", ["--verify", "--deep", "--strict", packagedApp]);
-await mkdir(join(stage, "CoworkAny Data"), { recursive: true });
+const dataDirectory = join(stage, "CoworkAny Data");
+await mkdir(dataDirectory, { recursive: true });
+await assertPortableDataDirectoryIsClean(dataDirectory);
 await writeFile(join(stage, "portable.flag"), "", "utf8");
 const instructions = internal
   ? `CoworkAny macOS 内测版（${architecture === "x86_64" ? "Intel" : "Apple Silicon"}）。本包仅使用 ad hoc 签名，未使用 Developer ID，未完成公证。\n\n首次打开如果 macOS 阻止应用：\n1. 在 Finder 中双击 CoworkAny.app；如果出现拦截提示，先点“好”。\n2. 打开“系统设置”→“隐私与安全性”→“安全性”。\n3. 点击 CoworkAny.app 旁边的“仍要打开”（Open Anyway），并确认。该按钮通常只在刚刚被拦截过一次后出现。\n4. 回到 Finder，对 CoworkAny.app 按住 Control 键点击或右键，选择“打开”。\n也可以首次直接使用 Control-click CoworkAny.app →“打开”。仅在确认 ZIP 来源可信时执行上述操作。\n\n请保持 CoworkAny.app、CoworkAny Data 和 portable.flag 位于同一目录；不要把 CoworkAny Data 放入 CoworkAny.app 内。\n`
-  : "Keep CoworkAny.app, CoworkAny Data, and portable.flag together. Do not store CoworkAny Data inside CoworkAny.app.\n";
+  : "Keep CoworkAny.app, CoworkAny Data, and portable.flag together. This release package contains no provider credentials or model configuration; configure them after launch. Do not store CoworkAny Data inside CoworkAny.app.\n";
 await writeFile(join(stage, "README.txt"), instructions, "utf8");
 await promisify(execFile)("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", stage, archive]);
 console.log(JSON.stringify({ status: "packaged", mode: internal ? "internal" : "release", archive, app, dataDirectory: "CoworkAny Data" }));

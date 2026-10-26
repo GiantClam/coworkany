@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { officeSceneEnabled } from "../src/virtual-office/renderer-gate";
 
-test("production keeps React as the default until Pixi is explicitly enabled", () => {
-  assert.equal(officeSceneEnabled({}), false);
-  assert.equal(officeSceneEnabled({ DEV: false }), false);
+test("production enables the bundled Pixi scene by default", () => {
+  assert.equal(officeSceneEnabled({}), true);
+  assert.equal(officeSceneEnabled({ DEV: false }), true);
   assert.equal(officeSceneEnabled({ DEV: false, VITE_COWORKANY_VIRTUAL_OFFICE_PIXI: "1" }), true);
   assert.equal(officeSceneEnabled({ DEV: false, VITE_COWORKANY_VIRTUAL_OFFICE_PIXI: "true" }), false);
 });
