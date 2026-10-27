@@ -9,7 +9,7 @@ import test, { type TestContext } from "node:test";
 import { createRpcReader, encodeRpcMessage } from "../runtime/rpc";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-type CapturedEnvironment = { config: string; home: string; data: string; revision: string; path: string; pythonHome?: string; pythonNoUserSite?: string; pid: number };
+type CapturedEnvironment = { config: string; home: string; data: string; revision: string; path: string; pythonPath?: string; python3Shim?: string; pythonHome?: string; pythonNoUserSite?: string; pid: number };
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "coworkany-host-stage-"));
@@ -31,11 +31,14 @@ async function fixture(t: TestContext) {
   await put(join(agents, "agency-native.md"), "---\nname: native\ncolor: blue\n---\nNative agent\n");
   const capture = join(root, "environment.json");
   const executable = join(root, "capture-serve.mjs");
-  await put(executable, `import { writeFileSync } from 'node:fs';
+  await put(executable, `import { join } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
 writeFileSync(process.env.HOST_STAGE_CAPTURE, JSON.stringify({
   config: process.env.OPENCODE_CONFIG_DIR, home: process.env.HOME,
   data: process.env.XDG_DATA_HOME, revision: process.env.COWORKANY_SKILL_CATALOG_REVISION,
-  path: process.env.PATH, pythonHome: process.env.PYTHONHOME,
+  path: process.env.PATH, pythonPath: process.env.COWORKANY_PYTHON_PATH,
+  python3Shim: process.platform === 'win32' ? readFileSync(join(process.env.OPENCODE_CONFIG_DIR, '.coworkany-command-shims', 'python3.cmd'), 'utf8') : undefined,
+  pythonHome: process.env.PYTHONHOME,
   pythonNoUserSite: process.env.PYTHONNOUSERSITE, pid: process.pid
 }), 'utf8');
 await import(${JSON.stringify(pathToFileURL(join(desktopRoot, "test", "fixtures", "fake-opencode-serve.mjs")).href)});
@@ -100,6 +103,11 @@ test("workflow AI uses the restricted workflow agent and maximum shared output b
   assert.equal(config.agent?.["workflow-ai"]?.permission?.["*"], "deny");
   assert.equal(config.agent?.["workflow-ai"]?.permission?.skill, "allow");
   assert.deepEqual(config.provider?.local?.models?.model?.limit, { context: 200_000, output: 393_216 });
+  if (process.platform === "win32") {
+    assert.equal(environment.python3Shim, '@echo off\r\n"%COWORKANY_PYTHON_PATH%" %*\r\n');
+    assert.equal(environment.path.split(";")[0], join(environment.config, ".coworkany-command-shims"));
+    assert.equal(environment.pythonPath, join(f.root, "python", "python.exe"));
+  }
 });
 
 test("Seed 2.1 Pro OpenCode metadata matches Ark's published token limits", async t => {
@@ -147,7 +155,10 @@ test("catalog changes are applied after host restart, without replacing a live s
   assert.notEqual(updated.revision, first.revision, "support-file-only changes invalidate the catalog");
   assert.equal(await readFile(script, "utf8"), "version two");
   await assert.rejects(readFile(oldAsset), /ENOENT/);
-  assert.ok(updated.path.startsWith(`${join(f.root, "python")}${process.platform === "win32" ? ";" : ":"}${join(f.root, "python", "Scripts")}`));
+  const pythonPathPrefix = process.platform === "win32"
+    ? [join(first.config, ".coworkany-command-shims"), join(f.root, "python"), join(f.root, "python", "Scripts")].join(";")
+    : `${join(f.root, "python")}:${join(f.root, "python", "Scripts")}`;
+  assert.ok(updated.path.startsWith(pythonPathPrefix));
   if (process.platform === "darwin") {
     assert.equal(updated.pythonHome, join(f.root, "python"));
     assert.equal(updated.pythonNoUserSite, "1");

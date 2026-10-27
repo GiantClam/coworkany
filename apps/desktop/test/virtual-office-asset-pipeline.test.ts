@@ -17,6 +17,22 @@ const roleIds = [
   "video-producer",
 ] as const;
 
+async function removeTemporaryDirectory(path: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    try {
+      await rm(path, { recursive: true, force: true, maxRetries: 2, retryDelay: 250 });
+      return;
+    } catch (error) {
+      lastError = error;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") throw error;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+    }
+  }
+  throw lastError;
+}
+
 async function readManifest(outputDir: string) {
   return JSON.parse(await readFile(resolve(outputDir, "manifest.json"), "utf8")) as {
     schemaVersion: number;
@@ -74,7 +90,10 @@ test("converts the approved source families into deterministic runtime assets", 
       assert.equal(asset.height, height);
       assert.equal(asset.format, format);
       assert.equal(asset.hasAlpha, true);
-      const metadata = await sharp(resolve(first, asset.path)).metadata();
+      // On Windows Sharp/libvips may retain a transient handle for a path
+      // input after metadata() resolves. Feed it a closed readFile buffer so
+      // recursive fixture cleanup can unlink generated files deterministically.
+      const metadata = await sharp(await readFile(resolve(first, asset.path))).metadata();
       assert.equal(metadata.format, format);
       assert.equal(metadata.width, width);
       assert.equal(metadata.height, height);
@@ -110,8 +129,8 @@ test("converts the approved source families into deterministic runtime assets", 
     assert.deepEqual(rig.bones.map((bone) => bone.name), ["root", "torso", "head", "arm.l", "arm.r", "hand.l", "hand.r", "prop"]);
     assert.deepEqual(Object.keys(rig.clips), ["idle", "walk", "work", "thinking", "waiting", "completed", "error"]);
   } finally {
-    await rm(first, { recursive: true, force: true });
-    await rm(second, { recursive: true, force: true });
+    await removeTemporaryDirectory(first);
+    await removeTemporaryDirectory(second);
   }
 });
 
@@ -127,8 +146,8 @@ test("fails when an approved input is missing or not RGBA", async () => {
     await cp(resolve(badSource, "display-source-art-v1-rgb.png"), resolve(badSource, "display-source-art-v1.png"));
     await assert.rejects(() => buildVirtualOfficeAssets({ sourceDir: badSource, outputDir }), /RGBA/u);
   } finally {
-    await rm(missingSource, { recursive: true, force: true });
-    await rm(badSource, { recursive: true, force: true });
-    await rm(outputDir, { recursive: true, force: true });
+    await removeTemporaryDirectory(missingSource);
+    await removeTemporaryDirectory(badSource);
+    await removeTemporaryDirectory(outputDir);
   }
 });

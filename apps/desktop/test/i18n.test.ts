@@ -288,6 +288,11 @@ test("OpenCode loads the selected Skill without adding workflow rules", () => {
 
 test("ordinary desktop conversations do not inherit a persisted Skill", () => {
   assert.equal(resolveDesktopSkillId("/dashboard/ai", null), "auto");
+  assert.equal(resolveDesktopSkillId("/dashboard/ai?entry=consulting-advisor", null), "executive-consulting-suite");
+  assert.equal(resolveDesktopSkillId("/dashboard/ai?entry=consulting-advisor", "entry:consulting-advisor"), "executive-consulting-suite");
+  assert.equal(resolveDesktopSkillId("/dashboard/ai/conversation-1?entry=consulting-advisor", "entry:consulting-advisor"), "executive-consulting-suite");
+  assert.equal(resolveDesktopSkillId("/dashboard/ai", "entry:consulting-advisor"), "executive-consulting-suite");
+  assert.equal(resolveDesktopSkillId("/dashboard/ai", "entry:consulting-advisor"), "executive-consulting-suite");
   assert.equal(resolveDesktopSkillId("/dashboard/ai?agent=executive-ppt", "executive-ppt"), "ppt-master");
   assert.equal(resolveDesktopSkillId("/dashboard/ai?agent=executive-presentation-ppt", "executive-presentation-ppt"), "dashi-ppt");
   assert.equal(resolveDesktopSkillId("/dashboard/ai?agent=executive-legal-risk", "executive-legal-risk"), "executive-consulting-suite");
@@ -297,6 +302,12 @@ test("ordinary desktop conversations do not inherit a persisted Skill", () => {
   assert.equal(resolveDesktopSkillId("/dashboard/ai", "entry:image-assistant"), "auto");
   assert.equal(resolveDesktopSkillId("/dashboard/knowledge-base", null), "auto");
   assert.equal(resolveDesktopSkillId("/dashboard/writer", "content-writing"), "writer-orchestrator");
+});
+
+test("consulting advisor Skill tells the model to deliver a sufficiently specified business request", () => {
+  const skill = readFileSync(resolve(process.cwd(), "../../content/skills/executive-consulting-suite/SKILL.md"), "utf8");
+  assert.match(skill, /produce the deliverable in the current reply/u);
+  assert.match(skill, /Do not merely restate the request/u);
 });
 
 test("selected Skills own their interaction flow", () => {

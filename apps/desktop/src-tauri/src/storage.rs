@@ -385,7 +385,7 @@ pub struct ConversationRow { pub id: String, pub title: String, pub opencode_ses
 pub struct ArtifactRow { pub id: String, pub project_id: Option<String>, pub relative_path: String, pub mime_type: String, pub byte_length: i64, pub sha256: String, pub created_at: String, pub available: bool }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ArtifactReconciliationCandidate { pub id: String, pub relative_path: String, pub mime_type: String }
+pub struct ArtifactReconciliationCandidate { pub id: String, pub relative_path: String, pub mime_type: String, pub workspace_path: Option<String> }
 
 #[derive(Debug, Serialize)]
 pub struct MessageRow { pub id: String, pub conversation_id: String, pub role: String, pub content: String, pub parts_json: Option<String>, pub metadata_json: Option<String>, pub created_at: String }
@@ -1023,7 +1023,59 @@ pub fn artifact_reconciliation_candidates(path: &Path) -> Result<Vec<ArtifactRec
         if existing_ids.contains(&id) || candidates.iter().any(|candidate: &ArtifactReconciliationCandidate| candidate.id == id) { continue; }
         let deleted: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM deleted_artifacts WHERE id=?1)", [&id], |row| row.get(0))?;
         if deleted { continue; }
-        candidates.push(ArtifactReconciliationCandidate { id, relative_path: relative_path.to_owned(), mime_type: mime_type.to_owned() });
+        candidates.push(ArtifactReconciliationCandidate { id, relative_path: relative_path.to_owned(), mime_type: mime_type.to_owned(), workspace_path: None });
+    }
+    Ok(candidates)
+}
+
+pub fn presentation_export_artifact_candidates(path: &Path, trusted_roots: &[PathBuf]) -> Result<Vec<ArtifactReconciliationCandidate>> {
+    initialize(path)?;
+    let connection = open(path)?;
+    let existing_ids = connection
+        .prepare("SELECT id FROM artifacts")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    let deleted_ids = connection
+        .prepare("SELECT id FROM deleted_artifacts")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    let events = connection
+        .prepare("SELECT runs.id, run_events.payload_json FROM run_events JOIN runs ON runs.id=run_events.run_id WHERE runs.source='ppt' AND runs.status='succeeded' AND run_events.event_type='tool_event' ORDER BY run_events.id ASC")?
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let roots = trusted_roots.iter().filter_map(|root| root.canonicalize().ok()).collect::<Vec<_>>();
+    let mut candidates = Vec::new();
+    for (run_id, payload_json) in events {
+        let Ok(payload) = serde_json::from_str::<Value>(&payload_json) else { continue; };
+        if payload.get("event").and_then(Value::as_str) != Some("tool_event")
+            || payload.get("phase").and_then(Value::as_str) != Some("completed")
+            || payload.get("tool").and_then(Value::as_str) != Some("glob") { continue; }
+        let Some(paths) = payload.get("paths").and_then(Value::as_array) else { continue; };
+        for value in paths {
+            let Some(raw_path) = value.as_str() else { continue; };
+            let export_directory = PathBuf::from(raw_path);
+            let Ok(export_directory) = export_directory.canonicalize() else { continue; };
+            if export_directory.file_name().and_then(|name| name.to_str()).is_none_or(|name| !name.eq_ignore_ascii_case("exports")) { continue; }
+            for root in &roots {
+                if !export_directory.starts_with(root) { continue; }
+                let Ok(relative_directory) = export_directory.strip_prefix(root) else { continue; };
+                let Ok(entries) = fs::read_dir(&export_directory) else { continue; };
+                for entry in entries.flatten() {
+                    let file_type = match entry.file_type() { Ok(value) => value, Err(_) => continue };
+                    if !file_type.is_file() || entry.path().extension().and_then(|value| value.to_str()).is_none_or(|ext| !ext.eq_ignore_ascii_case("pptx")) { continue; }
+                    let mut relative = relative_directory.join(entry.file_name()).to_string_lossy().replace('\\', "/");
+                    if !safe_artifact_relative_path(&relative) { continue; }
+                    let id = format!("{run_id}:{relative}");
+                    if existing_ids.contains(&id) || deleted_ids.contains(&id) || candidates.iter().any(|candidate: &ArtifactReconciliationCandidate| candidate.id == id) { continue; }
+                    candidates.push(ArtifactReconciliationCandidate {
+                        id,
+                        relative_path: std::mem::take(&mut relative),
+                        mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
+                        workspace_path: Some(root.to_string_lossy().into_owned()),
+                    });
+                }
+            }
+        }
     }
     Ok(candidates)
 }
@@ -1262,7 +1314,58 @@ mod tests {
             id: "run-ppt:exports/deck.pptx".to_string(),
             relative_path: "exports/deck.pptx".to_string(),
             mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
+            workspace_path: None,
         }]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovers_existing_pptx_in_a_trusted_completed_exports_directory() {
+        let root = std::env::temp_dir().join(format!("coworkany-storage-ppt-export-reconcile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let trusted = root.join("trusted-projects");
+        let exports = trusted.join("presentation-project").join("exports");
+        let path = root.join("app.db");
+        std::fs::create_dir_all(&exports).unwrap();
+        std::fs::create_dir_all(trusted.join("presentation-project").join("validation")).unwrap();
+        std::fs::write(exports.join("final-deck.pptx"), b"pptx").unwrap();
+        std::fs::write(exports.join("preview.html"), b"preview").unwrap();
+        std::fs::write(trusted.join("presentation-project").join("validation").join("backup.pptx"), b"temporary").unwrap();
+        create_run_with_context(&path, "ppt-run", None, Some("gpt-6-luna"), Some("ppt"), None).unwrap();
+        create_run_with_context(&path, "chat-run", None, Some("gpt-6-luna"), Some("conversation"), None).unwrap();
+        let event = |export_dir: &Path| serde_json::json!({ "event":"tool_event", "tool":"glob", "phase":"completed", "paths":[export_dir.to_string_lossy()] }).to_string();
+        append_run_event(&path, "ppt-run", 1, "tool_event", &event(&exports)).unwrap();
+        append_run_event(&path, "chat-run", 1, "tool_event", &event(&exports)).unwrap();
+        finish_run(&path, "ppt-run", "succeeded").unwrap();
+        finish_run(&path, "chat-run", "succeeded").unwrap();
+
+        let candidates = presentation_export_artifact_candidates(&path, std::slice::from_ref(&trusted)).unwrap();
+
+        assert_eq!(candidates, vec![ArtifactReconciliationCandidate {
+            id: "ppt-run:presentation-project/exports/final-deck.pptx".to_string(),
+            relative_path: "presentation-project/exports/final-deck.pptx".to_string(),
+            mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
+            workspace_path: Some(trusted.canonicalize().unwrap().to_string_lossy().into_owned()),
+        }]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ppt_export_reconciliation_respects_artifact_deletion_tombstones() {
+        let root = std::env::temp_dir().join(format!("coworkany-storage-ppt-export-deleted-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let trusted = root.join("projects");
+        let exports = trusted.join("project").join("exports");
+        let path = root.join("app.db");
+        std::fs::create_dir_all(&exports).unwrap();
+        std::fs::write(exports.join("deck.pptx"), b"pptx").unwrap();
+        create_run_with_context(&path, "ppt-deleted", None, Some("model"), Some("ppt"), None).unwrap();
+        let event = serde_json::json!({ "event":"tool_event", "tool":"glob", "phase":"completed", "paths":[exports.to_string_lossy()] }).to_string();
+        append_run_event(&path, "ppt-deleted", 1, "tool_event", &event).unwrap();
+        finish_run(&path, "ppt-deleted", "succeeded").unwrap();
+        remove_artifact(&path, "ppt-deleted:project/exports/deck.pptx").unwrap();
+
+        assert!(presentation_export_artifact_candidates(&path, std::slice::from_ref(&trusted)).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 

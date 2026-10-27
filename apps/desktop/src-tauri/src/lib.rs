@@ -853,8 +853,10 @@ fn register_artifact(app: tauri::AppHandle, artifact_id: String, project_id: Opt
 }
 
 fn reconcile_persisted_artifacts(roots: &[PathBuf], database: &std::path::Path) -> Result<(), String> {
-  for candidate in storage::artifact_reconciliation_candidates(database).map_err(|error| error.to_string())? {
-    for root in roots {
+  let mut candidates = storage::artifact_reconciliation_candidates(database).map_err(|error| error.to_string())?;
+  candidates.extend(storage::presentation_export_artifact_candidates(database, roots).map_err(|error| error.to_string())?);
+  for candidate in candidates {
+    for root in roots.iter().filter(|root| candidate.workspace_path.as_deref().is_none_or(|workspace| root.to_string_lossy() == workspace)) {
       if let Ok(metadata) = artifacts::inspect(root, &candidate.relative_path, &candidate.mime_type) {
         storage::register_artifact(database, &candidate.id, None, &metadata).map_err(|error| error.to_string())?;
         break;

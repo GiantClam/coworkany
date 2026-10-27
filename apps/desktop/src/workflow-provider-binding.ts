@@ -21,6 +21,16 @@ const PROVIDER_NODE_TYPES = new Set<WorkflowNodeType>([
   "audio_generate",
 ]);
 
+/** Return the model actually selected by provider-backed workflow nodes. */
+export function summarizeWorkflowModels(definition: WorkflowDefinitionEnvelope) {
+  const models = [...new Set(definition.nodes.flatMap((node) => {
+    if (!PROVIDER_NODE_TYPES.has(node.type as WorkflowNodeType)) return [];
+    const model = typeof node.config.model === "string" ? node.config.model.trim() : "";
+    return model ? [model] : [];
+  }))];
+  return { ...(models.length === 1 ? { model: models[0] } : {}), models };
+}
+
 function runningHubWorkflowCapabilityForNode(node: WorkflowDefinitionEnvelope["nodes"][number]) {
   if (node.type === "agent_execute" && node.config.operation === "audio_transcription") return "audio_transcription" as const;
   if (node.type === "image_generate") return "image" as const;

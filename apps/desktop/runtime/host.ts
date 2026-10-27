@@ -443,31 +443,62 @@ function fileArtifactPaths(workspacePath: string, events: readonly OpenCodeRunti
   return [...candidates.values()];
 }
 
-function presentationExportArtifacts(workspacePath: string, runId?: string) {
-  if (!runId) return [];
-  const presentationRunId = runId.split(":", 1)[0]?.replace(/[^a-zA-Z0-9_-]/g, "_") ?? "";
-  if (!presentationRunId) return [];
+function presentationExportArtifacts(workspacePath: string, events: readonly OpenCodeRuntimeEvent[], startedAt: number) {
   const candidates = new Map<string, { readonly workspacePath: string; readonly relativePath: string }>();
-  for (const root of artifactWorkspaceRoots(workspacePath)) {
+  const addExports = (root: string, exportDirectory: string, recentOnly: boolean) => {
     try {
-      for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (!entry.isDirectory() || !entry.name.startsWith(presentationRunId)) continue;
-        const exportDirectory = join(root, entry.name, "exports");
-        for (const exportEntry of readdirSync(exportDirectory, { withFileTypes: true })) {
-          if (!exportEntry.isFile() || !/\.pptx$/iu.test(exportEntry.name)) continue;
-          const relativePath = join(entry.name, "exports", exportEntry.name).replaceAll("\\", "/");
-          candidates.set(`${root}\u0000${relativePath}`, { workspacePath: root, relativePath });
-        }
+      const relativeDirectory = relativePath(root, exportDirectory).replaceAll("\\", "/");
+      if (relativeDirectory === ".." || relativeDirectory.startsWith("../") || basename(exportDirectory).toLowerCase() !== "exports") return;
+      for (const entry of readdirSync(exportDirectory, { withFileTypes: true })) {
+        if (!entry.isFile() || !/\.pptx$/iu.test(entry.name)) continue;
+        const absolutePath = resolve(exportDirectory, entry.name);
+        if (recentOnly && statSync(absolutePath).mtimeMs < startedAt - 5_000) continue;
+        const relative = join(relativeDirectory, entry.name).replaceAll("\\", "/");
+        if (isProcessArtifactPath(relative)) continue;
+        candidates.set(`${root}\u0000${relative}`, { workspacePath: root, relativePath: relative });
       }
-    } catch {
-      // A normal non-PPT workspace has no exports directory to inspect.
+    } catch { /* an exports directory may disappear before the final scan */ }
+  };
+  for (const event of events) {
+    if (event.event !== "tool_event" || event.phase !== "completed" || event.tool !== "glob") continue;
+    for (const candidate of event.paths ?? []) {
+      for (const root of artifactWorkspaceRoots(workspacePath)) {
+        const relativeDirectory = workspaceRelativeFilePath(root, candidate);
+        if (!relativeDirectory || basename(relativeDirectory).toLowerCase() !== "exports") continue;
+        addExports(root, resolve(root, relativeDirectory), true);
+      }
+    }
+  }
+  // Some Skill/tool adapter versions report the shell command but omit the
+  // final glob path. Recover only fresh PPTX files beneath trusted roots and
+  // a bounded directory depth; never sweep backup, validation, or scratch
+  // trees looking for arbitrary office files.
+  for (const root of artifactWorkspaceRoots(workspacePath)) {
+    const pending: Array<{ readonly directory: string; readonly depth: number }> = [{ directory: root, depth: 0 }];
+    let visited = 0;
+    while (pending.length && visited < 512) {
+      const current = pending.pop();
+      if (!current) continue;
+      visited += 1;
+      if (basename(current.directory).toLowerCase() === "exports") {
+        addExports(root, current.directory, true);
+        continue;
+      }
+      if (current.depth >= 4 || isProcessArtifactPath(relativePath(root, current.directory).replaceAll("\\", "/"))) continue;
+      try {
+        for (const entry of readdirSync(current.directory, { withFileTypes: true })) {
+          if (entry.isDirectory() && !PROCESS_ARTIFACT_DIRECTORIES.has(entry.name.toLowerCase())) {
+            pending.push({ directory: resolve(current.directory, entry.name), depth: current.depth + 1 });
+          }
+        }
+      } catch { /* inaccessible and transient directories are ignored */ }
     }
   }
   return [...candidates.values()];
 }
 
-function localFileArtifacts(workspacePath: string, events: readonly OpenCodeRuntimeEvent[], runId?: string) {
-  const candidates = [...fileArtifactPaths(workspacePath, events), ...presentationExportArtifacts(workspacePath, runId)];
+function localFileArtifacts(workspacePath: string, events: readonly OpenCodeRuntimeEvent[], runId?: string, pptxOnly = false, startedAt = Date.now()) {
+  const candidates = [...fileArtifactPaths(workspacePath, events), ...(pptxOnly ? presentationExportArtifacts(workspacePath, events, startedAt) : [])];
   const unique = new Map(candidates.map((candidate) => [`${candidate.workspacePath}\u0000${candidate.relativePath}`, candidate]));
   return [...unique.values()].flatMap(({ workspacePath: root, relativePath }) => {
     try {
@@ -686,12 +717,12 @@ async function runVideoCompose(
   return { artifacts: [artifact], asset: artifact, video: [artifact], status: "succeeded" };
 }
 
-async function emitFinalFileArtifacts(command: HostCommand, runId: string, workspacePath: string, events: readonly OpenCodeRuntimeEvent[], allowArtifacts: boolean, pptxOnly = false) {
+async function emitFinalFileArtifacts(command: HostCommand, runId: string, workspacePath: string, events: readonly OpenCodeRuntimeEvent[], allowArtifacts: boolean, pptxOnly = false, startedAt = Date.now()) {
   if (!allowArtifacts) return;
   // Emit only after the model turn has completed. Repeated writes are
   // collapsed to one card per path, and metadata describes the final
   // on-disk version instead of an intermediate tool step.
-  const artifacts = localFileArtifacts(workspacePath, events, runId).filter((artifact) => !pptxOnly || artifact.relativePath.toLowerCase().endsWith(".pptx"));
+  const artifacts = localFileArtifacts(workspacePath, events, runId, pptxOnly, startedAt).filter((artifact) => !pptxOnly || artifact.relativePath.toLowerCase().endsWith(".pptx"));
   for (const artifact of artifacts) {
     const { workspacePath: artifactWorkspacePath, relativePath: relative, mimeType, bytes } = artifact;
     let registration: Record<string, unknown> | undefined;
@@ -724,6 +755,7 @@ async function runOpenCode(command: HostCommand, session?: { readonly workspaceP
   const prompt = typeof command.payload?.prompt === "string" ? command.payload.prompt : "";
   if (!prompt.trim()) return fail(command, "invalid_prompt", "prompt is required");
   const runId = command.runId ?? randomUUID();
+  const runStartedAt = Date.now();
   const modelHint = typeof command.payload?.model === "string" ? command.payload.model : undefined;
   const skillId = typeof command.payload?.skillId === "string" ? command.payload.skillId : undefined;
   const pptSkill = skillId?.trim().toLowerCase() === "ppt-master" || skillId?.trim().toLowerCase() === "dashi-ppt";
@@ -753,7 +785,7 @@ async function runOpenCode(command: HostCommand, session?: { readonly workspaceP
     if (options.respond !== false) respond(command, { runId });
     const events: OpenCodeRuntimeEvent[] = [];
     managedProviderRuntime.assertCurrent(generation);
-    await client.prompt(persistentSession.sessionId, workspacePath, runId, prompt, openCodeProvider(provider), (event) => { const enriched = managedProviderRuntime.redact(enrichUsageEvent(event, provider, modelHint)); events.push(enriched); emit(command, enriched); }, options.signal, persistentSession.agentName ?? agentName, async () => emitFinalFileArtifacts(command, runId, workspacePath, events, allowArtifacts, pptSkill), skillId);
+    await client.prompt(persistentSession.sessionId, workspacePath, runId, prompt, openCodeProvider(provider), (event) => { const enriched = managedProviderRuntime.redact(enrichUsageEvent(event, provider, modelHint)); events.push(enriched); emit(command, enriched); }, options.signal, persistentSession.agentName ?? agentName, async () => emitFinalFileArtifacts(command, runId, workspacePath, events, allowArtifacts, pptSkill, runStartedAt), skillId);
     return events;
   }
   managedProviderRuntime.assertCurrent(generation);
@@ -1031,13 +1063,27 @@ async function retryTransientMediaJob<T>(operation: () => Promise<T>) {
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-function withPrivatePython(environment: NodeJS.ProcessEnv) {
+async function withPrivatePython(environment: NodeJS.ProcessEnv) {
   const executable = environment.COWORKANY_PYTHON_PATH;
   if (!executable) return environment;
   const separator = process.platform === "win32" ? ";" : ":";
   const pathKey = Object.keys(environment).find(key => key.toUpperCase() === "PATH") ?? "PATH";
   const entries = Object.entries(environment).filter(([key]) => key.toUpperCase() !== "PATH");
-  const privateEnvironment: NodeJS.ProcessEnv = { ...Object.fromEntries(entries), PATH: `${dirname(executable)}${separator}${join(dirname(executable), "Scripts")}${separator}${environment[pathKey] ?? ""}` };
+  const shimDirectory = process.platform === "win32" && environment.OPENCODE_CONFIG_DIR
+    ? join(environment.OPENCODE_CONFIG_DIR, ".coworkany-command-shims")
+    : undefined;
+  if (shimDirectory) {
+    await mkdir(shimDirectory, { recursive: true });
+    // PPT Master documents `python3` in its commands but explicitly falls
+    // back to `python` on Windows. WindowsApps can shadow that fallback with
+    // a Store stub; put a private alias first so both names invoke the exact
+    // interpreter already probed and supplied by Tauri.
+    await writeFile(join(shimDirectory, "python3.cmd"), '@echo off\r\n"%COWORKANY_PYTHON_PATH%" %*\r\n', "utf8");
+  }
+  const privatePath = [shimDirectory, dirname(executable), join(dirname(executable), "Scripts"), environment[pathKey]]
+    .filter((entry): entry is string => Boolean(entry))
+    .join(separator);
+  const privateEnvironment: NodeJS.ProcessEnv = { ...Object.fromEntries(entries), PATH: privatePath };
   if (process.platform === "darwin" && existsSync(join(dirname(executable), "lib"))) {
     privateEnvironment.PYTHONHOME = dirname(executable);
     privateEnvironment.PYTHONNOUSERSITE = "1";
@@ -1189,7 +1235,7 @@ async function createOpenCodeEnvironment(configDirectory: string, provider: Prov
   const isolatedDataHome = join(isolatedHome, ".data");
   const isolatedCacheHome = join(isolatedHome, ".cache");
   const isolatedStateHome = join(isolatedHome, ".state");
-  return withPrivatePython({
+  return await withPrivatePython({
     ...process.env,
     HOME: isolatedHome,
     USERPROFILE: isolatedHome,
@@ -1305,7 +1351,7 @@ async function stageSkillWorkspace(workspacePath: string) {
 async function runWorkflow(command: HostCommand) {
   const definition = command.payload?.definition;
   if (!definition || typeof definition !== "object") return fail(command, "invalid_workflow", "workflow definition is required");
-  const runId = command.runId ?? randomUUID(); const workspacePath = workspacePathFromPayload(command.payload?.workspacePath) || process.cwd();
+  const runId = command.runId ?? randomUUID(); const runStartedAt = Date.now(); const workspacePath = workspacePathFromPayload(command.payload?.workspacePath) || process.cwd();
   const providerProfiles = readProviderMap(command.payload?.providers);
   const workflowNodes = Array.isArray((definition as { nodes?: unknown }).nodes) ? (definition as { nodes: unknown[] }).nodes : [];
   diagnosticLog("workflow_run_received", {
@@ -1452,7 +1498,7 @@ async function runWorkflow(command: HostCommand) {
       const runtimeError = (events ?? []).find((event) => event.event === "runtime_error");
       if (runtimeError?.event === "runtime_error") throw new Error(runtimeError.message);
       const text = (events ?? []).filter((event): event is Extract<OpenCodeRuntimeEvent, { event: "text_delta" }> => event.event === "text_delta").map((event) => event.delta).join("");
-      const artifacts = localFileArtifacts(workspacePath, events ?? [], runId);
+      const artifacts = localFileArtifacts(workspacePath, events ?? [], runId, executorId === "ppt_generate", runStartedAt);
       return { text, ...(artifacts.length ? { artifacts, ...(executorId === "ppt_generate" ? { ppt: artifacts } : {}) } : {}) };
     }, resume: async ({ executorId, nodeKey, config, inputs, providerTaskId }, signal) => {
       if (["image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate"].includes(executorId)) {

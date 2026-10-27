@@ -145,13 +145,18 @@ const server = createServer(async (request, response) => {
       payload.model = { providerID, modelID: model.join("/") };
       if (payload.command === "ppt-master") {
         const artifactDirectory = process.env.FAKE_OPENCODE_ARTIFACT_DIRECTORY;
-        if (artifactDirectory) {
+        const exportDirectory = process.env.FAKE_OPENCODE_PPT_EXPORT_DIRECTORY;
+        if (exportDirectory) {
+          mkdirSync(exportDirectory, { recursive: true });
+          createdArtifactPath = join(exportDirectory, "generated-deck.pptx");
+        } else if (artifactDirectory) {
           mkdirSync(artifactDirectory, { recursive: true });
           createdArtifactPath = join(artifactDirectory, "workflow-deck.pptx");
         } else createdArtifactPath = "workflow-deck.pptx";
         writeFileSync(createdArtifactPath, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0, 0, 0]));
         if (process.env.FAKE_OPENCODE_PPT_PROCESS_FILES === "1") {
-          createdProcessPaths = ["backup/draft.pptx", "validation/report.json", "svg_output/slide-1.svg", "tmp/render.tmp"].map((relativePath) => join(artifactDirectory || ".", relativePath));
+          const processRoot = artifactDirectory || (exportDirectory ? dirname(exportDirectory) : ".");
+          createdProcessPaths = ["backup/draft.pptx", "validation/report.json", "svg_output/slide-1.svg", "tmp/render.tmp", "logs/tool.log", "cache/preview.json"].map((relativePath) => join(processRoot, relativePath));
           for (const processPath of createdProcessPaths) {
             mkdirSync(dirname(processPath), { recursive: true });
             writeFileSync(processPath, "process artifact", "utf8");
@@ -276,7 +281,12 @@ const server = createServer(async (request, response) => {
       sendEvent({ payload: { type: "message.updated", properties: { ...sessionProperty, info: { id: "assistant-1", role: "assistant", time: { completed: Date.now() } } } } });
       sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "text-1", messageID: "assistant-1", type: "text", text: answer } } } });
       const pptPreviewPath = process.env.FAKE_OPENCODE_PPT_PREVIEW === "1" && typeof prompt === "string" && prompt.includes("ppt-master") ? "workflow-preview.html" : undefined;
-      sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "tool-1", messageID: "assistant-1", type: "tool", tool: createdArtifactPath ? "bash" : tool, state: { status: "completed", title: "saved", ...(prompt === "Create chat artifact" ? { input: { filePath: "chat-final.md", content: "final chat artifact\\n" }, output: { path: "chat-final.md" } } : createdArtifactPath ? { output: { path: createdArtifactPath, ...(pptPreviewPath ? { result: { path: pptPreviewPath } } : {}), ...(createdProcessPaths.length ? { metadata: createdProcessPaths.map((path) => ({ path })) } : {}) } } : {}) } } } } });
+      const pptExportDirectory = process.env.FAKE_OPENCODE_PPT_EXPORT_DIRECTORY;
+      sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "tool-1", messageID: "assistant-1", type: "tool", tool: createdArtifactPath ? "bash" : tool, state: { status: "completed", title: "saved", ...(prompt === "Create chat artifact" ? { input: { filePath: "chat-final.md", content: "final chat artifact\\n" }, output: { path: "chat-final.md" } } : createdArtifactPath && !pptExportDirectory ? { output: { path: createdArtifactPath, ...(pptPreviewPath ? { result: { path: pptPreviewPath } } : {}), ...(createdProcessPaths.length ? { metadata: createdProcessPaths.map((path) => ({ path })) } : {}) } } : {}) } } } } });
+      if (pptExportDirectory) {
+        const exportTool = process.env.FAKE_OPENCODE_PPT_EXPORT_TOOL === "bash" ? "bash" : "glob";
+        sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "tool-glob-exports", messageID: "assistant-1", type: "tool", tool: exportTool, state: { status: "completed", input: { path: pptExportDirectory }, output: process.env.FAKE_OPENCODE_PPT_EXPORT_TOOL === "bash" ? { path: pptExportDirectory } : { files: [createdArtifactPath] } } } } } });
+      }
       sendEvent({ payload: { type: "message.part.updated", properties: { ...sessionProperty, part: { id: "usage-1", messageID: "assistant-1", type: "step-finish", tokens: { input: 11, output: 7 }, cost: 0.02 } } } });
       sendEvent({ payload: { type: "session.status", properties: { ...sessionProperty, status: { type: "idle" } } } });
     }, 25);

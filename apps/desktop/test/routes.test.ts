@@ -247,7 +247,8 @@ test("model changes persist to the resolved compatible profile after fallback", 
 
 test("desktop usage records the model reported by the active Provider event", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  assert.match(appSource, /event\.model\?\.trim\(\) \|\| runModelsRef\.current\.get\(event\.runId\) \|\| configRef\.current\.provider\.model \|\| "unknown"/);
+  assert.match(appSource, /resolveDesktopRunModel\(normalizedMetric\.model, runModelsRef\.current\.get\(event\.runId\), configRef\.current\.provider\.model\)/);
+  assert.match(appSource, /resolveDesktopRunModel\(event\.model, runModelsRef\.current\.get\(event\.runId\), configRef\.current\.provider\.model\)/);
 });
 
 test("desktop home keeps the cloud entry grouping and includes the local read-only Agent Center", () => {
@@ -1436,6 +1437,9 @@ test("desktop workflow runs do not claim an AI or Agent conversation run", () =>
   assert.match(runSource, /if \(!isWorkflowRun && conversationId\) updateVisibleConversationMessages/);
   assert.match(runSource, /if \(!isWorkflowRun && conversationId && runIsVisible\(\)\) setActiveConversationId/);
   assert.match(runSource, /setDomainStatus/);
+  assert.match(runSource, /summarizeWorkflowModels\(bindWorkflowProviderDefaults\(launchWorkflowDefinition \?\? currentWorkflowDefinition\(\), launchConfig\)\)/u);
+  assert.match(runSource, /workbenchClient\.runs\.start\(\{ id: runId, conversationId, prompt: userPrompt, model: workflowModelSummary\.model \|\| undefined/u);
+  assert.match(runSource, /workflowModels: workflowModelSummary\.models/u);
   assert.match(runSource, /if \(isWorkflowRun\) \{[\s\S]*?setWorkflowRunStatus/);
   assert.match(appSource, /const runId = currentWorkflowRunId \?\? conversationRunId \?\? queryRunIsVisible \?\? visibleActiveRun/);
 });

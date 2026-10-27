@@ -27,7 +27,7 @@ import { capabilityForWorkflowAction, configuredModelOptions, configuredProvider
 import { CHEAPBUDDY, createCheapBuddyProvider, mergeCheapBuddyProvider } from "./cheapbuddy";
 import { CheapBuddyAccountPanel } from "./cheapbuddy-account";
 import { SIGNED_OUT_CHEAPBUDDY_STATE, type CheapBuddyAccountAction, type CheapBuddyAccountState } from "./cheapbuddy-contract";
-import { bindWorkflowProviderDefaults, isMediaWorkflowNodeType } from "./workflow-provider-binding";
+import { bindWorkflowProviderDefaults, isMediaWorkflowNodeType, summarizeWorkflowModels } from "./workflow-provider-binding";
 import { applyConfiguredMediaModels } from "./media-model-options";
 import { buildDesktopImageRunInput, getDesktopImageParameterSchema, normalizeDesktopImageSettings, resolveDesktopImageModelKind } from "./image-model-parameters";
 import { createSessionRecoverySnapshot } from "./session-recovery";
@@ -53,6 +53,7 @@ import { isWorkbenchQuestionToolEvent } from "@coworkany/workbench-client";
 import { questionConversationForRoute, questionSessionIdForRoute } from "./question-session-route";
 import { isCurrentWorkflowRestore, type WorkflowRestoreToken } from "./workflow-restore-guard";
 import { normalizeDesktopMetricEvent } from "./run-metrics-events";
+import { resolveDesktopRunModel } from "./desktop-run-model";
 import { DesktopUsageDashboard } from "./usage-dashboard";
 import { ImageMaskEditor } from "./image-mask-editor";
 import { createWorkflowAiController, parseWorkflowAiAssistantResponse, recordWorkflowAiRepairAttempt, resolveWorkflowAiTextProvider, shouldRetryWorkflowAiRepair, workflowAiProviderOptions, type WorkflowAiController } from "./workflow-ai-controller";
@@ -1092,6 +1093,8 @@ export function localizedSkillSystemPrompt(_skillId: SkillId, _locale: "zh" | "e
 export function resolveDesktopSkillId(path: string, requestedAgentId: string | null): SkillId {
   if (path.includes("executive-ppt")) return "ppt-master";
   if (path.includes("executive-presentation-ppt")) return "dashi-ppt";
+  if (requestedAgentId === "entry:consulting-advisor") return "executive-consulting-suite";
+  if (new URLSearchParams(path.split("?", 2)[1] ?? "").get("entry") === "consulting-advisor") return "executive-consulting-suite";
   // Agency Agents are packaged as native OpenCode agents, not Skills. The
   // selected agent is sent separately as `agentId` on the session prompt.
   if (requestedAgentId?.startsWith("agency-")) return "auto";
@@ -4047,7 +4050,9 @@ export function App() {
   const requestedAgentId = activePath.startsWith("/dashboard/ai")
     ? (new URLSearchParams(activePath.split("?", 2)[1] ?? "").get("agent")?.trim() || (conversationScope?.startsWith("entry:") ? null : conversationScope))
     : null;
-  const effectiveSkillId: SkillId = resolveDesktopSkillId(selected.path, requestedAgentId);
+  // Resolve entry-scoped advisor Skills from the full path. The route manifest
+  // may resolve the UI to its base path before a chat ID is attached.
+  const effectiveSkillId: SkillId = resolveDesktopSkillId(activePath, requestedAgentId ?? conversationScope);
   const localAgentGroups = useMemo(() => [...buildOnlineAgentGroups(locale, Boolean(activeModel.trim())), ...buildAgencyAgentGroups(locale, Boolean(activeModel.trim())), ...buildLocalAgentGroups(localSkills, locale, Boolean(activeModel.trim()))], [activeModel, localSkills, locale]);
   const workflowAgentOptions = useMemo<WorkflowDynamicOption[]>(() => localAgentGroups.flatMap((group) => group.cards.map((card) => ({ value: card.id, label: card.title, description: card.description }))), [localAgentGroups]);
   const agentCardsById = useMemo(() => new Map(localAgentGroups.flatMap((group) => group.cards.map((card) => [card.id, card] as const))), [localAgentGroups]);
@@ -5190,7 +5195,7 @@ export function App() {
             const metric = normalizedMetric.kind === "usage" ? {
               ...normalizedMetric,
               provider: normalizedMetric.provider ?? configRef.current.provider.id,
-              model: normalizedMetric.model ?? runModelsRef.current.get(event.runId) ?? configRef.current.provider.model ?? "unknown",
+              model: resolveDesktopRunModel(normalizedMetric.model, runModelsRef.current.get(event.runId), configRef.current.provider.model),
             } satisfies UsageMetricEvent : normalizedMetric;
             const accumulator = applyRunMetricsEvent(metricAccumulators.get(event.runId) ?? createRunMetricsAccumulator(event.runId), metric);
             metricAccumulators.set(event.runId, accumulator);
@@ -5246,7 +5251,7 @@ export function App() {
           }
           if (eventType === "usage") {
             const provider = event.provider ?? configRef.current.provider.id;
-            const model = event.model?.trim() || runModelsRef.current.get(event.runId) || configRef.current.provider.model || "unknown";
+            const model = resolveDesktopRunModel(event.model, runModelsRef.current.get(event.runId), configRef.current.provider.model);
             const createdAt = new Date().toISOString();
             const parts = assistantPartsRef.current.get(event.runId) ?? [];
             assistantPartsRef.current.set(event.runId, applyWorkbenchRunEventToParts(parts, { type: "usage", usage: { runId: event.runId, usageId: event.usageId, provider, model, inputTokens: event.inputTokens, outputTokens: event.outputTokens, cachedInputTokens: event.cachedInputTokens, reasoningTokens: event.reasoningTokens, providerCost: event.costUsd, aggregation: event.aggregation === "snapshot" ? "snapshot" : "delta", scope: event.scope === "run" ? "run" : "step" }, sequence, createdAt }));
@@ -6352,13 +6357,16 @@ export function App() {
            ? requestedModel
            : capabilityProvider.model,
        };
-       runModelsRef.current.set(runId, selectedProvider.model);
+       const workflowModelSummary = isWorkflowRun
+         ? summarizeWorkflowModels(bindWorkflowProviderDefaults(launchWorkflowDefinition ?? currentWorkflowDefinition(), launchConfig))
+         : { model: selectedProvider.model, models: selectedProvider.model ? [selectedProvider.model] : [] };
+       runModelsRef.current.set(runId, workflowModelSummary.model ?? (isWorkflowRun ? "unknown" : selectedProvider.model));
        // Image generation is a media workflow, not a Skill-driven text turn.
        // Keep the writer Skill out of this run so a Skill's example provider or
        // model can never compete with the configured image capability.
        const runSkillId: SkillId = actionId === "image_generate" ? "auto" : launchEffectiveSkillId;
        const runSource = isWorkflowRun ? "workflow" : actionId === "ppt_generate" ? "ppt" : mediaFeatureId ? "media" : conversationAgentId ? "agent" : "conversation";
-       await workbenchClient.runs.start({ id: runId, conversationId, prompt: userPrompt, model: selectedProvider.model || undefined, skillId: runSkillId, reasoningEffort: selectedProvider.reasoningEffort ?? reasoningEffort, source: runSource, assistantMessageId: conversationId ? `assistant-${runId}` : undefined });
+       await workbenchClient.runs.start({ id: runId, conversationId, prompt: userPrompt, model: workflowModelSummary.model || undefined, skillId: runSkillId, reasoningEffort: selectedProvider.reasoningEffort ?? reasoningEffort, source: runSource, assistantMessageId: conversationId ? `assistant-${runId}` : undefined });
        const workflowDefinitionSnapshot = isWorkflowRun
          ? sanitizeWorkflowDefinitionForStorage(launchWorkflowDefinition ?? currentWorkflowDefinition())
          : undefined;
@@ -6388,6 +6396,7 @@ export function App() {
           : undefined;
        const taskMetadata: DesktopTaskMetadata = {
        kind: isWorkflowRun ? "workflow" : mediaFeatureId ? "media" : "agent",
+       ...(isWorkflowRun ? { workflowModels: workflowModelSummary.models } : {}),
        ...(mediaFeatureId && mediaFeatureId !== "image_generate" ? { featureId: mediaFeatureId } : {}),
        ...(actionId === "image_generate" ? { imageGeneration: buildDesktopImageGenerationMetadata(displayedUserPrompt, resolvedMediaInputs) } : {}),
          ...(savedWorkflowForRun ? { workflowId: savedWorkflowForRun.id, workflowTitle: savedWorkflowForRun.name, definitionHash: workflowDefinitionSnapshot?.definitionHash, workflowDefinition: workflowDefinitionSnapshot } : {}),
@@ -6398,7 +6407,7 @@ export function App() {
        setRunMetadataById((current) => new Map(current).set(runId, taskMetadata));
        await tauriBridge.invoke("append_run_event", { runId, sequence: -1, eventType: "task_metadata", payloadJson: JSON.stringify(taskMetadata) });
        persistedRun = true;
-       setRuns((current) => [{ id: runId, conversation_id: conversationId, status: "running", model: selectedProvider.model || null, started_at: new Date().toISOString(), finished_at: null }, ...current].slice(0, 100));
+       setRuns((current) => [{ id: runId, conversation_id: conversationId, status: "running", model: workflowModelSummary.model || null, started_at: new Date().toISOString(), finished_at: null }, ...current].slice(0, 100));
         const workflowExecutionPrompt = launchSelectedPath === "/dashboard/workflows" && actionId === "writer"
         ? `${runtimePrompt}\n\n输出约束：只输出可直接交付的最终中文营销文案；不要解释过程，不要提及 Skill、模型或工具，不要输出英文前言。按用户要求保留标题、正文和行动号召。`
         : runtimePrompt;
