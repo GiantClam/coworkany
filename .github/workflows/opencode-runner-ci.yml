@@ -9,6 +9,10 @@ on:
       - "lib/ai-entry/runtime/**"
       - "app/api/ai/chat/route.ts"
       - "app/api/platform/artifacts/**"
+      - "tsconfig.opencode-runner.json"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - "Dockerfile"
   push:
     branches: [main]
@@ -18,6 +22,10 @@ on:
       - "lib/ai-entry/runtime/**"
       - "app/api/ai/chat/route.ts"
       - "app/api/platform/artifacts/**"
+      - "tsconfig.opencode-runner.json"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - "Dockerfile"
 
 jobs:
@@ -33,7 +41,7 @@ jobs:
       - name: Verify app runtime
         run: |
           pnpm install --frozen-lockfile
-          pnpm exec tsc --noEmit --pretty false
+          pnpm exec tsc --noEmit --pretty false -p tsconfig.opencode-runner.json
           pnpm exec eslint app/api/ai/chat/route.ts lib/ai-runtime lib/ai-entry/runtime lib/ai-entry/conversation-state.ts lib/ai-entry/repository.ts --max-warnings=0
           pnpm exec tsx --test lib/ai-runtime/opencode-protocol.test.ts lib/ai-entry/runtime/*.test.ts app/api/ai/chat/route.test.ts
       - name: Verify Cloudflare runner
