@@ -52,7 +52,8 @@ jobs:
       - name: Validate desktop TypeScript and platform tests
         run: |
           pnpm desktop:typecheck
-          pnpm desktop:test
+          pnpm --filter @coworkany/desktop build:host
+          pnpm --filter @coworkany/desktop test:release
 
       - name: Validate virtual office release assets and lazy renderer
         run: |
