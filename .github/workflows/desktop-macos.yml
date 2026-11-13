@@ -53,6 +53,10 @@ jobs:
         run: |
           pnpm desktop:typecheck
           pnpm --filter @coworkany/desktop build:host
+          # Keep platform validation offline and deterministic while providing
+          # the same runtime skill contract that the Rust tests resolve.
+          node -e "const fs=require('node:fs'); const path=require('node:path'); const root='apps/desktop/dist-runtime/skills'; for (const id of ['ppt-master','dashi-ppt']) { fs.mkdirSync(path.join(root,id),{recursive:true}); fs.writeFileSync(path.join(root,id,'SKILL.md'),'# '+id+'\\n'); fs.writeFileSync(path.join(root,id+'.manifest.json'),'{}\\n'); }"
+          pnpm --filter @coworkany/desktop build:agents
           pnpm --filter @coworkany/desktop test:release
 
       - name: Validate virtual office release assets and lazy renderer
