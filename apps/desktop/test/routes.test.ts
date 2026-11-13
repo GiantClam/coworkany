@@ -6,7 +6,7 @@ import { buildOnlineAgentGroups, formatWorkbenchModelLabel, isWorkbenchAssistant
 import { buildAgencyAgentGroups } from "../src/agency-agent-catalog";
 import { configuredModelOptions, isMediaProviderConfigured, preferredConfiguredModel, requiresConfiguredProviderForWorkflowAction } from "../src/provider-config";
 import { resolveDesktopRunAction, workflowActionForMediaFeature } from "../src/route-actions";
-import { conversationAgentIdFromPath, projectOpenedWorkflowDefinition } from "../src/App";
+import { conversationAgentIdFromPath, persistedWorkflowStatus, projectOpenedWorkflowDefinition } from "../src/App";
 import { migrateWorkflowDefinitionToCurrent } from "@coworkany/workflow-core";
 
 test("desktop routes consume the retained online dashboard manifest", () => {
@@ -158,6 +158,9 @@ test("desktop workflows open the shared online directory before the local canvas
   assert.match(appSource, /window\.setTimeout\(\(\) => void workflowAutoSaveRef\.current\("auto"\), 700\)/);
   assert.match(appSource, /savedWorkflowHashRef\.current === definitionHash/);
   assert.match(appSource, /currentWorkflowIdRef\.current = saved\.id/);
+  assert.match(appSource, /const persistedDefinition = toWorkflowDefinitionEnvelope\(savedResponse\.definition\)/u);
+  assert.match(appSource, /setWorkflowDefinition\(\(current\) => current\?\.definitionHash === persistedDefinitionHash/u);
+  assert.match(appSource, /savedWorkflowHashRef\.current = persistedDefinitionHash/u);
   assert.match(appSource, /workflowId=\{workflowCanvasKey \?\? "draft:workflow"\}/);
   assert.match(appSource, /onBack=\{\(\) => setWorkflowBuilderOpen\(false\)\}/);
 });
@@ -1222,7 +1225,7 @@ test("desktop workflow builder keeps the Canvas full-screen with movable side pa
   assert.match(appSource, /workflowMetadata\.title/);
   assert.match(appSource, /workflowMetadata\.description/);
   assert.match(appSource, /workflowMetadata\.status/);
-  assert.match(appSource, /consumePanelClick\(\)/);
+  assert.doesNotMatch(appSource, /consumePanelClick\(\)/);
   assert.match(appSource, /setPanelPosition\(\(current\) => \(\{ \.\.\.current, \[drag\.panel\]: \{ x: 12/);
   assert.match(appSource, /重新运行|Rerun/);
   assert.match(appSource, /继续运行|Continue/);
@@ -1534,6 +1537,14 @@ test("opening a saved workflow projects metadata without mutating or persisting 
   assert.equal(projected.metadata?.status, "live");
   assert.deepEqual(projected.nodes, source.nodes);
   assert.deepEqual(projected.edges, source.edges);
+});
+
+test("persisted workflow status survives the directory projection and reopen fallback", () => {
+  const definition = { schemaVersion: 2 as const, revision: 1, definitionHash: "hash", nodes: [], edges: [], metadata: { status: "draft" } };
+  assert.equal(persistedWorkflowStatus(definition), "draft");
+  assert.equal(persistedWorkflowStatus({ ...definition, metadata: { status: "archived" } }), "archived");
+  assert.equal(persistedWorkflowStatus({ ...definition, metadata: {} }), "live");
+  assert.equal(persistedWorkflowStatus(null), "draft");
 });
 
 test("desktop WebView CSP permits Blob media and only loopback web previews", () => {

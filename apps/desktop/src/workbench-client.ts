@@ -78,11 +78,15 @@ function makeId(prefix: string) {
 
 function readWorkflowDefinition(raw: string): WorkbenchWorkflow["definition"] {
   try {
-    const value = JSON.parse(raw) as { schemaVersion?: unknown; revision?: unknown; definitionHash?: unknown; nodes?: unknown; edges?: unknown };
+    const value = JSON.parse(raw) as { schemaVersion?: unknown; revision?: unknown; definitionHash?: unknown; metadata?: unknown; nodes?: unknown; edges?: unknown };
+    const metadata = value.metadata && typeof value.metadata === "object" && !Array.isArray(value.metadata)
+      ? value.metadata as Readonly<Record<string, unknown>>
+      : undefined;
     return {
       ...(typeof value.schemaVersion === "number" ? { schemaVersion: value.schemaVersion } : {}),
       ...(typeof value.revision === "number" ? { revision: value.revision } : {}),
       ...(typeof value.definitionHash === "string" ? { definitionHash: value.definitionHash } : {}),
+      ...(metadata ? { metadata } : {}),
       nodes: Array.isArray(value.nodes) ? value.nodes : [],
       edges: Array.isArray(value.edges) ? value.edges : [],
     };

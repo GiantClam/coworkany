@@ -150,6 +150,7 @@ export interface WorkbenchWorkflowDefinition {
   readonly schemaVersion?: number;
   readonly revision?: number;
   readonly definitionHash?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly nodes: readonly unknown[];
   readonly edges: readonly unknown[];
 }
