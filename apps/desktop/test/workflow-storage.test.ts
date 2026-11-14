@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
+import { hashWorkflowDefinition, type WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
 import { hashWorkflowPresentation, sanitizeWorkflowDefinitionForExport, sanitizeWorkflowDefinitionForStorage } from "../src/workflow-storage";
 import { parseWorkflowImportText, serializeWorkflowExport } from "../src/workflow-portability";
 
@@ -51,6 +51,33 @@ test("workflow persistence removes provider credentials without changing executa
     relativePath: "attachments/input.png",
   });
   assert.equal((definition.nodes[0]?.config as Record<string, unknown>)[credentialField], "fixture-credential");
+});
+
+test("the persisted workflow response keeps a stable definition hash after JSON round-trip", () => {
+  const definition: WorkflowDefinitionEnvelope = {
+    schemaVersion: 2,
+    revision: 1,
+    definitionHash: "",
+    nodes: [{
+      nodeKey: "capability",
+      type: "image_generate",
+      nodeVersion: 1,
+      title: "Image",
+      positionX: 0,
+      positionY: 0,
+      config: {
+        prompt: "A yellow square",
+        provider: "runtime-only-provider",
+        model: "runtime-only-model",
+        baseUrl: "https://provider.invalid/v1",
+      },
+    }],
+    edges: [],
+  };
+  const persisted = sanitizeWorkflowDefinitionForStorage(definition);
+  const roundTripped = JSON.parse(JSON.stringify(persisted)) as WorkflowDefinitionEnvelope;
+  assert.equal(hashWorkflowDefinition(roundTripped), roundTripped.definitionHash);
+  assert.notEqual(roundTripped.definitionHash, hashWorkflowDefinition(definition));
 });
 
 test("workflow portability drops database/provider bindings but keeps relative file references", () => {

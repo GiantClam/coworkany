@@ -5,6 +5,9 @@ import { dirname, resolve } from "node:path";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dryRun = process.argv.includes("--dry-run");
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const desktopBuildArgs = process.platform === "darwin"
+  ? ["desktop:macos:build"]
+  : ["--filter", "@coworkany/desktop", "build"];
 
 const checks = [
   { name: "shared-client-typecheck", args: ["--filter", "@coworkany/workbench-client", "typecheck"] },
@@ -16,7 +19,7 @@ const checks = [
   // the release gate serial so independent test files cannot compete for a
   // fixture's OpenCode process or filesystem state.
   { name: "desktop-entry-and-runtime-tests", args: ["--filter", "@coworkany/desktop", "test:release"] },
-  { name: "desktop-build", args: ["--filter", "@coworkany/desktop", "build"] },
+  { name: "desktop-build", args: desktopBuildArgs },
   { name: "desktop-bundle-boundary", args: ["desktop:verify-bundle"] },
   { name: "desktop-network-boundary", args: ["desktop:verify-network-boundary"] },
 ];

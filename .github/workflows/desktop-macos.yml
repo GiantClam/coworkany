@@ -30,7 +30,7 @@ jobs:
         include:
           - runner: macos-15
             runner_arch: arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             runner_arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
@@ -40,8 +40,6 @@ jobs:
         run: test "$(uname -m)" = "${{ matrix.runner_arch }}"
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.4
 
       - uses: actions/setup-node@v4
         with:
@@ -54,7 +52,12 @@ jobs:
       - name: Validate desktop TypeScript and platform tests
         run: |
           pnpm desktop:typecheck
-          pnpm desktop:test
+          pnpm --filter @coworkany/desktop build:host
+          # Keep platform validation offline and deterministic while providing
+          # the same runtime skill contract that the Rust tests resolve.
+          node -e "const fs=require('node:fs'); const path=require('node:path'); const root='apps/desktop/dist-runtime/skills'; for (const id of ['ppt-master','dashi-ppt']) { fs.mkdirSync(path.join(root,id),{recursive:true}); fs.writeFileSync(path.join(root,id,'SKILL.md'),'# '+id+'\\n'); fs.writeFileSync(path.join(root,id+'.manifest.json'),'{}\\n'); }"
+          pnpm --filter @coworkany/desktop build:agents
+          pnpm --filter @coworkany/desktop test:release
 
       - name: Validate virtual office release assets and lazy renderer
         run: |

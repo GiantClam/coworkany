@@ -32,8 +32,17 @@ test("CheapBuddy permits only its fixed account and Relay origins", () => {
 
 test("desktop network boundary ignores library documentation and XML namespace URLs", () => {
   assert.deepEqual(scanDesktopNetworkBoundary([
-    { filePath: "fixture.js", source: "https://react.dev/errors/1 https://github.com/org/repo https://radix-ui.com/primitives/docs/components/dialog http://www.w3.org/2000/svg" },
+    { filePath: "fixture.js", source: "https://react.dev/errors/1 https://github.com/org/repo https://radix-ui.com/primitives/docs/components/dialog http://www.w3.org/2000/svg https://www.pixijs.com/" },
   ]), []);
+});
+
+test("desktop network boundary permits the OOXML library's opt-in font constants", () => {
+  assert.deepEqual(scanDesktopNetworkBoundary([
+    { filePath: "ooxml.js", source: "https://fonts.googleapis.com/css2?family=Carlito&display=swap" },
+  ]), []);
+  assert.equal(scanDesktopNetworkBoundary([
+    { filePath: "unapproved.js", source: "https://fonts.gstatic.com/s/carlito/v1/font.woff2" },
+  ]).length, 1);
 });
 
 test("desktop bundle collection includes shipped text resources beyond JavaScript assets", () => {

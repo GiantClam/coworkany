@@ -6,7 +6,11 @@
     "lib": ["ES2022", "DOM"],
     "types": ["@cloudflare/workers-types", "node"],
     "baseUrl": ".",
-    "paths": { "@/*": ["../../../*"] },
+    "paths": {
+      "@/*": ["../../../*"],
+      "@coworkany/writer-core": ["../../../packages/writer-core/src/index.ts"],
+      "@coworkany/writer-core/*": ["../../../packages/writer-core/src/*"]
+    },
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,

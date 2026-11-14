@@ -25,15 +25,15 @@ export function OfficeArtifactPreview({ format, data, title, locale }: {
       if (format === "document") {
         const { DocxScrollViewer } = await import("@silurus/ooxml/docx");
         if (!active) return;
-        instance = new DocxScrollViewer(container, { mode: "worker", enableHyperlinks: false });
+        instance = new DocxScrollViewer(container, { mode: "worker", enableHyperlinks: false, useGoogleFonts: false });
       } else if (format === "presentation") {
         const { PptxScrollViewer } = await import("@silurus/ooxml/pptx");
         if (!active) return;
-        instance = new PptxScrollViewer(container, { mode: "worker", enableHyperlinks: false });
+        instance = new PptxScrollViewer(container, { mode: "worker", enableHyperlinks: false, useGoogleFonts: false });
       } else {
         const { XlsxViewer } = await import("@silurus/ooxml/xlsx");
         if (!active) return;
-        instance = new XlsxViewer(container, { mode: "worker", enableHyperlinks: false });
+        instance = new XlsxViewer(container, { mode: "worker", enableHyperlinks: false, useGoogleFonts: false });
       }
       viewer = instance;
       await instance.load(data);
