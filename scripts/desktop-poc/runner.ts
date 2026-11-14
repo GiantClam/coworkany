@@ -561,6 +561,12 @@ export class AgentDesktopAdapter implements ScenarioAdapter {
     throw new PocError("app_window_timeout", `timed out waiting for ${this.appName()} window.${detail}`, "environment");
   }
 
+  private async focusNativeApplication() {
+    if (process.platform !== "darwin") return;
+    const processName = this.appName().toLocaleLowerCase();
+    await execFileAsync("osascript", ["-e", `tell application "System Events" to set frontmost of process "${processName}" to true`], { timeout: 10_000 }).catch(() => undefined);
+  }
+
   private async get(ref: string, property: string) {
     return unwrapAgentDesktopProperty(await this.cli("get", ["--property", property, ref], 10_000));
   }
@@ -603,9 +609,9 @@ export class AgentDesktopAdapter implements ScenarioAdapter {
         try { this.selector?.assertConfigured(); }
         catch (error) { if (error instanceof JevSelectorError) throw new PocError(error.code, error.message, "environment"); throw error; }
         this.windowId = undefined;
-        const result = await startRun({ root: this.options.runRoot, repoRoot: this.options.repoRoot, waitMs: step.timeoutMs }); await this.waitForAppWindow(step.timeoutMs); return { observation: result };
+        const result = await startRun({ root: this.options.runRoot, repoRoot: this.options.repoRoot, waitMs: step.timeoutMs }); await this.waitForAppWindow(step.timeoutMs); await this.focusNativeApplication(); return { observation: result };
       }
-      if (step.action === "restart") { this.windowId = undefined; const result = await restartRun(this.options.runRoot, { waitMs: step.timeoutMs }); await this.waitForAppWindow(step.timeoutMs); return { observation: result }; }
+      if (step.action === "restart") { this.windowId = undefined; const result = await restartRun(this.options.runRoot, { waitMs: step.timeoutMs }); await this.waitForAppWindow(step.timeoutMs); await this.focusNativeApplication(); return { observation: result }; }
       if (step.action === "stop") return { observation: await stopRun(this.options.runRoot) };
       if (step.action === "cleanup") return { observation: await cleanupRun(this.options.runRoot) };
     }
@@ -703,7 +709,23 @@ export class AgentDesktopAdapter implements ScenarioAdapter {
     throw new PocError("unsupported_action", `unsupported desktop action: ${step.action}`, "action");
   }
 
-  async screenshot(path: string) { await mkdir(dirname(path), { recursive: true }); await this.cli("screenshot", [path, ...this.windowScopeArgs()], 20_000); }
+  async screenshot(path: string) {
+    await mkdir(dirname(path), { recursive: true });
+    const args = [path, ...this.windowScopeArgs()];
+    try {
+      await this.cli("screenshot", args, 20_000);
+      return;
+    } catch (error) {
+      // macOS can expose the Tauri window just before its first screenshot
+      // request is responsive. Refresh the run-owned window and focus it once
+      // before treating the evidence gate as a real failure.
+      if (!(error instanceof PocError) || !["TIMEOUT", "APP_UNRESPONSIVE"].includes(error.code)) throw error;
+      this.windowId = undefined;
+      if (!await this.refreshWindowScope(10_000)) throw error;
+      await this.cli("focus-window", this.windowScopeArgs(), 10_000);
+      await this.cli("screenshot", [path, ...this.windowScopeArgs()], 30_000);
+    }
+  }
 
   async close() {
     if (!this.sessionId || !this.ownsSession) return;
