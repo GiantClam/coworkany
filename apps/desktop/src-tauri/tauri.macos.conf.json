@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "build": {
-    "beforeBuildCommand": "pnpm --filter @coworkany/desktop build:macos"
+    "beforeBuildCommand": "pnpm --filter @coworkany/desktop build:macos",
+    "frontendDist": "../dist"
   },
   "bundle": {
     "icon": ["icons/coworkany-icon.icns"],

@@ -18,7 +18,7 @@
       "kind": "command",
       "id": "prepare-release-version",
       "command": "pnpm",
-      "args": ["run", "desktop:release:version", "--set", "0.1.20"],
+      "args": ["run", "desktop:release:version", "--set", "0.1.21"],
       "timeoutMs": 120000
     },
     "verify": [
@@ -26,7 +26,7 @@
         "kind": "command",
         "id": "check-release-version",
         "command": "pnpm",
-        "args": ["run", "desktop:release:version", "--check", "v0.1.20"],
+        "args": ["run", "desktop:release:version", "--check", "v0.1.21"],
         "timeoutMs": 120000
       },
       {
@@ -112,7 +112,7 @@
       "kind": "command",
       "id": "native-jev-smoke",
       "command": "pnpm",
-      "args": ["desktop:poc:run", "--", "--run-id=run-autotest-coworkany-20261114", "--headed"],
+      "args": ["desktop:poc:run", "--", "--run-id=run-autotest-coworkany-20261114-r4", "--headed"],
       "env": {
         "COWORKANY_DESKTOP_POC_HEADED": "1"
       },
@@ -122,11 +122,13 @@
   "release": {
     "commit": {
       "enabled": true,
-      "message": "chore: prepare CoworkAny v0.1.20 release",
+      "message": "chore: prepare CoworkAny v0.1.21 release",
       "paths": [
         "package.json",
         "apps/desktop/package.json",
         "apps/desktop/src-tauri/tauri.conf.json",
+        "apps/desktop/src-tauri/tauri.macos.conf.json",
+        "apps/desktop/src-tauri/tauri.macos.x64.conf.json",
         "apps/desktop/src-tauri/Cargo.toml",
         "apps/desktop/src-tauri/Cargo.lock",
         "scripts/desktop-release-entry-regression.mjs",
@@ -152,7 +154,7 @@
       "enabled": true,
       "prefix": "v",
       "versionSource": "explicit",
-      "version": "0.1.20"
+      "version": "0.1.21"
     },
     "publish": {
       "enabled": true,
