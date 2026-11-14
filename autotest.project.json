@@ -112,7 +112,7 @@
       "kind": "command",
       "id": "native-jev-smoke",
       "command": "pnpm",
-      "args": ["desktop:poc:run", "--", "--run-id=run-autotest-coworkany-20261114-r4", "--headed"],
+      "args": ["desktop:poc:run", "--", "--run-id=run-autotest-coworkany-20261114-r6", "--headed"],
       "env": {
         "COWORKANY_DESKTOP_POC_HEADED": "1"
       },
@@ -131,6 +131,7 @@
         "apps/desktop/src-tauri/tauri.macos.x64.conf.json",
         "apps/desktop/src-tauri/Cargo.toml",
         "apps/desktop/src-tauri/Cargo.lock",
+        "scripts/desktop-poc/runner.ts",
         "scripts/desktop-release-entry-regression.mjs",
         "scripts/desktop-release-entry-regression.test.mjs",
         "scripts/verify-desktop-network-boundary.mjs",
