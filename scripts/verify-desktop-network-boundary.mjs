@@ -8,7 +8,11 @@ const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 export const STATIC_REMOTE_URL = /\bhttps?:\/\/[a-z0-9][a-z0-9.-]*(?::\d+)?(?:[/?#'"`)]|$)/giu;
 
-const DOCUMENTATION_URL = /^(?:https?:\/\/(?:example\.com(?:[/?#'"`)]|$)|www\.w3\.org\/|www\.ibm\.com\/|json-schema\.org\/)|https:\/\/(?:react\.dev|github\.com|radix-ui\.com)\/)/iu;
+const DOCUMENTATION_URL = /^(?:https?:\/\/(?:example\.com(?:[/?#'"`)]|$)|www\.w3\.org\/|www\.ibm\.com\/|json-schema\.org\/|www\.pixijs\.com\/)|https:\/\/(?:react\.dev|github\.com|radix-ui\.com)\/)/iu;
+// @silurus/ooxml embeds Google Fonts URLs for its opt-in metric-compatible
+// substitutions. CoworkAny keeps that option disabled, so these constants do
+// not create runtime egress; keep the allowlist narrow to the library CDN.
+const OPTIONAL_LIBRARY_URL = /^https:\/\/fonts\.googleapis\.com\//iu;
 // Provider catalog defaults are displayed as configuration suggestions. They
 // are not contacted by the bundled UI; actual requests still flow through the
 // host/provider adapter and user configuration.
@@ -35,7 +39,7 @@ export function scanDesktopNetworkBoundary(files) {
     const external = urls.find((url) => {
       const normalizedUrl = url.replace(/[\\"'`)]/gu, "");
       const approvedProviderUrl = APPROVED_PROVIDER_CATALOG_URLS.has(normalizedUrl) || APPROVED_PROVIDER_CATALOG_URLS.has(`${normalizedUrl}/`);
-      return !/^(?:https?:\/\/)(?:127\.0\.0\.1|localhost)(?::\d+)?(?:[/?#'"`)]|$)/iu.test(url) && !DOCUMENTATION_URL.test(url) && !approvedProviderUrl;
+      return !/^(?:https?:\/\/)(?:127\.0\.0\.1|localhost)(?::\d+)?(?:[/?#'"`)]|$)/iu.test(url) && !DOCUMENTATION_URL.test(url) && !OPTIONAL_LIBRARY_URL.test(normalizedUrl) && !approvedProviderUrl;
     });
     return external ? [{ filePath, label: "hardcoded external URL", url: external }] : [];
   });

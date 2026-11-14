@@ -23,4 +23,7 @@ test("desktop entry regression command covers shared UI, desktop runtime, build,
     "desktop-bundle-boundary",
     "desktop-network-boundary",
   ]);
+  assert.deepEqual(plan.checks.find((check) => check.name === "desktop-build").args, process.platform === "darwin"
+    ? ["desktop:macos:build"]
+    : ["--filter", "@coworkany/desktop", "build"]);
 });

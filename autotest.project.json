@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "id": "coworkany",
+    "root": ".",
+    "repository": "GiantClam/coworkany",
+    "defaultBranch": "main"
+  },
+  "required": {
+    "implementation": true,
+    "verify": true,
+    "build": true,
+    "package": true,
+    "smoke": true
+  },
+  "methods": {
+    "implementation": {
+      "kind": "command",
+      "id": "prepare-release-version",
+      "command": "pnpm",
+      "args": ["run", "desktop:release:version", "--set", "0.1.20"],
+      "timeoutMs": 120000
+    },
+    "verify": [
+      {
+        "kind": "command",
+        "id": "check-release-version",
+        "command": "pnpm",
+        "args": ["run", "desktop:release:version", "--check", "v0.1.20"],
+        "timeoutMs": 120000
+      },
+      {
+        "kind": "command",
+        "id": "validate-poc-scenario",
+        "command": "pnpm",
+        "args": ["desktop:poc:validate-scenario"],
+        "timeoutMs": 600000
+      },
+      {
+        "kind": "command",
+        "id": "poc-contract-test",
+        "command": "pnpm",
+        "args": ["desktop:poc:contract-test"],
+        "timeoutMs": 1200000
+      },
+      {
+        "kind": "command",
+        "id": "desktop-typecheck",
+        "command": "pnpm",
+        "args": ["desktop:typecheck"],
+        "timeoutMs": 1200000
+      },
+      {
+        "kind": "command",
+        "id": "desktop-release-tests",
+        "command": "pnpm",
+        "args": ["--filter", "@coworkany/desktop", "test:release"],
+        "timeoutMs": 1800000
+      },
+      {
+        "kind": "command",
+        "id": "desktop-release-regression",
+        "command": "pnpm",
+        "args": ["desktop:release:regression"],
+        "env": {
+          "CARGO_PROFILE_RELEASE_STRIP": "none",
+          "CARGO_BUILD_JOBS": "1"
+        },
+        "timeoutMs": 1200000
+      },
+      {
+        "kind": "command",
+        "id": "desktop-release-regression-contract",
+        "command": "pnpm",
+        "args": ["test:desktop-release-entry-regression"],
+        "timeoutMs": 120000
+      },
+      {
+        "kind": "command",
+        "id": "desktop-release-contract",
+        "command": "pnpm",
+        "args": ["test:desktop-release"],
+        "timeoutMs": 1800000
+      },
+      {
+        "kind": "command",
+        "id": "tauri-cargo-check",
+        "command": "pnpm",
+        "args": ["desktop:tauri:check"],
+        "timeoutMs": 1800000
+      }
+    ],
+    "build": {
+      "kind": "command",
+      "id": "build-macos-arm64",
+      "command": "pnpm",
+      "args": ["desktop:macos:build"],
+      "env": {
+        "CARGO_PROFILE_RELEASE_STRIP": "none",
+        "CARGO_BUILD_JOBS": "1"
+      },
+      "timeoutMs": 3600000
+    },
+    "package": {
+      "kind": "command",
+      "id": "package-macos-internal",
+      "command": "pnpm",
+      "args": ["desktop:macos:internal"],
+      "timeoutMs": 1800000
+    },
+    "smoke": {
+      "kind": "command",
+      "id": "native-jev-smoke",
+      "command": "pnpm",
+      "args": ["desktop:poc:run", "--", "--run-id=run-autotest-coworkany-20261114", "--headed"],
+      "env": {
+        "COWORKANY_DESKTOP_POC_HEADED": "1"
+      },
+      "timeoutMs": 3600000
+    }
+  },
+  "release": {
+    "commit": {
+      "enabled": true,
+      "message": "chore: prepare CoworkAny v0.1.20 release",
+      "paths": [
+        "package.json",
+        "apps/desktop/package.json",
+        "apps/desktop/src-tauri/tauri.conf.json",
+        "apps/desktop/src-tauri/Cargo.toml",
+        "apps/desktop/src-tauri/Cargo.lock",
+        "scripts/desktop-release-entry-regression.mjs",
+        "scripts/desktop-release-entry-regression.test.mjs",
+        "scripts/verify-desktop-network-boundary.mjs",
+        "scripts/verify-desktop-network-boundary.test.mjs",
+        "packages/workbench-ui/src/office-artifact-preview.tsx",
+        "lib/lead-tools/ppt-engines/frontend-slides-theme.ts",
+        "lib/lead-tools/ppt-engines/frontend-slides-preview-runtime.ts",
+        "autotest.project.json"
+      ]
+    },
+    "push": {
+      "enabled": true,
+      "remote": "origin"
+    },
+    "merge": {
+      "enabled": true,
+      "strategy": "squash",
+      "deleteBranch": true
+    },
+    "tag": {
+      "enabled": true,
+      "prefix": "v",
+      "versionSource": "explicit",
+      "version": "0.1.20"
+    },
+    "publish": {
+      "enabled": true,
+      "provider": "github",
+      "generateNotes": true,
+      "assets": [
+        "apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg",
+        ".artifacts/desktop-release/*.zip"
+      ]
+    }
+  }
+}
