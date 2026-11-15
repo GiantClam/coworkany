@@ -217,6 +217,8 @@ jobs:
       - name: Build app with all offline resources before signing
         env:
           MACOS_MODE: ${{ needs.version.outputs.macos_mode }}
+          CARGO_BUILD_JOBS: "1"
+          CARGO_PROFILE_RELEASE_STRIP: none
         run: |
           if [ "$MACOS_MODE" = internal ]; then
             pnpm --filter @coworkany/desktop exec tauri build --no-sign --config ${{ matrix.tauri_config }} --target ${{ matrix.rust_target }} --bundles app
