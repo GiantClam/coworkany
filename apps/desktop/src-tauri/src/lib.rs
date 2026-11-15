@@ -1908,8 +1908,8 @@ mod tests {
         assert_eq!(parse_poc_data_dir_override(Some(std::ffi::OsStr::new("relative"))).unwrap_err(), "poc_data_dir_must_be_absolute");
         let filesystem_root = if cfg!(windows) { "C:\\" } else { "/" };
         assert_eq!(parse_poc_data_dir_override(Some(std::ffi::OsStr::new(filesystem_root))).unwrap_err(), "poc_data_dir_must_not_be_filesystem_root");
-        let path = parse_poc_data_dir_override(Some(std::ffi::OsStr::new("/tmp/coworkany-poc-data"))).unwrap().unwrap();
-        assert_eq!(path, PathBuf::from("/tmp/coworkany-poc-data"));
+        let path = parse_poc_data_dir_override(Some(std::env::temp_dir().join("coworkany-poc-data").as_os_str())).unwrap().unwrap();
+        assert_eq!(path, std::env::temp_dir().join("coworkany-poc-data"));
     }
 
     #[test]
