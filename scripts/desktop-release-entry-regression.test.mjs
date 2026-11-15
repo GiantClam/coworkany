@@ -37,3 +37,12 @@ test("macOS Tauri overlays preserve the frontend distribution", async () => {
     assert.equal(config.build.frontendDist, "../dist", `${fileName} must embed the built frontend`);
   }
 });
+
+test("macOS release scripts avoid stripped proc-macro dylibs on current macOS", async () => {
+  const packagePath = join(dirname(fileURLToPath(import.meta.url)), "..", "apps", "desktop", "package.json");
+  const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
+  for (const script of [packageJson.scripts["tauri:build:macos"], packageJson.scripts["tauri:build:macos:x64"]]) {
+    assert.match(script, /CARGO_BUILD_JOBS=1/u);
+    assert.match(script, /CARGO_PROFILE_RELEASE_STRIP=none/u);
+  }
+});

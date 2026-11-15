@@ -56,3 +56,11 @@ test("accepts a complete imported entry and its source annotation", () => {
   fs.writeFileSync(path.join(root, "docs/upstream/infinite-canvas-import-manifest.md"), fixture(row))
   assert.deepEqual(validateManifest(root), [])
 })
+
+test("ignores generated target trees at any repository depth", () => {
+  const root = makeRoot()
+  const generated = path.join(root, "apps/desktop/src-tauri/target/release/runtime")
+  fs.mkdirSync(generated, { recursive: true })
+  fs.writeFileSync(path.join(generated, "generated.ts"), "// upstream:infinite-canvas/generated-build-output\n")
+  assert.deepEqual(validateManifest(root), [])
+})

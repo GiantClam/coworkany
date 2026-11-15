@@ -18,7 +18,19 @@ const CLASSIFICATIONS = new Set(["upstream-derived", "adapted", "local-original"
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/i
 const CAPABILITY_PATTERN = /^[a-z0-9][a-z0-9._-]*$/
 const SOURCE_ROOTS = ["vendor/infinite-canvas", "public/upstream/infinite-canvas"]
-const IGNORED_ROOTS = new Set([".git", "node_modules", ".next", ".next-build", ".cache", "coverage", "docs"])
+const IGNORED_DIRECTORY_NAMES = new Set([
+  ".git",
+  "node_modules",
+  ".next",
+  ".next-build",
+  ".cache",
+  "coverage",
+  "docs",
+  ".artifacts",
+  "dist",
+  "dist-runtime",
+  "target",
+])
 
 export type ManifestEntry = Record<(typeof MANIFEST_FIELDS)[number], string>
 
@@ -40,7 +52,7 @@ function listFiles(root: string, relative = ""): string[] {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const child = path.join(relative, entry.name)
     if (entry.isDirectory()) {
-      if (!relative && IGNORED_ROOTS.has(entry.name)) continue
+      if (IGNORED_DIRECTORY_NAMES.has(entry.name)) continue
       result.push(...listFiles(root, child))
     } else if (entry.isFile()) {
       result.push(child)

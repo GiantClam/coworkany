@@ -107,6 +107,7 @@ tests/screenshots/
 apps/desktop/dist/
 apps/desktop/dist-runtime/
 apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
 apps/desktop/*.test.local.json
 scripts/desktop-spikes/**/evidence/*.local.json
 
