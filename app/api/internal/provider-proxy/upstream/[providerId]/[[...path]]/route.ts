@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getConfiguredAiEntryProviderForModel } from "@/lib/ai-entry/provider-routing"
 import { verifyProviderRouteToken } from "@/lib/ai-runtime/provider-proxy"
 import { getEnterpriseTextRuntimeProviderConfigForProxy } from "@/lib/platform/enterprise-runtime-config"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 function routeToken(request: NextRequest) {
   const value = request.headers.get("authorization") || ""
@@ -20,6 +21,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ provider
   const { providerId, path = [] } = await context.params
   const claims = verifyProviderRouteToken(routeToken(request), secret)
   if (!claims || claims.providerId !== providerId) return NextResponse.json({ error: "provider_proxy_route_invalid" }, { status: 401 })
+  if (isDeprecatedTextModelId(claims.modelId)) return NextResponse.json({ error: "provider_proxy_deprecated_model" }, { status: 403 })
   const provider =
     getConfiguredAiEntryProviderForModel(providerId, claims.modelId) ||
     (providerId === "pptoken" || claims.enterpriseId === null

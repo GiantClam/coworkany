@@ -555,9 +555,34 @@ fn repair_runtime(app: tauri::AppHandle, _options: Option<RuntimeRepairOptions>)
     Err("runtime_repair_requires_signed_macos_bundle".to_string())
 }
 
+fn parse_poc_data_dir_override(value: Option<&std::ffi::OsStr>) -> Result<Option<PathBuf>, String> {
+    let Some(value) = value else { return Ok(None); };
+    let path = PathBuf::from(value);
+    if !path.is_absolute() { return Err("poc_data_dir_must_be_absolute".to_string()); }
+    if path.parent().is_none() { return Err("poc_data_dir_must_not_be_filesystem_root".to_string()); }
+    if path.exists() {
+        let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() { return Err("poc_data_dir_symlink_forbidden".to_string()); }
+        if !metadata.is_dir() { return Err("poc_data_dir_must_be_directory".to_string()); }
+    }
+    Ok(Some(path))
+}
+
+fn poc_data_dir_override() -> Result<Option<PathBuf>, String> {
+    #[cfg(debug_assertions)]
+    { parse_poc_data_dir_override(std::env::var_os("COWORKANY_DESKTOP_POC_DATA_DIR").as_deref()) }
+    #[cfg(not(debug_assertions))]
+    { Ok(None) }
+}
+
+fn resolved_data_root(executable: &Path, normal_data: Option<PathBuf>) -> Result<PathBuf, String> {
+    if let Some(path) = poc_data_dir_override()? { return Ok(path); }
+    Ok(storage::data_root(executable, normal_data))
+}
+
 fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    Ok(storage::data_root(&platform::distribution_root(&executable), configured_local_app_data(&app)))
+    resolved_data_root(&platform::distribution_root(&executable), configured_local_app_data(&app))
 }
 
 fn internal_portable_distribution_root(executable: &Path) -> Option<PathBuf> {
@@ -702,6 +727,40 @@ fn project_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(root)
 }
 
+/// Artifacts may be created by bundled Skills in the app-local projects
+/// directory even when an older configuration points at a previous workspace.
+/// Keep both roots explicit so RPC callers cannot register arbitrary folders.
+fn trusted_artifact_roots(app: &tauri::AppHandle) -> Result<Vec<PathBuf>, String> {
+    let configured = project_root(app)?;
+    let data_projects = data_dir(app)?.join("projects");
+    let local_projects = configured_local_app_data(app).map(|root| root.join("projects"));
+    let mut roots = Vec::new();
+    for root in [Some(configured), Some(data_projects), local_projects].into_iter().flatten() {
+        std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+        let root = root.canonicalize().map_err(|error| error.to_string())?;
+        if !roots.contains(&root) { roots.push(root); }
+    }
+    Ok(roots)
+}
+
+fn trusted_artifact_root(app: &tauri::AppHandle, requested: Option<&str>) -> Result<PathBuf, String> {
+    let roots = trusted_artifact_roots(app)?;
+    let Some(requested) = requested.filter(|value| !value.trim().is_empty()) else {
+        return roots.into_iter().next().ok_or_else(|| "artifact_workspace_unavailable".to_string());
+    };
+    let requested = PathBuf::from(requested).canonicalize().map_err(|error| error.to_string())?;
+    roots.into_iter().find(|root| root == &requested).ok_or_else(|| "artifact_workspace_untrusted".to_string())
+}
+
+fn locate_trusted_artifact(app: &tauri::AppHandle, relative_path: &str, mime_type: &str) -> Result<(PathBuf, artifacts::ArtifactMetadata), String> {
+    for root in trusted_artifact_roots(app)? {
+        if let Ok(metadata) = artifacts::inspect(&root, relative_path, mime_type) {
+            return Ok((root, metadata));
+        }
+    }
+    Err("artifact_not_found_in_trusted_workspace".to_string())
+}
+
 const MAX_ATTACHMENT_BYTES: usize = 512 * 1024 * 1024;
 const MAX_ATTACHMENT_CHUNK_BYTES: usize = 1024 * 1024;
 const MAX_ATTACHMENT_NAME_CHARS: usize = 180;
@@ -808,20 +867,25 @@ fn write_writer_draft(app: tauri::AppHandle, content: String) -> Result<artifact
 
 #[tauri::command]
 fn inspect_artifact(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<artifacts::ArtifactMetadata, String> {
-    artifacts::inspect(&project_root(&app)?, &relative_path, &mime_type)
+    locate_trusted_artifact(&app, &relative_path, &mime_type).map(|(_, metadata)| metadata)
 }
 
 #[tauri::command]
 fn register_artifact(app: tauri::AppHandle, artifact_id: String, project_id: Option<String>, relative_path: String, mime_type: String) -> Result<artifacts::ArtifactMetadata, String> {
-  let metadata = artifacts::inspect(&project_root(&app)?, &relative_path, &mime_type)?;
+  let (_, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
   storage::register_artifact(&database_path(&app)?, &artifact_id, project_id.as_deref(), &metadata).map_err(|error| error.to_string())?;
   Ok(metadata)
 }
 
-fn reconcile_persisted_artifacts(root: &std::path::Path, database: &std::path::Path) -> Result<(), String> {
-  for candidate in storage::artifact_reconciliation_candidates(database).map_err(|error| error.to_string())? {
-    if let Ok(metadata) = artifacts::inspect(root, &candidate.relative_path, &candidate.mime_type) {
-      storage::register_artifact(database, &candidate.id, None, &metadata).map_err(|error| error.to_string())?;
+fn reconcile_persisted_artifacts(roots: &[PathBuf], database: &std::path::Path) -> Result<(), String> {
+  let mut candidates = storage::artifact_reconciliation_candidates(database).map_err(|error| error.to_string())?;
+  candidates.extend(storage::presentation_export_artifact_candidates(database, roots).map_err(|error| error.to_string())?);
+  for candidate in candidates {
+    for root in roots.iter().filter(|root| candidate.workspace_path.as_deref().is_none_or(|workspace| root.to_string_lossy() == workspace)) {
+      if let Ok(metadata) = artifacts::inspect(root, &candidate.relative_path, &candidate.mime_type) {
+        storage::register_artifact(database, &candidate.id, None, &metadata).map_err(|error| error.to_string())?;
+        break;
+      }
     }
   }
   Ok(())
@@ -829,12 +893,12 @@ fn reconcile_persisted_artifacts(root: &std::path::Path, database: &std::path::P
 
 #[tauri::command]
 fn list_artifacts(app: tauri::AppHandle) -> Result<Vec<storage::ArtifactRow>, String> {
-  let root = project_root(&app)?;
+  let roots = trusted_artifact_roots(&app)?;
   let database = database_path(&app)?;
-  reconcile_persisted_artifacts(&root, &database)?;
+  reconcile_persisted_artifacts(&roots, &database)?;
   let mut rows = storage::list_artifacts(&database).map_err(|error| error.to_string())?;
     for row in &mut rows {
-        row.available = artifacts::is_available(&root, &row.relative_path, &row.mime_type);
+        row.available = roots.iter().any(|root| artifacts::is_available(root, &row.relative_path, &row.mime_type));
     }
     Ok(rows)
 }
@@ -1389,16 +1453,14 @@ fn read_workflow_local_file(local_path: String, mime_type: String) -> Result<ser
 
 #[tauri::command]
 fn open_artifact(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
-    let root = project_root(&app)?;
-    let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
+    let (root, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
     let target = root.join(metadata.relative_path);
     platform::reveal_path_command(&target).spawn().map(|_| ()).map_err(|error| format!("artifact_reveal_failed: {error}"))
 }
 
 #[tauri::command]
 fn open_artifact_folder(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
-    let root = project_root(&app)?;
-    let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
+    let (root, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
     let target = root.join(metadata.relative_path);
     let folder = target.parent().ok_or_else(|| "artifact_folder_missing".to_string())?;
     platform::open_path_command(folder).spawn().map(|_| ()).map_err(|error| format!("artifact_folder_open_failed: {error}"))
@@ -1425,16 +1487,14 @@ fn open_with_installed_program(target: &Path) -> Result<(), String> {
 
 #[tauri::command]
 fn open_artifact_default(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
-    let root = project_root(&app)?;
-    let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
+    let (root, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
     let target = root.join(metadata.relative_path);
     open_with_default_program(&target)
 }
 
 #[tauri::command]
 fn open_artifact_with(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
-    let root = project_root(&app)?;
-    let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
+    let (root, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
     let target = root.join(metadata.relative_path);
     open_with_installed_program(&target)
 }
@@ -1442,8 +1502,7 @@ fn open_artifact_with(app: tauri::AppHandle, relative_path: String, mime_type: S
 #[tauri::command]
 fn read_artifact(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<serde_json::Value, String> {
     const MAX_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
-    let root = project_root(&app)?;
-    let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
+    let (root, metadata) = locate_trusted_artifact(&app, &relative_path, &mime_type)?;
     if metadata.byte_length > MAX_PREVIEW_BYTES {
         return Err("artifact_preview_too_large".to_string());
     }
@@ -1502,7 +1561,7 @@ fn runtime_paths(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let distribution_root = platform::distribution_root(&executable);
     let portable = distribution_root.join("portable.flag").exists();
-    let data = storage::data_root(&distribution_root, configured_local_app_data(&app));
+    let data = resolved_data_root(&distribution_root, configured_local_app_data(&app))?;
     Ok(serde_json::json!({
         "mode": if portable { "portable" } else { "normal" },
         "data": data,
@@ -1813,7 +1872,7 @@ fn lock_path() -> Result<std::path::PathBuf, String> {
     } else {
         std::env::var_os("HOME").map(|value| std::path::PathBuf::from(value).join("Library").join("Application Support").join("CoworkAny"))
     };
-    let data_root = storage::data_root(&distribution_root, normal_data);
+    let data_root = resolved_data_root(&distribution_root, normal_data)?;
     // Keep the lock adjacent to the data root rather than inside it. The
     // first-run runtime installer atomically swaps the whole data directory;
     // a lock file held by this process inside that directory would make the
@@ -1828,7 +1887,7 @@ fn adjacent_instance_lock_path(data_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, customer_package_id, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, merge_customer_seed_provider_config, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, platform, portable_default_workspace_path, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_offline_runtime_zip, configured_runtime_executable, customer_package_id, internal_portable_distribution_root, is_default_portable_text_config, is_usable_desktop_config, media_runtime_candidates, merge_customer_seed_provider_config, migrate_portable_root_config, ordered_runtime_candidates, parse_poc_data_dir_override, persist_runtime_paths, platform, portable_default_workspace_path, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
     #[cfg(windows)]
     use super::powershell_quote;
     #[cfg(target_os = "macos")]
@@ -1841,6 +1900,15 @@ mod tests {
         assert_eq!(safe_media_component("run:with\\separators", "run"), "run_with_separators");
         assert_eq!(safe_media_component("../", "node"), "node");
         assert!(safe_media_component(&"x".repeat(200), "node").len() <= 96);
+    }
+
+    #[test]
+    fn poc_data_dir_override_is_debug_only_safe_and_absolute() {
+        assert_eq!(parse_poc_data_dir_override(None).unwrap(), None);
+        assert_eq!(parse_poc_data_dir_override(Some(std::ffi::OsStr::new("relative"))).unwrap_err(), "poc_data_dir_must_be_absolute");
+        assert_eq!(parse_poc_data_dir_override(Some(std::ffi::OsStr::new("/"))).unwrap_err(), "poc_data_dir_must_not_be_filesystem_root");
+        let path = parse_poc_data_dir_override(Some(std::ffi::OsStr::new("/tmp/coworkany-poc-data"))).unwrap().unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/coworkany-poc-data"));
     }
 
     #[test]

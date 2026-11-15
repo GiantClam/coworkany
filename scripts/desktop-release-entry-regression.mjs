@@ -6,7 +6,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dryRun = process.argv.includes("--dry-run");
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const desktopBuildArgs = process.platform === "darwin"
-  ? ["--filter", "@coworkany/desktop", "build:macos"]
+  ? ["desktop:macos:build"]
   : ["--filter", "@coworkany/desktop", "build"];
 
 const checks = [
@@ -15,8 +15,7 @@ const checks = [
   { name: "shared-ui-typecheck", args: ["--filter", "@coworkany/workbench-ui", "typecheck"] },
   { name: "shared-ui-tests", args: ["--filter", "@coworkany/workbench-ui", "test"] },
   { name: "desktop-typecheck", args: ["--filter", "@coworkany/desktop", "typecheck"] },
-  // The built workflow-host tests must consume the host produced from the
-  // current checkout, rather than a stale dist-runtime artifact.
+  // Build the current checkout before host tests consume dist-runtime.
   { name: "desktop-build", args: desktopBuildArgs },
   // The local host test fixtures share process-level runtime resources. Keep
   // the release gate serial so independent test files cannot compete for a

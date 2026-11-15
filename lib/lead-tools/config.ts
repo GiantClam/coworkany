@@ -1,8 +1,8 @@
 const DEFAULT_LEAD_TOOL_MODEL =
-  process.env.PPTOKEN_MODEL || process.env.AI_ENTRY_PPTOKEN_MODEL || "openai/gpt-4.1-mini"
+  process.env.PPTOKEN_MODEL || process.env.AI_ENTRY_PPTOKEN_MODEL || "deepseek-v4-pro"
 const DEFAULT_PPT_PREVIEW_MODEL = "deepseek-v4-pro"
 const DEFAULT_SEO_TITLE_PREVIEW_MODEL = "deepseek-v4-flash"
-const DEFAULT_PPT_RUNTIME_SLIDE_MODEL = "gpt-5.4"
+const DEFAULT_PPT_RUNTIME_SLIDE_MODEL = "gpt-6.1-sol"
 const DEFAULT_PPT_RUNTIME_FALLBACK_MODEL = "MiniMax-M2.7-highspeed"
 const DEFAULT_PPT_RUNTIME_FALLBACK_PROVIDER = "minimax"
 const DEFAULT_PPT_PREVIEW_RUNTIME = "frontend-slides-agent"
@@ -13,7 +13,6 @@ const DEFAULT_PPT_WORKER_PREVIEW_TIMEOUT_MS = 90 * 60 * 1000
 const DEFAULT_PPT_WORKER_PREVIEW_MAX_ATTEMPTS = 2
 const DEFAULT_PPT_WORKER_PREVIEW_RETRY_DELAY_MS = 3000
 const DEFAULT_PPT_MASTER_SLIDE_TIMEOUT_MS = 12 * 60 * 1000
-const MIN_PPT_MASTER_PPTOKEN_GPT54_SLIDE_TIMEOUT_MS = 6 * 60 * 1000
 const DEFAULT_PRODUCTION_PPT_WORKER_BASE_URL = "https://ppt-master-worker-production.up.railway.app"
 
 function pickFirstNonEmpty(values: Array<string | undefined>, fallback: string) {
@@ -233,31 +232,15 @@ function resolveConfiguredPptMasterSlideTimeout(params?: { provider?: string | n
   }
 }
 
-function getPptMasterKnownTimeoutFloor(params?: { provider?: string | null; model?: string | null }) {
-  const provider = params?.provider?.trim().toLowerCase() || ""
-  const model = params?.model?.trim() || ""
-
-  if (provider === "pptoken" && model === "gpt-5.4") {
-    return MIN_PPT_MASTER_PPTOKEN_GPT54_SLIDE_TIMEOUT_MS
-  }
-
-  return 0
-}
-
 export function resolvePptMasterSlideTimeoutMs(params?: { provider?: string | null; model?: string | null }) {
   const configured = resolveConfiguredPptMasterSlideTimeout(params)
-  const floor = getPptMasterKnownTimeoutFloor(params)
 
   if (configured.source === "provider-model" || configured.source === "provider") {
     return configured.value ?? DEFAULT_PPT_MASTER_SLIDE_TIMEOUT_MS
   }
 
   if (configured.source === "global") {
-    return Math.max(configured.value ?? DEFAULT_PPT_MASTER_SLIDE_TIMEOUT_MS, floor)
-  }
-
-  if (floor > 0) {
-    return Math.max(DEFAULT_PPT_MASTER_SLIDE_TIMEOUT_MS, floor)
+    return configured.value ?? DEFAULT_PPT_MASTER_SLIDE_TIMEOUT_MS
   }
 
   return DEFAULT_PPT_MASTER_SLIDE_TIMEOUT_MS

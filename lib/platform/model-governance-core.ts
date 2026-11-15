@@ -2,6 +2,7 @@ import type { AiEntryModelCatalog, AiEntryModelOption } from "@/lib/ai-entry/mod
 import { serializeAiEntryModelSelection } from "@/lib/ai-entry/model-selection"
 import { getConfiguredAiEntryProviderForModel, type AiEntryProviderId } from "@/lib/ai-entry/provider-routing"
 import type { EnterpriseModelRouteAssignment } from "@/lib/platform/model-config"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 export type ModelGovernanceUser = {
   id: number
@@ -202,7 +203,13 @@ export function buildGovernedAiEntryModelCatalog(params: {
         baseUrl: provider.baseURL,
         active: provider.active,
       }
-      const candidates = baseProvider.modelId ? [baseProvider] : []
+      // Runtime snapshots can contain persisted provider defaults from before
+      // the GPT-6+/Claude-6+ retirement policy. Keep the history in storage,
+      // but never expose a retired text model as a governed selectable route.
+      const candidates =
+        baseProvider.modelId && !isDeprecatedTextModelId(baseProvider.modelId)
+          ? [baseProvider]
+          : []
 
       // PPToken maintains separate GPT and Grok accounts. The platform
       // runtime snapshot intentionally exposes only the provider default, so

@@ -42,7 +42,7 @@ test("desktop WorkbenchClient adapts conversations, workflows and file actions t
         metadata_json: JSON.stringify({ conversationId: "c1", createdAt: "2026-08-12T00:00:00Z", updatedAt: "2026-08-12T00:00:00Z" }),
         created_at: "2026-08-12T00:00:00Z",
       }] as T;
-      if (command === "list_workflows") return [{ id: "w1", name: "内容工作流", definition_json: JSON.stringify({ schemaVersion: 2, revision: 3, definitionHash: "hash-1", nodes: [{ nodeKey: "input" }], edges: [] }), updated_at: "2026-08-12T00:00:00Z" }] as T;
+      if (command === "list_workflows") return [{ id: "w1", name: "内容工作流", definition_json: JSON.stringify({ schemaVersion: 2, revision: 3, definitionHash: "hash-1", metadata: { description: "持久化描述", status: "draft", kind: "workflow" }, nodes: [{ nodeKey: "input" }], edges: [] }), updated_at: "2026-08-12T00:00:00Z" }] as T;
       if (command === "save_workflow") return { id: String((args?.input as { id: string }).id), name: String((args?.input as { name: string }).name), definition_json: String((args?.input as { definition_json: string }).definition_json), updated_at: "2026-08-12T00:00:00Z" } as T;
       if (command === "list_artifacts") return [{ id: "a1", relative_path: "artifacts/report.md", mime_type: "text/markdown", byte_length: 12, sha256: "hash-a", created_at: "2026-08-12T00:00:00Z", available: true }] as T;
       if (command === "list_runs") return [{ id: "r1", conversation_id: "c1", status: "succeeded", model: "fixture/model", started_at: "2026-08-12T00:00:00Z", finished_at: "2026-08-12T00:01:00Z" }] as T;
@@ -66,6 +66,7 @@ test("desktop WorkbenchClient adapts conversations, workflows and file actions t
   assert.equal(listedWorkflow?.title, "内容工作流");
   assert.equal(listedWorkflow?.definition.definitionHash, "hash-1");
   assert.equal(listedWorkflow?.definition.revision, 3);
+  assert.deepEqual(listedWorkflow?.definition.metadata, { description: "持久化描述", status: "draft", kind: "workflow" });
   const savedWorkflow = await client.workflows.save({ id: "w2", title: "本地流程", definition: { nodes: [], edges: [] } });
   assert.equal(savedWorkflow.id, "w2");
   assert.equal(calls.at(-1)?.command, "save_workflow");

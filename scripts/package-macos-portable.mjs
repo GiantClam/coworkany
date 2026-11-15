@@ -18,8 +18,8 @@ async function listPythonMachOFiles(rootPath) {
       for (const entry of await readdir(path)) await visit(join(path, entry));
       return;
     }
-    const name = path.slice(path.lastIndexOf("/") + 1);
-    if (name === "Python" || name === "python3" || name === "python3.12" || path.endsWith(".dylib") || path.endsWith(".so")) files.push(path);
+    const { stdout } = await promisify(execFile)("/usr/bin/file", ["-b", path], { encoding: "utf8" }).catch(() => ({ stdout: "" }));
+    if (/Mach-O/iu.test(stdout)) files.push(path);
   };
   await visit(rootPath);
   return files;

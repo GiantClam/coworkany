@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "workflow-persistence",
+  "title": "Create, save, restart, verify, and clean up one local workflow",
+  "preconditions": [
+    "The target CoworkAny Tauri window is visible and unlocked.",
+    "The run uses a unique isolated data root and evidence directory.",
+    "The official Jev CLI is installed and a Jev API credential is configured through JEV_API_KEY or `jev login`.",
+    "No CoworkAny provider key or external business action is required; Jev selector calls are the only external decision requests."
+  ],
+  "steps": [
+    { "actor": "operator", "action": "launch", "stepId": "launch-isolated-app", "timeoutMs": 180000, "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "click", "stepId": "open-workflow-directory", "timeoutMs": 10000, "target": { "pocId": "workflow-navigation", "role": "button", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "focus", "stepId": "focus-directory", "timeoutMs": 10000, "target": { "pocId": "workflow-directory", "role": "group", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "snapshot", "stepId": "observe-directory", "timeoutMs": 10000, "target": { "pocId": "workflow-directory", "role": "group", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "click", "stepId": "create-workflow", "timeoutMs": 10000, "target": { "pocId": "create-workflow", "role": "button" }, "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "click", "stepId": "open-workflow-panel", "timeoutMs": 10000, "target": { "pocId": "workflow-panel-open", "role": "button" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "type", "stepId": "fill-title", "timeoutMs": 10000, "target": { "pocId": "workflow-title", "role": "textbox" }, "value": "POC-${runId}", "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "type", "stepId": "fill-description", "timeoutMs": 10000, "target": { "pocId": "workflow-description", "role": "textbox" }, "value": "persistence-${runId}", "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "select", "stepId": "set-draft-status", "timeoutMs": 10000, "target": { "pocId": "workflow-status", "role": "combobox" }, "value": "draft", "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "capture", "stepId": "capture-before-save", "timeoutMs": 10000, "target": { "pocId": "workflow-builder" }, "captureAs": "beforeSave", "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "click", "stepId": "save-workflow", "timeoutMs": 30000, "target": { "pocId": "save-workflow", "role": "button" }, "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "wait", "stepId": "wait-save-success", "timeoutMs": 30000, "durationMs": 1000, "target": { "pocId": "save-workflow" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "assert", "stepId": "capture-title-before-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-title", "role": "textbox" }, "assertion": { "kind": "value", "expected": "POC-${runId}", "captureAs": "beforeRestart.title" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "assert", "stepId": "capture-description-before-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-description", "role": "textbox" }, "assertion": { "kind": "value", "expected": "persistence-${runId}", "captureAs": "beforeRestart.description" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "assert", "stepId": "capture-status-before-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-status", "role": "combobox" }, "assertion": { "kind": "value", "expected": "draft", "captureAs": "beforeRestart.status" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "capture", "stepId": "capture-hash-before-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-definition-hash" }, "captureAs": "beforeRestart.hash", "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "click", "stepId": "back-to-directory", "timeoutMs": 10000, "target": { "pocId": "back-to-workflows", "role": "button" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "snapshot", "stepId": "observe-directory-after-save", "timeoutMs": 10000, "target": { "pocId": "workflow-directory", "role": "group", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "assert", "stepId": "assert-saved-card", "timeoutMs": 10000, "target": { "pocId": "workflow-card", "name": "POC-${runId}" }, "assertion": { "kind": "exists", "expected": true }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "operator", "action": "restart", "stepId": "restart-same-data-root", "timeoutMs": 180000, "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "click", "stepId": "open-workflow-directory-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-navigation", "role": "button", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "focus", "stepId": "focus-directory-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-directory", "role": "group", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "snapshot", "stepId": "observe-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-directory", "role": "group", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "click", "stepId": "open-saved-card", "timeoutMs": 10000, "target": { "pocId": "open-workflow", "role": "button", "name": "POC-${runId}" }, "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "click", "stepId": "open-workflow-panel-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-panel-open", "role": "button" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "assert", "stepId": "assert-title-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-title", "role": "textbox" }, "assertion": { "kind": "value", "expected": { "$ref": "beforeRestart.title" } }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "assert", "stepId": "assert-description-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-description", "role": "textbox" }, "assertion": { "kind": "value", "expected": { "$ref": "beforeRestart.description" } }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "assert", "stepId": "assert-status-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-status", "role": "combobox" }, "assertion": { "kind": "value", "expected": { "$ref": "beforeRestart.status" } }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "capture", "stepId": "capture-hash-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-definition-hash" }, "captureAs": "afterRestart.hash", "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "assert", "stepId": "assert-definition-hash-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-definition-hash" }, "assertion": { "kind": "text", "expected": { "$ref": "beforeRestart.hash.text" } }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "click", "stepId": "back-before-cleanup", "timeoutMs": 10000, "target": { "pocId": "back-to-workflows", "role": "button" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "click", "stepId": "open-delete-dialog", "timeoutMs": 10000, "target": { "pocId": "delete-workflow", "role": "button", "name": "POC-${runId}" }, "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "click", "stepId": "confirm-delete", "timeoutMs": 10000, "target": { "pocId": "confirm-delete", "role": "button" }, "evidence": { "snapshot": true, "trace": true } },
+    { "actor": "desktop-agent", "action": "assert", "stepId": "assert-deleted", "timeoutMs": 10000, "target": { "pocId": "workflow-card", "name": "POC-${runId}" }, "assertion": { "kind": "exists", "expected": false }, "evidence": { "snapshot": true, "trace": true } }
+  ],
+  "assertions": [],
+  "cleanup": [
+    { "actor": "operator", "action": "stop", "stepId": "cleanup-stop-run", "timeoutMs": 30000, "evidence": { "trace": true } },
+    { "actor": "operator", "action": "cleanup", "stepId": "cleanup-run-owned-artifacts", "timeoutMs": 30000, "evidence": { "trace": true } }
+  ],
+  "stopConditions": [
+    "Stop if the target window is not the foreground CoworkAny window.",
+    "Stop if a target cannot be resolved from the Accessibility Snapshot without coordinates.",
+    "Stop if the port is occupied by a process outside this run."
+  ]
+}

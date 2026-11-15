@@ -3702,9 +3702,7 @@ function renderHtmlDocument(deck: PptPreviewDeck, variant: PptPreviewVariant) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>${escapeHtml(deck.title)} - ${escapeHtml(variant.name)}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="${theme.fontHref}" rel="stylesheet" />
+    ${theme.fontHref ? `<link href="${theme.fontHref}" rel="stylesheet" />` : ""}
     <style>
       ${FRONTEND_SLIDES_VIEWPORT_BASE_CSS}
       ${buildFrontendSlidesVariantCss(theme, variant.styleKey)}

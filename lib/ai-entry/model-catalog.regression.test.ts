@@ -91,14 +91,14 @@ serialTest("model catalog only advertises PPToken Grok when the Grok account is 
     {
       AI_ENTRY_PPTOKEN_API_KEY: "gpt-account-key",
       AI_ENTRY_PPTOKEN_BASE_URL: "https://gpt.pptoken.example/v1",
-      AI_ENTRY_PPTOKEN_MODEL: "gpt-5.4",
+      AI_ENTRY_PPTOKEN_MODEL: "gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
       ;(globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = (async () => ({
         ok: true,
         status: 200,
-        json: async () => ({ data: [{ id: "gpt-5.4", owned_by: "openai" }] }),
+        json: async () => ({ data: [{ id: "gpt-6.1-sol", owned_by: "openai" }] }),
       })) as unknown as typeof fetch
 
       try {
@@ -114,7 +114,7 @@ serialTest("model catalog only advertises PPToken Grok when the Grok account is 
     {
       AI_ENTRY_PPTOKEN_API_KEY: "gpt-account-key",
       AI_ENTRY_PPTOKEN_BASE_URL: "https://gpt.pptoken.example/v1",
-      AI_ENTRY_PPTOKEN_MODEL: "gpt-5.4",
+      AI_ENTRY_PPTOKEN_MODEL: "gpt-6.1-sol",
       AI_ENTRY_PPTOKEN_GROK_API_KEY: "grok-account-key",
       AI_ENTRY_PPTOKEN_GROK_BASE_URL: "https://grok.pptoken.example/v1",
     },
@@ -123,7 +123,7 @@ serialTest("model catalog only advertises PPToken Grok when the Grok account is 
       ;(globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = (async () => ({
         ok: true,
         status: 200,
-        json: async () => ({ data: [{ id: "gpt-5.4", owned_by: "openai" }] }),
+        json: async () => ({ data: [{ id: "gpt-6.1-sol", owned_by: "openai" }] }),
       })) as unknown as typeof fetch
 
       try {
@@ -189,7 +189,7 @@ serialTest("model catalog selects configured default model when /models omits it
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -207,8 +207,8 @@ serialTest("model catalog selects configured default model when /models omits it
       try {
         const catalog = await getAiEntryModelCatalog()
         assert.equal(catalog.providerId, "aiberm")
-        assert.equal(catalog.selectedModelId, "gpt-5.4")
-        assert.equal(catalog.models[0]?.id, "gpt-5.4")
+        assert.equal(catalog.selectedModelId, "gpt-6.1-sol")
+        assert.equal(catalog.models[0]?.id, "gpt-6.1-sol")
         assert.equal(catalog.models.length, 1)
       } finally {
         globalThis.fetch = originalFetch
@@ -222,7 +222,7 @@ serialTest("model catalog does not duplicate configured default model when alrea
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -231,17 +231,17 @@ serialTest("model catalog does not duplicate configured default model when alrea
         status: 200,
         json: async () => ({
           data: [
-            { id: "openai/gpt-5.4", name: "GPT 5.4" },
-            { id: "openai/gpt-5.4", name: "GPT 5.4" },
+            { id: "openai/gpt-6.1-sol", name: "GPT 6.1 Sol" },
+            { id: "openai/gpt-6.1-sol", name: "GPT 6.1 Sol" },
           ],
         }),
       })) as unknown as typeof fetch
 
       try {
         const catalog = await getAiEntryModelCatalog()
-        assert.equal(catalog.selectedModelId, "gpt-5.4")
+        assert.equal(catalog.selectedModelId, "gpt-6.1-sol")
         assert.equal(
-          catalog.models.filter((item) => item.id === "gpt-5.4").length,
+          catalog.models.filter((item) => item.id === "gpt-6.1-sol").length,
           1,
         )
       } finally {
@@ -256,6 +256,7 @@ serialTest("model catalog selects fast sonnet as normal chat default when no con
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
+      AI_ENTRY_NORMAL_FAST_MODEL: "claude-sonnet-6.1",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -264,9 +265,9 @@ serialTest("model catalog selects fast sonnet as normal chat default when no con
         status: 200,
         json: async () => ({
           data: [
-            { id: "claude-haiku-4.5", name: "Claude Haiku 4.5" },
-            { id: "claude-sonnet-4.6-thinking", name: "Claude Sonnet 4.6 Thinking" },
-            { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+            { id: "claude-haiku-6.1", name: "Claude Haiku 6.1" },
+            { id: "claude-sonnet-6.1-thinking", name: "Claude Sonnet 6.1 Thinking" },
+            { id: "claude-sonnet-6.1", name: "Claude Sonnet 6.1" },
           ],
         }),
       })) as unknown as typeof fetch
@@ -274,7 +275,7 @@ serialTest("model catalog selects fast sonnet as normal chat default when no con
       try {
         const catalog = await getAiEntryModelCatalog()
         assert.equal(catalog.providerId, "aiberm")
-        assert.equal(catalog.selectedModelId, "claude-sonnet-4.6")
+        assert.equal(catalog.selectedModelId, "claude-sonnet-6.1")
       } finally {
         globalThis.fetch = originalFetch
       }
@@ -287,7 +288,7 @@ serialTest("model catalog product policy overrides stale provider haiku default"
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "claude-haiku-4.5",
+      AI_ENTRY_AIBERM_MODEL: "claude-haiku-5.0",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -296,18 +297,18 @@ serialTest("model catalog product policy overrides stale provider haiku default"
         status: 200,
         json: async () => ({
           data: [
-            { id: "claude-haiku-4.5", name: "Claude Haiku 4.5" },
-            { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+            { id: "claude-haiku-5.0", name: "Claude Haiku 5.0" },
+            { id: "claude-sonnet-6.1", name: "Claude Sonnet 6.1" },
           ],
         }),
       })) as unknown as typeof fetch
 
       try {
         const catalog = await getAiEntryModelCatalog()
-        assert.equal(catalog.selectedModelId, "claude-sonnet-4.6")
+        assert.equal(catalog.selectedModelId, "claude-sonnet-6.1")
         assert.equal(
-          catalog.models.some((item) => item.id === "claude-haiku-4.5"),
-          true,
+          catalog.models.some((item) => item.id === "claude-haiku-5.0"),
+          false,
         )
       } finally {
         globalThis.fetch = originalFetch
@@ -321,7 +322,7 @@ serialTest("model catalog keeps high-tier model families and prioritized order",
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -331,8 +332,8 @@ serialTest("model catalog keeps high-tier model families and prioritized order",
         json: async () => ({
           data: [
             { id: "meta/llama-4-maverick", name: "Llama Maverick" },
-            { id: "openai/gpt-5.4", name: "GPT 5.4" },
-            { id: "anthropic/claude-opus-4.6", name: "Claude Opus 4.6" },
+            { id: "openai/gpt-6.1-sol", name: "GPT 6.1 Sol" },
+            { id: "anthropic/claude-opus-6.1", name: "Claude Opus 6.1" },
             { id: "google/gemini-3-flash-preview", name: "Gemini 3 Flash Preview" },
             { id: "MiniMax-M2.7", name: "MiniMax M2.7" },
             { id: "openai/text-embedding-3-large", name: "Embedding 3 Large" },
@@ -369,7 +370,7 @@ serialTest("model catalog recent-year filter excludes old models when created is
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -378,19 +379,19 @@ serialTest("model catalog recent-year filter excludes old models when created is
         status: 200,
         json: async () => ({
           data: [
-            { id: "openai/gpt-5.4", name: "GPT 5.4", created: nowSeconds },
-            { id: "openai/gpt-5.5", name: "GPT 5.5", created: oldSeconds },
-            { id: "anthropic/claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+            { id: "openai/gpt-6.1-sol", name: "GPT 6.1 Sol", created: nowSeconds },
+            { id: "openai/gpt-6-sol", name: "GPT 6 Sol", created: oldSeconds },
+            { id: "anthropic/claude-sonnet-6.1", name: "Claude Sonnet 6.1" },
           ],
         }),
       })) as unknown as typeof fetch
 
       try {
         const catalog = await getAiEntryModelCatalog({ onlyRecentDays: 365 })
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.5"), false)
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.4"), true)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6-sol"), false)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6.1-sol"), true)
         assert.equal(
-          catalog.models.some((item) => item.id === "claude-sonnet-4.6"),
+          catalog.models.some((item) => item.id === "anthropic/claude-sonnet-6.1"),
           true,
         )
       } finally {
@@ -407,7 +408,7 @@ serialTest("model catalog strict recent filter excludes models without created t
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -416,16 +417,16 @@ serialTest("model catalog strict recent filter excludes models without created t
         status: 200,
         json: async () => ({
           data: [
-            { id: "openai/gpt-5.4", name: "GPT 5.4", created: nowSeconds },
-            { id: "anthropic/claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+            { id: "openai/gpt-6.1-sol", name: "GPT 6.1 Sol", created: nowSeconds },
+            { id: "anthropic/claude-sonnet-6.1", name: "Claude Sonnet 6.1" },
           ],
         }),
       })) as unknown as typeof fetch
 
       try {
         const catalog = await getAiEntryModelCatalog({ onlyRecentDays: 365, recentStrict: true })
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.4"), true)
-        assert.equal(catalog.models.some((item) => item.id === "claude-sonnet-4.6"), false)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6.1-sol"), true)
+        assert.equal(catalog.models.some((item) => item.id === "claude-sonnet-6.1"), false)
         assert.equal(catalog.recentStrict, true)
       } finally {
         globalThis.fetch = originalFetch
@@ -441,7 +442,7 @@ serialTest("model catalog falls back to unfiltered high-tier chat models when re
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -450,8 +451,8 @@ serialTest("model catalog falls back to unfiltered high-tier chat models when re
         status: 200,
         json: async () => ({
           data: [
-            { id: "openai/gpt-5.4", name: "GPT 5.4", created: oldSeconds },
-            { id: "anthropic/claude-sonnet-4.6", name: "Claude Sonnet 4.6", created: oldSeconds },
+            { id: "openai/gpt-6.1-sol", name: "GPT 6.1 Sol", created: oldSeconds },
+            { id: "anthropic/claude-sonnet-6.1", name: "Claude Sonnet 6.1", created: oldSeconds },
           ],
         }),
       })) as unknown as typeof fetch
@@ -475,7 +476,7 @@ serialTest("model catalog filters out non-target provider families under high-ti
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -488,7 +489,7 @@ serialTest("model catalog filters out non-target provider families under high-ti
             { id: "minimax/minimax-m1", name: "MiniMax M1" },
             { id: "zhipu/glm-4.5", name: "GLM 4.5" },
             { id: "moonshotai/kimi-k2", name: "Kimi K2" },
-            { id: "openai/gpt-5.4", name: "GPT 5.4" },
+            { id: "openai/gpt-6.1-sol", name: "GPT 6.1 Sol" },
           ],
         }),
       })) as unknown as typeof fetch
@@ -499,7 +500,7 @@ serialTest("model catalog filters out non-target provider families under high-ti
           catalog.modelGroups.map((group) => group.family),
           ["openai"],
         )
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.4"), true)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6.1-sol"), true)
         assert.equal(catalog.models.some((item) => item.id === "qwen/qwen-max"), false)
         assert.equal(catalog.models.some((item) => item.id === "minimax/minimax-m1"), false)
       } finally {
@@ -514,7 +515,7 @@ serialTest("model catalog infers target families from bare ids and keeps only hi
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "gpt-5.4-mini",
+      AI_ENTRY_AIBERM_MODEL: "gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -523,8 +524,8 @@ serialTest("model catalog infers target families from bare ids and keeps only hi
         status: 200,
         json: async () => ({
           data: [
-            { id: "gpt-5.4-mini", owned_by: "custom" },
-            { id: "claude-opus-4-6", owned_by: "custom" },
+            { id: "gpt-6-sol", owned_by: "custom" },
+            { id: "claude-opus-6-1", owned_by: "custom" },
             { id: "gemini-3-flash-preview", owned_by: "custom" },
             { id: "qwen3-vl-plus", owned_by: "custom" },
             { id: "MiniMax-M2.7", owned_by: "custom" },
@@ -540,8 +541,8 @@ serialTest("model catalog infers target families from bare ids and keeps only hi
           catalog.modelGroups.map((group) => group.family),
           ["anthropic", "openai", "gemini", "minimax"],
         )
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.4-mini"), true)
-        assert.equal(catalog.models.some((item) => item.id === "claude-opus-4.6"), true)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6-sol"), true)
+        assert.equal(catalog.models.some((item) => item.id === "claude-opus-6.1"), true)
         assert.equal(catalog.models.some((item) => item.id === "gemini-3-flash-preview"), true)
         assert.equal(catalog.models.some((item) => item.id === "MiniMax-M2.7"), true)
         assert.equal(catalog.models.some((item) => item.id === "qwen3-vl-plus"), false)
@@ -557,7 +558,7 @@ serialTest("model catalog keeps verified whitelist models for a configured provi
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -566,10 +567,9 @@ serialTest("model catalog keeps verified whitelist models for a configured provi
         status: 200,
         json: async () => ({
           data: [
-            { id: "gpt-5.4", owned_by: "custom" },
-            { id: "gpt-5.4-mini", owned_by: "custom" },
-            { id: "gpt-5.5", owned_by: "custom" },
-            { id: "claude-opus-4-7", owned_by: "custom" },
+            { id: "gpt-6.1-sol", owned_by: "custom" },
+            { id: "gpt-6-sol", owned_by: "custom" },
+            { id: "claude-opus-6-7", owned_by: "custom" },
             { id: "gemini-3.1-pro-preview", owned_by: "custom" },
             { id: "claude-opus-4-4", owned_by: "custom" },
           ],
@@ -581,10 +581,9 @@ serialTest("model catalog keeps verified whitelist models for a configured provi
           onlyRecentDays: null,
           providerId: "aiberm",
         })
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.4"), true)
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.4-mini"), true)
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.5"), true)
-        assert.equal(catalog.models.some((item) => item.id === "claude-opus-4.7"), true)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6.1-sol"), true)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6-sol"), true)
+        assert.equal(catalog.models.some((item) => item.id === "claude-opus-6.7"), true)
         assert.equal(catalog.models.some((item) => item.id === "gemini-3.1-pro-preview"), true)
         assert.equal(catalog.models.some((item) => item.id === "claude-opus-4-4"), false)
       } finally {
@@ -599,10 +598,10 @@ serialTest("model catalog can load crazyroute and inject verified whitelist mode
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key-a",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "gpt-6.1-sol",
       AI_ENTRY_CRAZYROUTE_API_KEY: "test-key-c",
       AI_ENTRY_CRAZYROUTE_BASE_URL: "https://crazy.example/v1",
-      AI_ENTRY_CRAZYROUTE_MODEL: "gpt-5.5",
+      AI_ENTRY_CRAZYROUTE_MODEL: "gpt-6-sol",
     },
     async () => {
       const calls: string[] = []
@@ -616,9 +615,9 @@ serialTest("model catalog can load crazyroute and inject verified whitelist mode
             status: 200,
             json: async () => ({
               data: [
-                { id: "gpt-5.4", owned_by: "custom" },
-                { id: "gpt-5.5", owned_by: "custom" },
-                { id: "claude-opus-4-7", owned_by: "custom" },
+                { id: "gpt-6.1-sol", owned_by: "custom" },
+                { id: "gpt-6-sol", owned_by: "custom" },
+                { id: "claude-opus-6-7", owned_by: "custom" },
                 { id: "gemini-3-flash-preview", owned_by: "custom" },
               ],
             }),
@@ -627,7 +626,7 @@ serialTest("model catalog can load crazyroute and inject verified whitelist mode
         return {
           ok: true,
           status: 200,
-          json: async () => ({ data: [{ id: "gpt-5.4", owned_by: "custom" }] }),
+          json: async () => ({ data: [{ id: "gpt-6.1-sol", owned_by: "custom" }] }),
         } as Response
       }) as typeof fetch
 
@@ -637,10 +636,9 @@ serialTest("model catalog can load crazyroute and inject verified whitelist mode
           providerId: "crazyroute",
         })
         assert.equal(catalog.providerId, "crazyroute")
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.4"), true)
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.4-mini"), true)
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.5"), true)
-        assert.equal(catalog.models.some((item) => item.id === "claude-opus-4.7"), true)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6.1-sol"), true)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6-sol"), true)
+        assert.equal(catalog.models.some((item) => item.id === "claude-opus-6.7"), true)
         assert.equal(catalog.models.some((item) => item.id === "gemini-3-flash-preview"), true)
         assert.deepEqual(calls, ["https://crazy.example/v1/models"])
       } finally {
@@ -655,13 +653,13 @@ serialTest("model catalog can be aggregated across configured providers", async 
     {
       AI_ENTRY_PPTOKEN_API_KEY: "pptoken-key",
       AI_ENTRY_PPTOKEN_BASE_URL: "https://pptoken.example/v1",
-      AI_ENTRY_PPTOKEN_MODEL: "gpt-5.6-sol",
+      AI_ENTRY_PPTOKEN_MODEL: "gpt-6.1-sol",
       AI_ENTRY_OPENROUTER_API_KEY: "openrouter-key",
       AI_ENTRY_OPENROUTER_BASE_URL: "https://openrouter.example/v1",
       AI_ENTRY_OPENROUTER_MODEL: "grok-4.5",
       AI_ENTRY_AIBERM_API_KEY: "aiberm-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "claude-sonnet-4.6",
+      AI_ENTRY_AIBERM_MODEL: "claude-sonnet-6.1",
       AI_ENTRY_CRAZYROUTE_API_KEY: "crazy-key",
       AI_ENTRY_CRAZYROUTE_BASE_URL: "https://crazy.example/v1",
       AI_ENTRY_CRAZYROUTE_MODEL: "gemini-3.1-pro-preview",
@@ -682,8 +680,8 @@ serialTest("model catalog can be aggregated across configured providers", async 
             status: 200,
             json: async () => ({
               data: [
-                { id: "gpt-5.6-sol", owned_by: "openai" },
-                { id: "gpt-5.6-terra", owned_by: "openai" },
+                { id: "gpt-6.1-sol", owned_by: "openai" },
+                { id: "gpt-6-sol", owned_by: "openai" },
               ],
             }),
           } as Response
@@ -695,7 +693,7 @@ serialTest("model catalog can be aggregated across configured providers", async 
             status: 200,
             json: async () => ({
               data: [
-                { id: "claude-sonnet-4.6", owned_by: "anthropic" },
+                { id: "claude-sonnet-6.1", owned_by: "anthropic" },
                 { id: "MiniMax-M2.7", owned_by: "minimax" },
               ],
             }),
@@ -749,8 +747,8 @@ serialTest("model catalog can be aggregated across configured providers", async 
 
         assert.deepEqual([...mergedGroups.keys()], ["openai", "xai", "anthropic", "gemini", "minimax"])
         assert.equal(mergedGroups.get("xai")?.has("grok-4.5"), true)
-        assert.equal(mergedGroups.get("openai")?.has("gpt-5.6-sol"), true)
-        assert.equal(mergedGroups.get("anthropic")?.has("claude-sonnet-4.6"), true)
+        assert.equal(mergedGroups.get("openai")?.has("gpt-6.1-sol"), true)
+        assert.equal(mergedGroups.get("anthropic")?.has("claude-sonnet-6.1"), true)
         assert.equal(mergedGroups.get("gemini")?.has("gemini-3.1-pro-preview"), true)
         assert.equal(mergedGroups.get("minimax")?.has("MiniMax-M2.7"), true)
       } finally {
@@ -765,7 +763,7 @@ serialTest("model catalog keeps canonical bare id when provider and separator va
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "gpt-5.4-mini",
+      AI_ENTRY_AIBERM_MODEL: "gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -774,10 +772,10 @@ serialTest("model catalog keeps canonical bare id when provider and separator va
         status: 200,
         json: async () => ({
           data: [
-            { id: "gpt-5.4-mini", owned_by: "custom" },
-            { id: "openai/gpt-5-4-mini", owned_by: "custom" },
-            { id: "anthropic/claude-sonnet-4.6", owned_by: "custom" },
-            { id: "claude-sonnet-4.6", owned_by: "custom" },
+            { id: "gpt-6.1-sol", owned_by: "custom" },
+            { id: "openai/gpt-6-1-sol", owned_by: "custom" },
+            { id: "anthropic/claude-sonnet-6.1", owned_by: "custom" },
+            { id: "claude-sonnet-6.1", owned_by: "custom" },
             { id: "gemini/gemini-3.1-pro-preview", owned_by: "custom" },
             { id: "MiniMax-M2.7-highspeed", owned_by: "custom" },
           ],
@@ -786,17 +784,17 @@ serialTest("model catalog keeps canonical bare id when provider and separator va
 
       try {
         const catalog = await getAiEntryModelCatalog({ onlyRecentDays: null })
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.4-mini"), true)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6.1-sol"), true)
         assert.equal(
-          catalog.models.some((item) => item.id === "openai/gpt-5-4-mini"),
+          catalog.models.some((item) => item.id === "openai/gpt-6-1-sol"),
           false,
         )
-        assert.equal(catalog.models.some((item) => item.id === "claude-sonnet-4.6"), true)
+        assert.equal(catalog.models.some((item) => item.id === "claude-sonnet-6.1"), true)
         assert.equal(
           catalog.models.some((item) => item.id === "gemini-3.1-pro-preview"),
           true,
         )
-        assert.equal(catalog.models.some((item) => item.id === "anthropic/claude-sonnet-4.6"), false)
+        assert.equal(catalog.models.some((item) => item.id === "anthropic/claude-sonnet-6.1"), false)
         assert.equal(
           catalog.models.some((item) => item.id === "MiniMax-M2.7-highspeed"),
           false,
@@ -808,12 +806,12 @@ serialTest("model catalog keeps canonical bare id when provider and separator va
   )
 })
 
-serialTest("model catalog filters out unsupported codex and thinking variants", async () => {
+serialTest("model catalog filters retired GPT models and Claude thinking variants", async () => {
   await withProviderEnv(
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "claude-sonnet-4.6",
+      AI_ENTRY_AIBERM_MODEL: "claude-sonnet-6.1",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -822,9 +820,9 @@ serialTest("model catalog filters out unsupported codex and thinking variants", 
         status: 200,
         json: async () => ({
           data: [
-            { id: "anthropic/claude-sonnet-4.6", owned_by: "custom" },
+            { id: "anthropic/claude-sonnet-6.1", owned_by: "custom" },
             { id: "openai/gpt-5.3-codex", owned_by: "custom" },
-            { id: "anthropic/claude-sonnet-4.6-thinking", owned_by: "custom" },
+            { id: "anthropic/claude-sonnet-6.1-thinking", owned_by: "custom" },
             { id: "openai/gpt-5.3-codex-thinking", owned_by: "custom" },
           ],
         }),
@@ -837,10 +835,10 @@ serialTest("model catalog filters out unsupported codex and thinking variants", 
           catalog.models.some((item) => item.id === "openai/gpt-5.3-codex-thinking"),
           false,
         )
-        assert.equal(catalog.models.some((item) => item.id === "claude-sonnet-4.6"), true)
-        assert.equal(catalog.models.some((item) => item.id === "anthropic/claude-sonnet-4.6"), false)
+        assert.equal(catalog.models.some((item) => item.id === "claude-sonnet-6.1"), true)
+        assert.equal(catalog.models.some((item) => item.id === "anthropic/claude-sonnet-6.1"), false)
         assert.equal(
-          catalog.models.some((item) => item.id === "anthropic/claude-sonnet-4.6-thinking"),
+          catalog.models.some((item) => item.id === "anthropic/claude-sonnet-6.1-thinking"),
           false,
         )
       } finally {
@@ -855,7 +853,7 @@ serialTest("model catalog keeps only the approved claude whitelist entries", asy
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "claude-opus-4.6",
+      AI_ENTRY_AIBERM_MODEL: "claude-opus-6.1",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -864,9 +862,9 @@ serialTest("model catalog keeps only the approved claude whitelist entries", asy
         status: 200,
         json: async () => ({
           data: [
-            { id: "claude-opus-4-6", owned_by: "custom" },
-            { id: "claude-haiku-4-5-20251001", owned_by: "custom" },
-            { id: "claude-opus-4-7", owned_by: "custom" },
+            { id: "claude-opus-6-1", owned_by: "custom" },
+            { id: "claude-haiku-6-1-20261001", owned_by: "custom" },
+            { id: "claude-opus-6-7", owned_by: "custom" },
             { id: "claude-opus-4-4", owned_by: "custom" },
             { id: "claude-4-6", owned_by: "custom" },
           ],
@@ -875,11 +873,11 @@ serialTest("model catalog keeps only the approved claude whitelist entries", asy
 
       try {
         const catalog = await getAiEntryModelCatalog({ onlyRecentDays: null })
-        assert.equal(catalog.models.some((item) => item.id === "claude-opus-4.6"), true)
-        assert.equal(catalog.models.some((item) => item.id === "claude-opus-4.7"), true)
-        assert.equal(catalog.models.some((item) => item.id === "claude-haiku-4.5"), true)
+        assert.equal(catalog.models.some((item) => item.id === "claude-opus-6.1"), true)
+        assert.equal(catalog.models.some((item) => item.id === "claude-opus-6.7"), true)
+        assert.equal(catalog.models.some((item) => item.id === "claude-haiku-6.1"), true)
         assert.equal(
-          catalog.models.some((item) => item.id === "claude-haiku-4-5-20251001"),
+          catalog.models.some((item) => item.id === "claude-haiku-6-1-20261001"),
           false,
         )
         assert.equal(catalog.models.some((item) => item.id === "claude-opus-4-4"), false)
@@ -896,7 +894,7 @@ serialTest("model catalog dedupes provider and separator variants across the app
     {
       AI_ENTRY_AIBERM_API_KEY: "test-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "gpt-6.1-sol",
     },
     async () => {
       const originalFetch = globalThis.fetch
@@ -905,12 +903,12 @@ serialTest("model catalog dedupes provider and separator variants across the app
         status: 200,
         json: async () => ({
           data: [
-            { id: "openai/gpt-5.4", owned_by: "custom" },
-            { id: "gpt-5-4", owned_by: "custom" },
+            { id: "openai/gpt-6.1-sol", owned_by: "custom" },
+            { id: "gpt-6-1-sol", owned_by: "custom" },
             { id: "google/gemini-3.1-pro-preview", owned_by: "custom" },
             { id: "gemini-3-1-pro-preview", owned_by: "custom" },
-            { id: "anthropic/claude-opus-4.6", owned_by: "custom" },
-            { id: "claude-opus-4-6", owned_by: "custom" },
+            { id: "anthropic/claude-opus-6.1", owned_by: "custom" },
+            { id: "claude-opus-6-1", owned_by: "custom" },
           ],
         }),
       })) as unknown as typeof fetch
@@ -918,8 +916,8 @@ serialTest("model catalog dedupes provider and separator variants across the app
       try {
         const catalog = await getAiEntryModelCatalog({ onlyRecentDays: null })
 
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.4"), true)
-        assert.equal(catalog.models.some((item) => item.id === "openai/gpt-5.4"), false)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6.1-sol"), true)
+        assert.equal(catalog.models.some((item) => item.id === "openai/gpt-6.1-sol"), false)
 
         assert.equal(catalog.models.some((item) => item.id === "gemini-3.1-pro-preview"), true)
         assert.equal(
@@ -927,9 +925,9 @@ serialTest("model catalog dedupes provider and separator variants across the app
           false,
         )
 
-        assert.equal(catalog.models.some((item) => item.id === "claude-opus-4.6"), true)
+        assert.equal(catalog.models.some((item) => item.id === "claude-opus-6.1"), true)
         assert.equal(
-          catalog.models.some((item) => item.id === "anthropic/claude-opus-4.6"),
+          catalog.models.some((item) => item.id === "anthropic/claude-opus-6.1"),
           false,
         )
       } finally {
@@ -944,10 +942,10 @@ serialTest("model catalog falls back to crazyroute when aiberm is unavailable", 
     {
       AI_ENTRY_AIBERM_API_KEY: "aiberm-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
       AI_ENTRY_CRAZYROUTE_API_KEY: "crazy-key",
       AI_ENTRY_CRAZYROUTE_BASE_URL: "https://crazy.example/v1",
-      AI_ENTRY_CRAZYROUTE_MODEL: "openai/gpt-5.5",
+      AI_ENTRY_CRAZYROUTE_MODEL: "openai/gpt-6-sol",
     },
     async () => {
       const calls: string[] = []
@@ -973,7 +971,7 @@ serialTest("model catalog falls back to crazyroute when aiberm is unavailable", 
             status: 200,
             text: async () => "",
             json: async () => ({
-              data: [{ id: "openai/gpt-5.5", name: "GPT 5.5" }],
+              data: [{ id: "openai/gpt-6-sol", name: "GPT 6 Sol" }],
             }),
           } as Response
         }
@@ -989,7 +987,7 @@ serialTest("model catalog falls back to crazyroute when aiberm is unavailable", 
       try {
         const catalog = await getAiEntryModelCatalog({ onlyRecentDays: null })
         assert.equal(catalog.providerId, "crazyroute")
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.5"), true)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6-sol"), true)
         assert.equal(calls[0]?.includes("https://aiberm.example/v1/models"), true)
         assert.equal(calls.some((item) => item.includes("https://crazy.example/v1/models")), true)
       } finally {
@@ -1004,10 +1002,10 @@ serialTest("model catalog falls back to configured default when aiberm and crazy
     {
       AI_ENTRY_AIBERM_API_KEY: "aiberm-key",
       AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
-      AI_ENTRY_AIBERM_MODEL: "openai/gpt-5.4",
+      AI_ENTRY_AIBERM_MODEL: "openai/gpt-6.1-sol",
       AI_ENTRY_CRAZYROUTE_API_KEY: "crazy-key",
       AI_ENTRY_CRAZYROUTE_BASE_URL: "https://crazy.example/v1",
-      AI_ENTRY_CRAZYROUTE_MODEL: "openai/gpt-5.5",
+      AI_ENTRY_CRAZYROUTE_MODEL: "openai/gpt-6-sol",
     },
     async () => {
       const calls: string[] = []
@@ -1047,14 +1045,55 @@ serialTest("model catalog falls back to configured default when aiberm and crazy
       try {
         const catalog = await getAiEntryModelCatalog({ onlyRecentDays: null })
         assert.equal(catalog.providerId, "aiberm")
-        assert.equal(catalog.models.some((item) => item.id === "openai/gpt-5.4"), true)
-        assert.equal(catalog.models.some((item) => item.id === "gpt-5.5"), false)
+        assert.equal(catalog.models.some((item) => item.id === "openai/gpt-6.1-sol"), true)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6-sol"), false)
 
         const modelCalls = calls.filter((item) => item.endsWith("/models"))
         assert.deepEqual(modelCalls, [
           "https://aiberm.example/v1/models",
           "https://crazy.example/v1/models",
         ])
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    },
+  )
+})
+
+serialTest("model catalog explicitly filters retired GPT and Claude versions", async () => {
+  await withProviderEnv(
+    {
+      AI_ENTRY_AIBERM_API_KEY: "test-key",
+      AI_ENTRY_AIBERM_BASE_URL: "https://aiberm.example/v1",
+    },
+    async () => {
+      const originalFetch = globalThis.fetch
+      ;(globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = (async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [
+            { id: "openai/gpt-6.1-sol", owned_by: "openai" },
+            { id: "openai/gpt-5.6", owned_by: "openai" },
+            { id: "openai/gpt-5.5", owned_by: "openai" },
+            { id: "anthropic/claude-sonnet-6.1", owned_by: "anthropic" },
+            { id: "anthropic/claude-sonnet-5.0", owned_by: "anthropic" },
+            { id: "anthropic/claude-opus-4.6", owned_by: "anthropic" },
+          ],
+        }),
+      })) as unknown as typeof fetch
+
+      try {
+        const catalog = await getAiEntryModelCatalog({ onlyRecentDays: null })
+        assert.equal(catalog.models.some((item) => item.id === "gpt-6.1-sol"), true)
+        assert.equal(
+          catalog.models.some((item) => item.id === "anthropic/claude-sonnet-6.1"),
+          true,
+        )
+        assert.equal(catalog.models.some((item) => item.id === "gpt-5.6"), false)
+        assert.equal(catalog.models.some((item) => item.id === "gpt-5.5"), false)
+        assert.equal(catalog.models.some((item) => item.id === "claude-sonnet-5.0"), false)
+        assert.equal(catalog.models.some((item) => item.id === "claude-opus-4.6"), false)
       } finally {
         globalThis.fetch = originalFetch
       }

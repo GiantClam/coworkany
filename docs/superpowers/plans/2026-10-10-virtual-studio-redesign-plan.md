@@ -725,4 +725,3 @@ Two execution options:
 - The chair is an independent renderer layer and loads the approved `chair` manifest asset; the source texture is split into stable rear and foreground frames without changing the scene contract.
 - The cushion edge is intentionally thin and narrower than the 128px station cell; the foreground backrest supplies the body occlusion while the head remains visible from the rear view.
 - No business state, role labels, or accessibility semantics moved into Pixi.
-

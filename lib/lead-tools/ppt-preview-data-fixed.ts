@@ -70,9 +70,10 @@ export type PptPreviewModelValue =
   | "deepseek-v4-pro"
   | "MiniMax-M2.7-highspeed"
   | "MiniMax-M3"
-  | "gpt-5.6-sol"
-  | "gpt-5.6-terra"
-  | "gpt-5.6-luna"
+  | "gpt-6-astra"
+  | "gpt-6-luna"
+  | "gpt-6-sol"
+  | "gpt-6.1-sol"
   | "step-3.7-flash"
   | (string & {})
 export type PptPreviewTemplateMode = "auto-4" | "single-template"
@@ -1735,20 +1736,20 @@ export const pptPreviewModelOptions: Array<{
     description: "推理更重，适合更强表达但通常更慢。",
   },
   {
-    value: "gpt-5.6-luna",
-    label: "GPT-5.6 Luna",
+    value: "gpt-6-luna",
+    label: "GPT-6 Luna",
     provider: "pptoken",
     description: "通过 pptoken 路由，速度优先，适合作为默认模型。",
   },
   {
-    value: "gpt-5.6-terra",
-    label: "GPT-5.6 Terra",
+    value: "gpt-6-astra",
+    label: "GPT-6 Astra",
     provider: "pptoken",
     description: "通过 pptoken 路由，适合结构化分析和方案表达。",
   },
   {
-    value: "gpt-5.6-sol",
-    label: "GPT-5.6 Sol",
+    value: "gpt-6.1-sol",
+    label: "GPT-6.1 Sol",
     provider: "pptoken",
     description: "通过 pptoken 路由，适合高质量内容规划。",
   },

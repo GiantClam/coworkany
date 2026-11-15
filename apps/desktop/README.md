@@ -29,14 +29,14 @@ NSIS 产物位于 `apps/desktop/src-tauri/target/release/bundle/nsis/`；当前�
   "provider": {
     "id": "text-main",
     "source": "openai-compatible",
-    "model": "gpt-5.4",
+    "model": "gpt-6.1-sol",
     "baseUrl": "https://text.example/v1",
     "apiKey": "text-secret"
   },
   "providers": {
     "text-main": {
       "id": "text-main",
-      "model": "gpt-5.4",
+      "model": "gpt-6.1-sol",
       "baseUrl": "https://text.example/v1",
       "apiKey": "text-secret"
     },

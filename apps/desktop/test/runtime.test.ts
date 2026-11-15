@@ -143,6 +143,28 @@ test("config preserves provider profiles and capability defaults", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("config retires old text models while preserving media catalogs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "coworkany-model-policy-config-"));
+  const paths = createPaths(root, "normal");
+  try {
+    const initial = defaultDesktopConfig(paths);
+    await writeDesktopConfig(paths, {
+      ...initial,
+      provider: { id: "text", source: "openai-compatible", model: "gpt-5.4", models: ["gpt-5.4", "gpt-6.1-sol"], capabilities: ["text"] },
+      providers: {
+        text: { id: "text", source: "openai-compatible", model: "gpt-5.4", models: ["gpt-5.4", "gpt-6.1-sol"], capabilities: ["text"] },
+        vision: { id: "vision", source: "openai-compatible", model: "gpt-4o", models: ["gpt-4o", "gpt-5.4-vision"], capabilities: ["image"] },
+      },
+      defaults: { text: "text", image: "vision" },
+    });
+    const loaded = await readDesktopConfig(paths);
+    assert.equal(loaded.provider.model, "gpt-6.1-sol");
+    assert.deepEqual(loaded.providers?.text?.models, ["gpt-6.1-sol"]);
+    assert.equal(loaded.providers?.vision?.model, "gpt-4o");
+    assert.deepEqual(loaded.providers?.vision?.models, ["gpt-4o", "gpt-5.4-vision"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("config removes developer-owned RunningHub workflow IDs while preserving user IDs", async () => {
   const root = await mkdtemp(join(tmpdir(), "coworkany-runninghub-config-"));
   const paths = createPaths(root, "normal");

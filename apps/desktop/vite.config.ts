@@ -21,7 +21,11 @@ export default defineConfig({
   // both packaged builds and the development server.
   base: "./",
   plugins: [react()],
-  optimizeDeps: { exclude: ["@silurus/ooxml"] },
+  // Runtime staging places Python/skill HTML under dist-runtime and Tauri's
+  // target directory. Vite's default entry glob scans every HTML file there,
+  // which can fail or delay the native window indefinitely. The desktop app
+  // has one frontend entry, so keep dependency discovery bounded to it.
+  optimizeDeps: { entries: ["index.html"], exclude: ["@silurus/ooxml"] },
   resolve: { alias: [
     { find: "@coworkany/workbench-ui/styles.css", replacement: resolve(__dirname, "../../packages/workbench-ui/src/styles.css") },
     { find: "@coworkany/workbench-ui/desktop", replacement: resolve(__dirname, "../../packages/workbench-ui/src/desktop-entry.ts") },

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 
-import { runOpenCode } from "./opencode"
+import { normalizeOpenCodeRuntimeEvent, runOpenCode } from "./opencode"
 import { buildRuntimeConfig } from "./opencode-runtime-config"
 import { providerRuntimeKey } from "./opencode-provider"
 
@@ -9,6 +9,93 @@ test("normalizes platform provider IDs into valid OpenCode config keys", () => {
   assert.deepEqual(providerRuntimeKey("enterprise-openai-compatible"), {
     configKey: "enterprise_openai_compatible",
     envKey: "ENTERPRISE_OPENAI_COMPATIBLE_API_KEY",
+  })
+})
+
+test("normalizes parser-only artifact and preview events at the runner boundary", () => {
+  assert.deepEqual(normalizeOpenCodeRuntimeEvent({
+    event: "artifact",
+    artifact: { id: "artifact-1", relativePath: "artifacts/deck.pptx", title: "Deck", mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", byteLength: 10, sha256: "a".repeat(64) },
+    runId: "run-1",
+  }), {
+    event: "runtime_warning",
+    code: "artifact_event_deferred_to_collector",
+    message: "OpenCode reported an artifact; the runner will use its sandbox artifact collector.",
+    runId: "run-1",
+  })
+  assert.deepEqual(normalizeOpenCodeRuntimeEvent({
+    event: "preview",
+    preview: { kind: "ppt", title: "Deck preview", status: "ready" },
+    runId: "run-1",
+  }), {
+    event: "runtime_warning",
+    code: "preview_event_not_supported_by_runner",
+    message: "OpenCode reported a preview, but this runner exposes previews through the artifact workflow.",
+    runId: "run-1",
+  })
+})
+
+test("fails closed when the CLI parser emits an interactive event", () => {
+  const event = normalizeOpenCodeRuntimeEvent({
+    event: "question_request",
+    requestId: "question-1",
+    sessionId: "session-1",
+    questions: [],
+    runId: "run-1",
+  })
+  assert.deepEqual(event, {
+    event: "runtime_error",
+    code: "interactive_event_not_supported",
+    message: "OpenCode requested an interactive response, but this runner has no interactive channel.",
+    retryable: false,
+    runId: "run-1",
+  })
+})
+
+test("preserves supported tool and usage telemetry during normalization", () => {
+  assert.deepEqual(normalizeOpenCodeRuntimeEvent({
+    event: "tool_event",
+    tool: "write",
+    toolCallId: "call-1",
+    phase: "completed",
+    message: "saved",
+    paths: ["artifacts/deck.pptx"],
+    runId: "run-1",
+  }), {
+    event: "tool_event",
+    tool: "write",
+    toolCallId: "call-1",
+    phase: "completed",
+    message: "saved",
+    paths: ["artifacts/deck.pptx"],
+    runId: "run-1",
+  })
+  assert.deepEqual(normalizeOpenCodeRuntimeEvent({
+    event: "usage",
+    usageId: "usage-1",
+    provider: "pptoken",
+    model: "gpt-6.1-sol",
+    inputTokens: 10,
+    outputTokens: 4,
+    cachedInputTokens: 2,
+    reasoningTokens: 1,
+    costUsd: 0.02,
+    aggregation: "delta",
+    scope: "step",
+    runId: "run-1",
+  }), {
+    event: "usage",
+    usageId: "usage-1",
+    provider: "pptoken",
+    model: "gpt-6.1-sol",
+    inputTokens: 10,
+    outputTokens: 4,
+    cachedInputTokens: 2,
+    reasoningTokens: 1,
+    costUsd: 0.02,
+    aggregation: "delta",
+    scope: "step",
+    runId: "run-1",
   })
 })
 

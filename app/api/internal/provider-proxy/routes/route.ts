@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getConfiguredAiEntryProviderForModel } from "@/lib/ai-entry/provider-routing"
 import { createProviderRouteToken } from "@/lib/ai-runtime/provider-proxy"
 import { getEnterpriseTextRuntimeProviderConfigForProxy } from "@/lib/platform/enterprise-runtime-config"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 function authorized(request: NextRequest) {
   const expected = process.env.RUNTIME_PROXY_TOKEN?.trim() || ""
@@ -18,6 +19,7 @@ export async function POST(request: NextRequest) {
   const runId = typeof payload.runId === "string" ? payload.runId.trim() : ""
   const enterpriseId = payload.enterpriseId === null ? null : typeof payload.enterpriseId === "number" && Number.isInteger(payload.enterpriseId) ? payload.enterpriseId : null
   if (!providerId || !modelId || !/^[0-9a-f-]{36}$/iu.test(runId)) return NextResponse.json({ error: "provider_proxy_route_invalid" }, { status: 400 })
+  if (isDeprecatedTextModelId(modelId)) return NextResponse.json({ error: "provider_proxy_deprecated_model" }, { status: 400 })
   const provider =
     getConfiguredAiEntryProviderForModel(providerId, modelId) ||
     (providerId === "pptoken" || enterpriseId === null

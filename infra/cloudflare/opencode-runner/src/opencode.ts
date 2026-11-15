@@ -1,4 +1,5 @@
 import type { AgentRuntimeEvent, AgentRuntimeInput, OpenCodeProviderConfig } from "../../../../lib/ai-runtime/contracts"
+import type { OpenCodeRuntimeEvent } from "../../../../packages/runtime-contracts/src/opencode"
 import { providerRuntimeKey } from "./opencode-provider"
 import { buildOpenCodeModelConfig, DEEPSEEK_V4_FLASH_MAX_VARIANT, isDeepSeekV4Flash } from "./deepseek-model-config"
 
@@ -54,6 +55,82 @@ function stripControlChars(value: string) {
 function diagnosticErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   return stripControlChars(message).slice(0, 1024)
+}
+
+/**
+ * The CLI parser shares its event union with the richer `serve` transport.
+ * This runner has a narrower public contract: artifacts are collected from
+ * the sandbox after the process exits, and it has no interactive approval or
+ * question channel. Keep that boundary explicit instead of using a cast that
+ * could accidentally expose an event the coordinator cannot handle.
+ */
+export function normalizeOpenCodeRuntimeEvent(event: OpenCodeRuntimeEvent): AgentRuntimeEvent {
+  switch (event.event) {
+    case "text_delta":
+      return { event: "text_delta", delta: event.delta, runId: event.runId }
+    case "reasoning_delta":
+      return { event: "reasoning_delta", delta: event.delta, runId: event.runId }
+    case "tool_event":
+      return {
+        event: "tool_event",
+        tool: event.tool,
+        ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+        phase: event.phase,
+        ...(event.message ? { message: event.message } : {}),
+        ...(event.paths?.length ? { paths: event.paths } : {}),
+        runId: event.runId,
+      }
+    case "usage":
+      return {
+        event: "usage",
+        ...(event.usageId ? { usageId: event.usageId } : {}),
+        ...(event.provider ? { provider: event.provider } : {}),
+        ...(event.model ? { model: event.model } : {}),
+        ...(event.inputTokens === undefined ? {} : { inputTokens: event.inputTokens }),
+        ...(event.outputTokens === undefined ? {} : { outputTokens: event.outputTokens }),
+        ...(event.cachedInputTokens === undefined ? {} : { cachedInputTokens: event.cachedInputTokens }),
+        ...(event.reasoningTokens === undefined ? {} : { reasoningTokens: event.reasoningTokens }),
+        ...(event.costUsd === undefined ? {} : { costUsd: event.costUsd }),
+        ...(event.aggregation ? { aggregation: event.aggregation } : {}),
+        ...(event.scope ? { scope: event.scope } : {}),
+        runId: event.runId,
+      }
+    case "runtime_warning":
+      return { event: "runtime_warning", code: event.code, message: event.message, runId: event.runId }
+    case "runtime_error":
+      return { event: "runtime_error", code: event.code, message: event.message, retryable: event.retryable, runId: event.runId }
+    case "done":
+      return { event: "done", runId: event.runId }
+    case "artifact":
+      return {
+        event: "runtime_warning",
+        code: "artifact_event_deferred_to_collector",
+        message: "OpenCode reported an artifact; the runner will use its sandbox artifact collector.",
+        runId: event.runId,
+      }
+    case "preview":
+      return {
+        event: "runtime_warning",
+        code: "preview_event_not_supported_by_runner",
+        message: "OpenCode reported a preview, but this runner exposes previews through the artifact workflow.",
+        runId: event.runId,
+      }
+    case "permission_request":
+    case "permission_response":
+    case "question_request":
+    case "question_response":
+      return {
+        event: "runtime_error",
+        code: "interactive_event_not_supported",
+        message: "OpenCode requested an interactive response, but this runner has no interactive channel.",
+        retryable: false,
+        runId: event.runId,
+      }
+    default: {
+      const exhaustive: never = event
+      return exhaustive
+    }
+  }
 }
 
 export type OpenCodeExecutionOptions = {
@@ -207,14 +284,15 @@ export async function* runOpenCode(
             return
           }
           for (const event of parser.push(data)) {
-            if (event.event === "runtime_error" && event.code === "fatal_parse_error") fatalOutput = true
-            queue.push(event)
+            const normalized = normalizeOpenCodeRuntimeEvent(event)
+            if (normalized.event === "runtime_error" && normalized.code === "fatal_parse_error") fatalOutput = true
+            queue.push(normalized)
           }
         },
       })
       console.log(JSON.stringify({ event: "opencode_complete", runId: input.runId, success: result.success, exitCode: result.exitCode, stdoutBytes, stderrBytes: new TextEncoder().encode(stderrText).byteLength }))
       if (!fatalOutput) {
-        for (const event of parser.finish()) queue.push(event)
+        for (const event of parser.finish()) queue.push(normalizeOpenCodeRuntimeEvent(event))
         if (result.success === false || (typeof result.exitCode === "number" && result.exitCode !== 0)) {
           console.log(JSON.stringify({ event: "opencode_exit", runId: input.runId, success: result.success, exitCode: result.exitCode }))
           const detail = stderrText.trim().slice(-768)

@@ -70,10 +70,15 @@ function portIsAvailable(port) {
   });
 }
 
+export function shouldRefusePortKill(environment = process.env) {
+  return environment.COWORKANY_DESKTOP_POC_NO_PORT_KILL === "1";
+}
+
 export async function clearDesktopDevProcesses(port = defaultPort) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`invalid_dev_port:${port}`);
+  const available = await portIsAvailable(port);
+  if (!available && shouldRefusePortKill()) throw new Error(`dev_port_occupied:${port}`);
   if (platform() === "win32") {
-    const available = await portIsAvailable(port);
     if (available) {
       // A packaged/stale Tauri instance can keep an old frontend alive without
       // listening on the Vite dev port. Clear it before starting a new dev run.
@@ -86,7 +91,7 @@ export async function clearDesktopDevProcesses(port = defaultPort) {
     clearWindowsDesktopProcess();
     return pids;
   }
-  if (await portIsAvailable(port)) return [];
+  if (available) return [];
   return clearUnixPort(port);
 }
 

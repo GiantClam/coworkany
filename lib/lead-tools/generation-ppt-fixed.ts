@@ -52,6 +52,7 @@ import {
   hasCrazyrouteApiKey,
 } from "@/lib/writer/aiberm"
 import { withTaskTimeout } from "@/lib/task-timeout"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 type LeadToolPptPlan = {
   title: string
@@ -887,26 +888,27 @@ const PPT_PREVIEW_RUNTIME_MODELS = new Set([
   "MiniMax-M3",
   "deepseek-v4-pro",
   "deepseek-v4-flash",
-  "gpt-5.4",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
+  "gpt-6-astra",
+  "gpt-6-luna",
+  "gpt-6-sol",
+  "gpt-6.1-sol",
   "grok-4.5",
   "step-3.7-flash",
 ])
 
 export function normalizePptPreviewModel(value: unknown) {
   const normalized = typeof value === "string" ? value.trim() : ""
-  if (normalized && PPT_PREVIEW_RUNTIME_MODELS.has(normalized)) return normalized
+  if (normalized && !isDeprecatedTextModelId(normalized) && PPT_PREVIEW_RUNTIME_MODELS.has(normalized)) return normalized
   return "deepseek-v4-pro"
 }
 
 export function normalizePptRuntimeSlideModel(value: unknown) {
   const normalized = normalizeText(value)
-  if (/^(?:openai|openai-compatible)\//iu.test(normalized)) {
+  if (isDeprecatedTextModelId(normalized)) return "gpt-6.1-sol"
+  if (!normalized || /^(?:openai|openai-compatible)\//iu.test(normalized)) {
     return "deepseek-v4-pro"
   }
-  return normalized || "deepseek-v4-pro"
+  return normalized
 }
 
 function resolveRequestedPreviewModel(request: PptPreviewRequest) {
@@ -1047,7 +1049,7 @@ function inferPreviewProviderId(model: string) {
     return "glm" as const
   }
 
-  if (/^gpt-5\.6-(?:sol|terra|luna)$/iu.test(model)) {
+  if (/^gpt-6(?:[.-](?:1|astra|luna|sol))?(?:$|[-_.])/iu.test(model)) {
     return "pptoken" as const
   }
 

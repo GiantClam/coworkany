@@ -11,6 +11,7 @@ export type DesktopWorkflowPortEvent = Extract<OpenCodeRuntimeEvent, { event: "t
 
 export interface DesktopWorkflowPortDependencies {
   readonly runId: string;
+  readonly workspacePath: string;
   readonly emit: (event: OpenCodeRuntimeEvent) => void;
   readonly capability: WorkflowCapabilityPort;
   readonly requestService: (method: "workflow.repository.create" | "workflow.repository.update_status" | "workflow.artifact.register" | "workflow.event.append", payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -55,7 +56,7 @@ export function createDesktopWorkflowPorts(dependencies: DesktopWorkflowPortDepe
 
   const artifacts: WorkflowArtifactPort = {
     async register(input) {
-      const result = await dependencies.requestService("workflow.artifact.register", { runId: dependencies.runId, ...input });
+      const result = await dependencies.requestService("workflow.artifact.register", { runId: dependencies.runId, workspacePath: dependencies.workspacePath, ...input });
       const artifactId = typeof result.artifactId === "string" ? result.artifactId : `${dependencies.runId}:${input.relativePath}`;
       emitTool("workflow:artifact_registered", { artifactId, ...input }, "completed");
       return { artifactId };

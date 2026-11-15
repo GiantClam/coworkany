@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import { buildOpenCodeCommand, createOpenCodeEventParser, type OpenCodeRuntimeEvent } from "@coworkany/runtime-contracts/opencode";
@@ -9,12 +9,14 @@ import { executeWorkflow, migrateWorkflowDefinitionToCurrent, splitWorkflowText 
 import { OpenCodeServeClient } from "./opencode-serve";
 import { createRpcReader, writeRpcResponse, writeRpcServiceRequest } from "./rpc";
 import { createDesktopWorkflowPorts } from "./workflow-ports";
+import { collectWorkflowArtifactValues, externalWorkflowArtifactKey, externalWorkflowArtifactReference } from "./workflow-artifact-reference";
 import { buildMediaCapabilityInput } from "./media-input";
 import { assertVideoMediaCapability, resolveVideoMediaCapabilities } from "./media-capabilities";
 import { discoverProviderModels } from "../src/provider-model-discovery";
 import { CHEAPBUDDY } from "../src/cheapbuddy";
 import type { CheapBuddyAccountAction } from "../src/cheapbuddy-contract";
 import { normalizeCapabilityModels, type DesktopProviderConfig, type ProviderCapability } from "../src/provider-config";
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy";
 import { CheapBuddyAccountService } from "./cheapbuddy-account";
 import { ManagedProviderRuntime, createRedactedLogWriter, managedProviderFailure, qualifiedOpenCodeModel, resolveProviderCredentials } from "./provider-credentials";
 import type { RunningHubWorkflowRegistration } from "../src/runninghub-workflow";
@@ -68,11 +70,20 @@ let skillWorkspaceQueue: Promise<void> = Promise.resolve();
 let stagedSkillSourceKey = "";
 
 function defaultWorkspacePath() {
+  const coworkAnyRuntime = process.env.COWORKANY_RUNTIME_DIR?.trim();
+  if (coworkAnyRuntime) return join(dirname(coworkAnyRuntime), "projects");
+  const localAppData = process.env.LOCALAPPDATA?.trim();
+  if (localAppData) return join(localAppData, "CoworkAny", "projects");
   const runtimeRoot = process.env.OPENCODE_RUNTIME_DIR?.trim();
   if (runtimeRoot) return join(runtimeRoot, "projects");
   const home = process.env.HOME?.trim();
   if (home) return join(home, "Library", "Application Support", "CoworkAny", "projects");
   return join(process.cwd(), "projects");
+}
+
+function localCoworkAnyWorkspacePath() {
+  const localAppData = process.env.LOCALAPPDATA?.trim();
+  return localAppData ? join(localAppData, "CoworkAny", "projects") : undefined;
 }
 
 /**
@@ -353,6 +364,27 @@ async function preparedAgentName(configDirectory: string, agentId?: string) {
 }
 
 const FILE_ARTIFACT_TOOLS = new Set(["write", "edit", "patch", "apply_patch", "bash"]);
+const PROCESS_ARTIFACT_DIRECTORIES = new Set([
+  ".cache",
+  ".git",
+  ".opencode",
+  ".tmp",
+  "backup",
+  "cache",
+  "log",
+  "logs",
+  "node_modules",
+  "svg_output",
+  "temp",
+  "tmp",
+  "validation",
+]);
+
+function isProcessArtifactPath(relative: string) {
+  const segments = relative.split("/");
+  return segments.some((segment) => PROCESS_ARTIFACT_DIRECTORIES.has(segment.toLowerCase()))
+    || segments.some((segment) => segment.toLowerCase().endsWith(".tmp"));
+}
 
 function workspaceRelativeFilePath(workspacePath: string, candidate: string) {
   const root = resolve(workspacePath);
@@ -362,8 +394,7 @@ function workspaceRelativeFilePath(workspacePath: string, candidate: string) {
   if (target !== root && !target.startsWith(`${root}${sep}`)) return undefined;
   const relative = relativePath(root, target).replaceAll("\\", "/");
   if (!relative || relative === "." || relative.split("/").includes("..")) return undefined;
-  const segments = relative.split("/");
-  if (segments.includes(".opencode") || segments.includes("node_modules") || segments.includes(".git") || segments.some((segment) => segment.endsWith(".tmp"))) return undefined;
+  if (isProcessArtifactPath(relative)) return undefined;
   return relative;
 }
 
@@ -394,23 +425,85 @@ function fileArtifactMimeType(relative: string) {
                                               : "application/octet-stream";
 }
 
+function artifactWorkspaceRoots(workspacePath: string) {
+  return [...new Set([workspacePath, defaultWorkspacePath(), localCoworkAnyWorkspacePath()].filter((path): path is string => Boolean(path)).map((path) => resolve(path)))];
+}
+
 function fileArtifactPaths(workspacePath: string, events: readonly OpenCodeRuntimeEvent[]) {
-  const candidates = new Set<string>();
+  const candidates = new Map<string, { readonly workspacePath: string; readonly relativePath: string }>();
   for (const event of events) {
     if (event.event !== "tool_event" || event.phase !== "completed" || !FILE_ARTIFACT_TOOLS.has(event.tool)) continue;
     for (const candidate of event.paths ?? []) {
-      const relative = workspaceRelativeFilePath(workspacePath, candidate);
-      if (relative) candidates.add(relative);
+      for (const root of artifactWorkspaceRoots(workspacePath)) {
+        const relative = workspaceRelativeFilePath(root, candidate);
+        if (relative) candidates.set(`${root}\u0000${relative}`, { workspacePath: root, relativePath: relative });
+      }
     }
   }
-  return [...candidates];
+  return [...candidates.values()];
 }
 
-function localFileArtifacts(workspacePath: string, events: readonly OpenCodeRuntimeEvent[]) {
-  return fileArtifactPaths(workspacePath, events).flatMap((relative) => {
+function presentationExportArtifacts(workspacePath: string, events: readonly OpenCodeRuntimeEvent[], startedAt: number) {
+  const candidates = new Map<string, { readonly workspacePath: string; readonly relativePath: string }>();
+  const addExports = (root: string, exportDirectory: string, recentOnly: boolean) => {
     try {
-      const metadata = statSync(resolve(workspacePath, relative));
-      return metadata.isFile() ? [{ relativePath: relative, title: basename(relative), mimeType: fileArtifactMimeType(relative), bytes: metadata.size }] : [];
+      const relativeDirectory = relativePath(root, exportDirectory).replaceAll("\\", "/");
+      if (relativeDirectory === ".." || relativeDirectory.startsWith("../") || basename(exportDirectory).toLowerCase() !== "exports") return;
+      for (const entry of readdirSync(exportDirectory, { withFileTypes: true })) {
+        if (!entry.isFile() || !/\.pptx$/iu.test(entry.name)) continue;
+        const absolutePath = resolve(exportDirectory, entry.name);
+        if (recentOnly && statSync(absolutePath).mtimeMs < startedAt - 5_000) continue;
+        const relative = join(relativeDirectory, entry.name).replaceAll("\\", "/");
+        if (isProcessArtifactPath(relative)) continue;
+        candidates.set(`${root}\u0000${relative}`, { workspacePath: root, relativePath: relative });
+      }
+    } catch { /* an exports directory may disappear before the final scan */ }
+  };
+  for (const event of events) {
+    if (event.event !== "tool_event" || event.phase !== "completed" || event.tool !== "glob") continue;
+    for (const candidate of event.paths ?? []) {
+      for (const root of artifactWorkspaceRoots(workspacePath)) {
+        const relativeDirectory = workspaceRelativeFilePath(root, candidate);
+        if (!relativeDirectory || basename(relativeDirectory).toLowerCase() !== "exports") continue;
+        addExports(root, resolve(root, relativeDirectory), true);
+      }
+    }
+  }
+  // Some Skill/tool adapter versions report the shell command but omit the
+  // final glob path. Recover only fresh PPTX files beneath trusted roots and
+  // a bounded directory depth; never sweep backup, validation, or scratch
+  // trees looking for arbitrary office files.
+  for (const root of artifactWorkspaceRoots(workspacePath)) {
+    const pending: Array<{ readonly directory: string; readonly depth: number }> = [{ directory: root, depth: 0 }];
+    let visited = 0;
+    while (pending.length && visited < 512) {
+      const current = pending.pop();
+      if (!current) continue;
+      visited += 1;
+      if (basename(current.directory).toLowerCase() === "exports") {
+        addExports(root, current.directory, true);
+        continue;
+      }
+      if (current.depth >= 4 || isProcessArtifactPath(relativePath(root, current.directory).replaceAll("\\", "/"))) continue;
+      try {
+        for (const entry of readdirSync(current.directory, { withFileTypes: true })) {
+          if (entry.isDirectory() && !PROCESS_ARTIFACT_DIRECTORIES.has(entry.name.toLowerCase())) {
+            pending.push({ directory: resolve(current.directory, entry.name), depth: current.depth + 1 });
+          }
+        }
+      } catch { /* inaccessible and transient directories are ignored */ }
+    }
+  }
+  return [...candidates.values()];
+}
+
+function localFileArtifacts(workspacePath: string, events: readonly OpenCodeRuntimeEvent[], runId?: string, pptxOnly = false, startedAt = Date.now()) {
+  const candidates = [...fileArtifactPaths(workspacePath, events), ...(pptxOnly ? presentationExportArtifacts(workspacePath, events, startedAt) : [])];
+  const unique = new Map(candidates.map((candidate) => [`${candidate.workspacePath}\u0000${candidate.relativePath}`, candidate]));
+  return [...unique.values()].flatMap(({ workspacePath: root, relativePath }) => {
+    try {
+      const metadata = statSync(resolve(root, relativePath));
+      return metadata.isFile() ? [{ workspacePath: root, relativePath, title: basename(relativePath), mimeType: fileArtifactMimeType(relativePath), bytes: metadata.size }] : [];
     } catch {
       return [];
     }
@@ -624,17 +717,17 @@ async function runVideoCompose(
   return { artifacts: [artifact], asset: artifact, video: [artifact], status: "succeeded" };
 }
 
-async function emitFinalFileArtifacts(command: HostCommand, runId: string, workspacePath: string, events: readonly OpenCodeRuntimeEvent[], allowArtifacts: boolean, pptxOnly = false) {
+async function emitFinalFileArtifacts(command: HostCommand, runId: string, workspacePath: string, events: readonly OpenCodeRuntimeEvent[], allowArtifacts: boolean, pptxOnly = false, startedAt = Date.now()) {
   if (!allowArtifacts) return;
   // Emit only after the model turn has completed. Repeated writes are
   // collapsed to one card per path, and metadata describes the final
   // on-disk version instead of an intermediate tool step.
-  const artifacts = localFileArtifacts(workspacePath, events).filter((artifact) => !pptxOnly || artifact.relativePath.toLowerCase().endsWith(".pptx"));
+  const artifacts = localFileArtifacts(workspacePath, events, runId, pptxOnly, startedAt).filter((artifact) => !pptxOnly || artifact.relativePath.toLowerCase().endsWith(".pptx"));
   for (const artifact of artifacts) {
-    const { relativePath: relative, mimeType, bytes } = artifact;
+    const { workspacePath: artifactWorkspacePath, relativePath: relative, mimeType, bytes } = artifact;
     let registration: Record<string, unknown> | undefined;
     try {
-      registration = await requestService("workflow.artifact.register", { runId, relativePath: relative, mimeType });
+      registration = await requestService("workflow.artifact.register", { runId, workspacePath: artifactWorkspacePath, relativePath: relative, mimeType });
     } catch (error) {
       emit(command, {
         event: "runtime_warning",
@@ -662,6 +755,7 @@ async function runOpenCode(command: HostCommand, session?: { readonly workspaceP
   const prompt = typeof command.payload?.prompt === "string" ? command.payload.prompt : "";
   if (!prompt.trim()) return fail(command, "invalid_prompt", "prompt is required");
   const runId = command.runId ?? randomUUID();
+  const runStartedAt = Date.now();
   const modelHint = typeof command.payload?.model === "string" ? command.payload.model : undefined;
   const skillId = typeof command.payload?.skillId === "string" ? command.payload.skillId : undefined;
   const pptSkill = skillId?.trim().toLowerCase() === "ppt-master" || skillId?.trim().toLowerCase() === "dashi-ppt";
@@ -674,6 +768,8 @@ async function runOpenCode(command: HostCommand, session?: { readonly workspaceP
   try { managedProviderRuntime.assertCurrent(generation); provider = await resolveHostProvider(requestedProvider); managedProviderRuntime.assertCurrent(generation); }
   catch (error) { return fail(command, "provider_credentials_unavailable", error instanceof Error ? error.message : "cheapbuddy_sign_in_required"); }
   const activeProvider = provider;
+  const selectedModel = (modelHint || activeProvider?.model || "").trim();
+  if (isDeprecatedTextModelId(selectedModel)) return fail(command, "deprecated_model", "The selected text model is retired. Choose a GPT-6+ or Claude 6+ model.");
   if (!(activeProvider?.model?.trim() || modelHint?.trim())) return fail(command, "text_provider_model_required", "Configure a text Provider and model before sending.");
   const executable = typeof command.payload?.executable === "string" ? command.payload.executable : defaultOpenCodeExecutable();
   const workspacePath = session?.workspacePath ?? (workspacePathFromPayload(command.payload?.workspacePath) || process.cwd());
@@ -689,7 +785,7 @@ async function runOpenCode(command: HostCommand, session?: { readonly workspaceP
     if (options.respond !== false) respond(command, { runId });
     const events: OpenCodeRuntimeEvent[] = [];
     managedProviderRuntime.assertCurrent(generation);
-    await client.prompt(persistentSession.sessionId, workspacePath, runId, prompt, openCodeProvider(provider), (event) => { const enriched = managedProviderRuntime.redact(enrichUsageEvent(event, provider, modelHint)); events.push(enriched); emit(command, enriched); }, options.signal, persistentSession.agentName ?? agentName, async () => emitFinalFileArtifacts(command, runId, workspacePath, events, allowArtifacts, pptSkill), skillId);
+    await client.prompt(persistentSession.sessionId, workspacePath, runId, prompt, openCodeProvider(provider), (event) => { const enriched = managedProviderRuntime.redact(enrichUsageEvent(event, provider, modelHint)); events.push(enriched); emit(command, enriched); }, options.signal, persistentSession.agentName ?? agentName, async () => emitFinalFileArtifacts(command, runId, workspacePath, events, allowArtifacts, pptSkill, runStartedAt), skillId);
     return events;
   }
   managedProviderRuntime.assertCurrent(generation);
@@ -753,6 +849,7 @@ async function runDirectTextCapability(command: HostCommand, executorId: string,
   if (!baseUrl) throw new Error("text_provider_configuration_required");
   const model = typeof config.model === "string" ? config.model : provider?.model ?? "";
   if (!model) throw new Error("text_provider_model_required");
+  if (isDeprecatedTextModelId(model)) throw new Error("deprecated_model");
   const prompt = [typeof config.prompt === "string" ? config.prompt : "", typeof config.script === "string" ? config.script : "", typeof config.text === "string" ? config.text : "", typeof inputs.text === "string" ? inputs.text : ""].filter(Boolean).join("\n\n").trim();
   if (!prompt) throw new Error("text_prompt_required");
   const defaultTextEndpoint = `/${["chat", "completions"].join("/")}`;
@@ -966,13 +1063,27 @@ async function retryTransientMediaJob<T>(operation: () => Promise<T>) {
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-function withPrivatePython(environment: NodeJS.ProcessEnv) {
+async function withPrivatePython(environment: NodeJS.ProcessEnv) {
   const executable = environment.COWORKANY_PYTHON_PATH;
   if (!executable) return environment;
   const separator = process.platform === "win32" ? ";" : ":";
   const pathKey = Object.keys(environment).find(key => key.toUpperCase() === "PATH") ?? "PATH";
   const entries = Object.entries(environment).filter(([key]) => key.toUpperCase() !== "PATH");
-  const privateEnvironment: NodeJS.ProcessEnv = { ...Object.fromEntries(entries), PATH: `${dirname(executable)}${separator}${join(dirname(executable), "Scripts")}${separator}${environment[pathKey] ?? ""}` };
+  const shimDirectory = process.platform === "win32" && environment.OPENCODE_CONFIG_DIR
+    ? join(environment.OPENCODE_CONFIG_DIR, ".coworkany-command-shims")
+    : undefined;
+  if (shimDirectory) {
+    await mkdir(shimDirectory, { recursive: true });
+    // PPT Master documents `python3` in its commands but explicitly falls
+    // back to `python` on Windows. WindowsApps can shadow that fallback with
+    // a Store stub; put a private alias first so both names invoke the exact
+    // interpreter already probed and supplied by Tauri.
+    await writeFile(join(shimDirectory, "python3.cmd"), '@echo off\r\n"%COWORKANY_PYTHON_PATH%" %*\r\n', "utf8");
+  }
+  const privatePath = [shimDirectory, dirname(executable), join(dirname(executable), "Scripts"), environment[pathKey]]
+    .filter((entry): entry is string => Boolean(entry))
+    .join(separator);
+  const privateEnvironment: NodeJS.ProcessEnv = { ...Object.fromEntries(entries), PATH: privatePath };
   if (process.platform === "darwin" && existsSync(join(dirname(executable), "lib"))) {
     privateEnvironment.PYTHONHOME = dirname(executable);
     privateEnvironment.PYTHONNOUSERSITE = "1";
@@ -1124,7 +1235,7 @@ async function createOpenCodeEnvironment(configDirectory: string, provider: Prov
   const isolatedDataHome = join(isolatedHome, ".data");
   const isolatedCacheHome = join(isolatedHome, ".cache");
   const isolatedStateHome = join(isolatedHome, ".state");
-  return withPrivatePython({
+  return await withPrivatePython({
     ...process.env,
     HOME: isolatedHome,
     USERPROFILE: isolatedHome,
@@ -1240,7 +1351,7 @@ async function stageSkillWorkspace(workspacePath: string) {
 async function runWorkflow(command: HostCommand) {
   const definition = command.payload?.definition;
   if (!definition || typeof definition !== "object") return fail(command, "invalid_workflow", "workflow definition is required");
-  const runId = command.runId ?? randomUUID(); const workspacePath = workspacePathFromPayload(command.payload?.workspacePath) || process.cwd();
+  const runId = command.runId ?? randomUUID(); const runStartedAt = Date.now(); const workspacePath = workspacePathFromPayload(command.payload?.workspacePath) || process.cwd();
   const providerProfiles = readProviderMap(command.payload?.providers);
   const workflowNodes = Array.isArray((definition as { nodes?: unknown }).nodes) ? (definition as { nodes: unknown[] }).nodes : [];
   diagnosticLog("workflow_run_received", {
@@ -1387,7 +1498,7 @@ async function runWorkflow(command: HostCommand) {
       const runtimeError = (events ?? []).find((event) => event.event === "runtime_error");
       if (runtimeError?.event === "runtime_error") throw new Error(runtimeError.message);
       const text = (events ?? []).filter((event): event is Extract<OpenCodeRuntimeEvent, { event: "text_delta" }> => event.event === "text_delta").map((event) => event.delta).join("");
-      const artifacts = localFileArtifacts(workspacePath, events ?? []);
+      const artifacts = localFileArtifacts(workspacePath, events ?? [], runId, executorId === "ppt_generate", runStartedAt);
       return { text, ...(artifacts.length ? { artifacts, ...(executorId === "ppt_generate" ? { ppt: artifacts } : {}) } : {}) };
     }, resume: async ({ executorId, nodeKey, config, inputs, providerTaskId }, signal) => {
       if (["image_generate", "video_generate", "digital_human", "music_generate", "voice_synthesis", "voice_clone", "audio_generate"].includes(executorId)) {
@@ -1398,7 +1509,7 @@ async function runWorkflow(command: HostCommand) {
       if (executorId === "agent_execute" && config.operation === "audio_transcription") return runRunningHubAudioTranscription(command, runId, nodeKey, config, inputs, workspacePath, signal, providerTaskId);
       throw new Error(`workflow_recovery_unsupported:${executorId}`);
     } };
-  const ports = createDesktopWorkflowPorts({ runId, emit: (event) => emit(command, event), requestService: (method, payload) => requestService(method, payload, controller.signal), capability });
+  const ports = createDesktopWorkflowPorts({ runId, workspacePath, emit: (event) => emit(command, event), requestService: (method, payload) => requestService(method, payload, controller.signal), capability });
   const artifactPort: WorkflowArtifactPort = ports.artifacts;
   const recoveryDefinitionHash = typeof command.payload?.recoveryDefinitionHash === "string" && command.payload.recoveryDefinitionHash.trim() ? command.payload.recoveryDefinitionHash.trim() : undefined;
   try { result = await executeWorkflow(normalizedDefinition, { runId, signal: controller.signal, recovering: readWorkflowRecovery(command.payload?.recovering), ...(recoveryDefinitionHash ? { recoveryDefinitionHash } : {}), ...(command.payload?.completed && typeof command.payload.completed === "object" ? { completed: command.payload.completed as Record<string, Record<string, unknown>> } : {}), ports }); } catch (error) {
@@ -1447,6 +1558,7 @@ function assetLibraryFileName(config: Record<string, unknown>, nodeKey: string) 
 async function storeWorkflowArtifacts(workspacePath: string, runId: string, nodeKey: string, config: Record<string, unknown>, inputs: Record<string, unknown>, artifactPort: WorkflowArtifactPort) {
   const artifacts: Array<Record<string, unknown>> = [];
   const registeredPaths = new Set<string>();
+  const externalArtifactKeys = new Set<string>();
   const register = async (artifact: { readonly relativePath: string; readonly mimeType: string; readonly byteLength: number; readonly sha256: string }) => {
     if (registeredPaths.has(artifact.relativePath)) return;
     const registration = await artifactPort.register(artifact);
@@ -1470,9 +1582,18 @@ async function storeWorkflowArtifacts(workspacePath: string, runId: string, node
       sha256: typeof written.sha256 === "string" ? written.sha256 : "",
     });
   }
-  for (const value of [inputs.assets, inputs.images, inputs.videos, inputs.audios, inputs.presentations].flatMap(flattenWorkflowValues)) {
+  for (const value of collectWorkflowArtifactValues(inputs)) {
     const artifact = workflowArtifactReference(value, workspacePath);
-    if (artifact) await register(artifact);
+    if (artifact) {
+      await register(artifact);
+      continue;
+    }
+    const externalArtifact = externalWorkflowArtifactReference(value);
+    if (!externalArtifact) continue;
+    const key = externalWorkflowArtifactKey(externalArtifact);
+    if (externalArtifactKeys.has(key)) continue;
+    externalArtifactKeys.add(key);
+    artifacts.push({ ...externalArtifact, registered: true, external: true });
   }
   if (!artifacts.length) throw new Error("asset_library_store_input_required");
   return { stored: true, artifacts, artifactIds: artifacts.map((artifact) => artifact.artifactId) };
@@ -1658,6 +1779,7 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
   // media profile supplies transport credentials, but must not overwrite the
   // model selected on an individual image node.
   const modelId = requestedModel || profile?.model || "default";
+  if (isDeprecatedTextModelId(modelId)) throw new Error("deprecated_model");
   diagnosticLog("workflow_provider_selected", { nodeKey, executorId, providerId: provider, source: profile?.source ?? provider, model: modelId, hasBaseUrl: Boolean(baseUrl), hasApiKey: Boolean(apiKey?.trim()), workflowCapability: workflowCapability ?? null, registeredWorkflow: registeredWorkflow?.id ?? null }, runId);
   const mediaInput = buildMediaCapabilityInput(executorId, config, inputs);
   if (executorId === "video_generate" && !registeredWorkflow) assertVideoMediaCapability(resolveVideoMediaCapabilities(providerKind, modelId), mediaInput);

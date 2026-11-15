@@ -28,7 +28,7 @@ curl -H "Authorization: Bearer $SMOKE_TOKEN" \
 
 curl -X POST -H "Authorization: Bearer $SMOKE_TOKEN" \
   -H "Content-Type: application/json" \
-  --data '{"opencode":{"modelId":"gpt-5.4","baseUrl":"https://cn.pptoken.cc/v1","apiKey":"<server-issued-key>"}}' \
+  --data '{"opencode":{"modelId":"gpt-6.1-sol","baseUrl":"https://cn.pptoken.cc/v1","apiKey":"<server-issued-key>"}}' \
   https://aimarketing-dashi-ppt-smoke.<account>.workers.dev/benchmark-10
 curl -H "Authorization: Bearer $SMOKE_TOKEN" \
   -o enterprise-ai-customer-service-evidence-10-pages.pptx \

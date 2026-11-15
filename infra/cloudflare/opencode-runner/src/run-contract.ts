@@ -1,4 +1,5 @@
 import type { CloudflareOpenCodeRunRequest, CloudflareSessionRunRequest, OpenCodeProviderConfig } from "../../../../lib/ai-runtime/contracts"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 export type { CloudflareOpenCodeRunRequest }
 
@@ -7,6 +8,7 @@ function isValidOpenCodeProviderConfig(value: unknown): value is OpenCodeProvide
   const provider = value as Partial<OpenCodeProviderConfig>
   if (typeof provider.providerId !== "string" || !provider.providerId.trim()) return false
   if (typeof provider.modelId !== "string" || !provider.modelId.trim()) return false
+  if (isDeprecatedTextModelId(provider.modelId)) return false
   if (typeof provider.baseUrl !== "string" || !provider.baseUrl.trim()) return false
   if (typeof provider.apiKey !== "string" || !provider.apiKey.trim()) return false
   try {

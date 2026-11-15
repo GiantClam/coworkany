@@ -1,4 +1,5 @@
 import { getAiEntryCurrentProviderConfig } from "@/lib/ai-entry/provider-routing"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 export type ToolChoiceShape = "flat" | "nested"
 
@@ -21,11 +22,13 @@ export function resolveAgentProxyProvider(): AgentProxyProvider | null {
   const dsKey = normalizeEnv(process.env.DEEPSEEK_API_KEY)
   if (dsKey) {
     const thinkingEnabled = normalizeEnv(process.env.DEEPSEEK_THINKING)?.toLowerCase() === "enabled"
+    const model = normalizeEnv(process.env.DEEPSEEK_MODEL) || "deepseek-v4-flash"
+    if (isDeprecatedTextModelId(model)) return null
     return {
       id: "deepseek",
       apiKey: dsKey,
       baseURL: normalizeEnv(process.env.DEEPSEEK_BASE_URL) || "https://api.deepseek.com",
-      model: normalizeEnv(process.env.DEEPSEEK_MODEL) || "deepseek-v4-flash",
+      model,
       toolChoiceShape: "nested",
       ...(thinkingEnabled ? {} : { extraBody: { thinking: { type: "disabled" } } }),
     }
@@ -33,6 +36,7 @@ export function resolveAgentProxyProvider(): AgentProxyProvider | null {
 
   const current = getAiEntryCurrentProviderConfig()
   if (!current || !current.apiKey || !current.baseURL) return null
+  if (isDeprecatedTextModelId(current.model)) return null
   return { ...current, toolChoiceShape: "flat" }
 }
 

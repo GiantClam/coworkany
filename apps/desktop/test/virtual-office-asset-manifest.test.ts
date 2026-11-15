@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -54,19 +54,22 @@ for (const [name, mutate, expectedCode] of manifestCases) {
 
 test("rejects symlink escape", async () => {
   const { rootDir, asset } = await fixture();
-  const outside = resolve(rootDir, "..", "outside.webp");
+  const outsideDir = resolve(rootDir, "..", `${rootDir.split(/[\\/]/u).at(-1)}-outside`);
+  const link = resolve(rootDir, "linked");
   try {
-    await cp(resolve(rootDir, "office.webp"), outside);
-    await rm(resolve(rootDir, "office.webp"));
-    await symlink(outside, resolve(rootDir, "office.webp"));
+    await mkdir(outsideDir, { recursive: true });
+    await cp(resolve(rootDir, "office.webp"), resolve(outsideDir, "office.webp"));
+    asset.path = "linked/office.webp";
+    await writeFile(resolve(rootDir, "manifest.json"), JSON.stringify({ schemaVersion: 1, assets: [asset] }));
+    await symlink(outsideDir, link, process.platform === "win32" ? "junction" : "dir");
     const result = await validateManifest({ rootDir });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((item) => item.code === "asset_path_escape"), JSON.stringify(result.errors));
   } finally {
-    await rm(rootDir, { recursive: true, force: true });
-    await rm(outside, { force: true });
+    await rm(link, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await rm(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await rm(outsideDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
-  void asset;
 });
 
 test("rejects malformed manifest fields and dimensions", async () => {

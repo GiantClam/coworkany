@@ -25,7 +25,7 @@ type ExecutiveAdvisorInput = {
   signal?: AbortSignal
 }
 
-const EXECUTIVE_ADVISOR_MODEL = "gpt-5.4"
+const EXECUTIVE_ADVISOR_MODEL = "deepseek-v4-pro"
 
 function normalizeText(value: unknown) {
   return typeof value === "string" ? value.trim() : ""

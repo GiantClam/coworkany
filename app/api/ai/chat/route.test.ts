@@ -268,12 +268,12 @@ nodeModule._load = function patchedModuleLoad(request: string, parent: unknown, 
 
   if (request === "@/lib/ai-entry/model-policy") {
     return {
-      AI_ENTRY_CONSULTING_QUALITY_MODEL_HINT: "gpt-5.4",
+      AI_ENTRY_CONSULTING_QUALITY_MODEL_HINT: "gpt-6.1-sol",
       isConsultingAdvisorEntryMode: (value: unknown) => value === "consulting-advisor",
       isAiEntryPptAgentId: (value: string | null | undefined) =>
         value === "executive-ppt" || value === "executive-presentation-ppt",
       pickAgentDefaultModelId: () => "grok-4.5",
-      pickConsultingModelId: () => "gpt-5.4",
+      pickConsultingModelId: () => "gpt-6.1-sol",
       resolveConsultingModelMode: () => "quality",
       shouldLockConsultingAdvisorModel: () => false,
     }
@@ -453,7 +453,7 @@ nodeModule._load = function patchedModuleLoad(request: string, parent: unknown, 
         lastNativeProviderOptions = (input as unknown as { providerOptions?: Record<string, unknown> }).providerOptions || null
         input.onProviderSelected?.({
           providerId: "pptoken",
-          model: "gpt-5.4",
+          model: "gpt-6.1-sol",
           attempt: 1,
           providerOrder: ["pptoken"],
           upgradeProbe: false,
@@ -587,7 +587,7 @@ nodeModule._load = function patchedModuleLoad(request: string, parent: unknown, 
             accumulated: accumulatedText,
           },
           providerId: "pptoken",
-          model: "gpt-5.4",
+          model: "gpt-6.1-sol",
           providerOrder: ["pptoken"],
         }
       },
@@ -637,9 +637,9 @@ nodeModule._load = function patchedModuleLoad(request: string, parent: unknown, 
             providerId: "deepseek",
           },
           {
-            id: "pptoken::gpt-5.4",
-            modelId: "gpt-5.4",
-            runtimeId: "gpt-5.4",
+            id: "pptoken::gpt-6.1-sol",
+            modelId: "gpt-6.1-sol",
+            runtimeId: "gpt-6.1-sol",
             providerId: "pptoken",
           },
           {
@@ -655,7 +655,7 @@ nodeModule._load = function patchedModuleLoad(request: string, parent: unknown, 
             providerId: "enterprise-openai-compatible",
           },
         ],
-        selectedModelId: "pptoken::gpt-5.4",
+        selectedModelId: "pptoken::gpt-6.1-sol",
         providerId: "pptoken",
       }),
     }
@@ -776,7 +776,7 @@ test("ordinary AI Chat preserves the explicitly selected provider on the native 
       json: async () => ({
         messages: [{ role: "user", content: "请直接回复 provider check。" }],
         stream: true,
-        modelConfig: { providerId: "pptoken", modelId: "gpt-5.4" },
+        modelConfig: { providerId: "pptoken", modelId: "gpt-6.1-sol" },
       }),
       nextUrl: { origin: "https://example.com" },
     })
@@ -1049,7 +1049,7 @@ test("ai chat route forwards the selected model into the PPT tool registry conte
       },
       modelConfig: {
         providerId: "pptoken",
-        modelId: "gpt-5.4",
+        modelId: "gpt-6.1-sol",
       },
     }),
     nextUrl: { origin: "https://example.com" },
@@ -1058,7 +1058,7 @@ test("ai chat route forwards the selected model into the PPT tool registry conte
   assert.equal(response.headers.get("Content-Type"), "text/event-stream; charset=utf-8")
   const text = await response.text()
   assert.match(text, /conversation_init/)
-  assert.equal(lastToolRegistryBuildInput?.selectedPreviewModel, "gpt-5.4")
+  assert.equal(lastToolRegistryBuildInput?.selectedPreviewModel, "gpt-6.1-sol")
   assert.equal(lastToolRegistryBuildInput?.selectedPreviewProviderId, "pptoken")
 })
 

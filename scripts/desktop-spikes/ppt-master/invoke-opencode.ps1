@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Model = 'openai/gpt-5.4',
+    [string]$Model = 'openai/gpt-6.1-sol',
     [ValidateRange(30, 3600)][int]$TimeoutSeconds = 600
 )
 

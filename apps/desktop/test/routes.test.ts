@@ -6,7 +6,7 @@ import { buildOnlineAgentGroups, formatWorkbenchModelLabel, isWorkbenchAssistant
 import { buildAgencyAgentGroups } from "../src/agency-agent-catalog";
 import { configuredModelOptions, isMediaProviderConfigured, preferredConfiguredModel, requiresConfiguredProviderForWorkflowAction } from "../src/provider-config";
 import { resolveDesktopRunAction, workflowActionForMediaFeature } from "../src/route-actions";
-import { conversationAgentIdFromPath, projectOpenedWorkflowDefinition } from "../src/App";
+import { conversationAgentIdFromPath, persistedWorkflowStatus, projectOpenedWorkflowDefinition } from "../src/App";
 import { migrateWorkflowDefinitionToCurrent } from "@coworkany/workflow-core";
 
 test("desktop routes consume the retained online dashboard manifest", () => {
@@ -158,6 +158,9 @@ test("desktop workflows open the shared online directory before the local canvas
   assert.match(appSource, /window\.setTimeout\(\(\) => void workflowAutoSaveRef\.current\("auto"\), 700\)/);
   assert.match(appSource, /savedWorkflowHashRef\.current === definitionHash/);
   assert.match(appSource, /currentWorkflowIdRef\.current = saved\.id/);
+  assert.match(appSource, /const persistedDefinition = toWorkflowDefinitionEnvelope\(savedResponse\.definition\)/u);
+  assert.match(appSource, /setWorkflowDefinition\(\(current\) => current\?\.definitionHash === persistedDefinitionHash/u);
+  assert.match(appSource, /savedWorkflowHashRef\.current = persistedDefinitionHash/u);
   assert.match(appSource, /workflowId=\{workflowCanvasKey \?\? "draft:workflow"\}/);
   assert.match(appSource, /onBack=\{\(\) => setWorkflowBuilderOpen\(false\)\}/);
 });
@@ -247,7 +250,8 @@ test("model changes persist to the resolved compatible profile after fallback", 
 
 test("desktop usage records the model reported by the active Provider event", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
-  assert.match(appSource, /event\.model\?\.trim\(\) \|\| runModelsRef\.current\.get\(event\.runId\) \|\| configRef\.current\.provider\.model \|\| "unknown"/);
+  assert.match(appSource, /resolveDesktopRunModel\(normalizedMetric\.model, runModelsRef\.current\.get\(event\.runId\), configRef\.current\.provider\.model\)/);
+  assert.match(appSource, /resolveDesktopRunModel\(event\.model, runModelsRef\.current\.get\(event\.runId\), configRef\.current\.provider\.model\)/);
 });
 
 test("desktop home keeps the cloud entry grouping and includes the local read-only Agent Center", () => {
@@ -1092,7 +1096,7 @@ test("desktop exposes Full Access compatibility and the Agent approval protocol 
   assert.match(appSource, /Full Access/);
   assert.match(appSource, /API Key[^\n]*config\.json/);
   assert.match(appSource, /不会写入 SQLite、日志或诊断包/);
-  assert.match(appSource, /it is not written to SQLite, logs, or diagnostics/);
+  assert.match(appSource, /(?:it|they) (?:is|are) not written to SQLite, logs, or diagnostics/);
   assert.match(appSource, /function SettingsSecretInput\(/);
   assert.match(appSource, /<input type="password" value=\{value\} autoComplete="off"/);
   assert.doesNotMatch(appSource, /settings-secret-toggle/);
@@ -1164,7 +1168,7 @@ test("desktop media and asset artifact reveals consume the WorkbenchClient file 
   assert.match(tauriSource, /fn open_artifact_with\(/);
   assert.match(tauriSource, /fn open_with_installed_program\(target: &Path\)/);
   assert.match(tauriSource, /fn open_artifact_default\([\s\S]*?open_with_default_program\(&target\)/);
-  assert.match(tauriSource, /fn read_artifact\([\s\S]*?artifacts::inspect\(&root, &relative_path, &mime_type\)/);
+  assert.match(tauriSource, /fn read_artifact\([\s\S]*?locate_trusted_artifact\(&app, &relative_path, &mime_type\)/);
   assert.match(tauriSource, /MAX_PREVIEW_BYTES: u64 = 64 \* 1024 \* 1024/);
   assert.match(tauriSource, /fn open_with_default_program\(target: &Path\)/);
   assert.doesNotMatch(tauriSource, /open_artifact_default[\s\S]*?Command::new\("cmd\.exe"\)/);
@@ -1221,7 +1225,7 @@ test("desktop workflow builder keeps the Canvas full-screen with movable side pa
   assert.match(appSource, /workflowMetadata\.title/);
   assert.match(appSource, /workflowMetadata\.description/);
   assert.match(appSource, /workflowMetadata\.status/);
-  assert.match(appSource, /consumePanelClick\(\)/);
+  assert.doesNotMatch(appSource, /consumePanelClick\(\)/);
   assert.match(appSource, /setPanelPosition\(\(current\) => \(\{ \.\.\.current, \[drag\.panel\]: \{ x: 12/);
   assert.match(appSource, /重新运行|Rerun/);
   assert.match(appSource, /继续运行|Continue/);
@@ -1436,6 +1440,9 @@ test("desktop workflow runs do not claim an AI or Agent conversation run", () =>
   assert.match(runSource, /if \(!isWorkflowRun && conversationId\) updateVisibleConversationMessages/);
   assert.match(runSource, /if \(!isWorkflowRun && conversationId && runIsVisible\(\)\) setActiveConversationId/);
   assert.match(runSource, /setDomainStatus/);
+  assert.match(runSource, /summarizeWorkflowModels\(bindWorkflowProviderDefaults\(launchWorkflowDefinition \?\? currentWorkflowDefinition\(\), launchConfig\)\)/u);
+  assert.match(runSource, /workbenchClient\.runs\.start\(\{ id: runId, conversationId, prompt: userPrompt, model: workflowModelSummary\.model \|\| undefined/u);
+  assert.match(runSource, /workflowModels: workflowModelSummary\.models/u);
   assert.match(runSource, /if \(isWorkflowRun\) \{[\s\S]*?setWorkflowRunStatus/);
   assert.match(appSource, /const runId = currentWorkflowRunId \?\? conversationRunId \?\? queryRunIsVisible \?\? visibleActiveRun/);
 });
@@ -1530,6 +1537,14 @@ test("opening a saved workflow projects metadata without mutating or persisting 
   assert.equal(projected.metadata?.status, "live");
   assert.deepEqual(projected.nodes, source.nodes);
   assert.deepEqual(projected.edges, source.edges);
+});
+
+test("persisted workflow status survives the directory projection and reopen fallback", () => {
+  const definition = { schemaVersion: 2 as const, revision: 1, definitionHash: "hash", nodes: [], edges: [], metadata: { status: "draft" } };
+  assert.equal(persistedWorkflowStatus(definition), "draft");
+  assert.equal(persistedWorkflowStatus({ ...definition, metadata: { status: "archived" } }), "archived");
+  assert.equal(persistedWorkflowStatus({ ...definition, metadata: {} }), "live");
+  assert.equal(persistedWorkflowStatus(null), "draft");
 });
 
 test("desktop WebView CSP permits Blob media and only loopback web previews", () => {

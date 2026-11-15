@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
 import type { AiEntryProviderConfig } from "./provider-routing"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 type DesktopProviderProfile = {
   id?: unknown
@@ -64,10 +65,13 @@ export function resolveDesktopConfiguredWriterProvider(): AiEntryProviderConfig 
   if (!profile) return null
 
   const models = Array.isArray(profile.models) ? profile.models.map(text).filter(Boolean) : []
-  const model = text(profile.model) || models[0]
+  const configuredModel = text(profile.model)
+  const model = configuredModel && !isDeprecatedTextModelId(configuredModel)
+    ? configuredModel
+    : models.find((candidate) => !isDeprecatedTextModelId(candidate))
   const baseURL = text(profile.baseUrl)
   const apiKey = text(profile.apiKey)
-  if (!model || !baseURL) return null
+  if (!model || !baseURL || isDeprecatedTextModelId(model)) return null
 
   return {
     id: "desktop-configured",

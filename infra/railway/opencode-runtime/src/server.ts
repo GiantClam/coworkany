@@ -665,6 +665,9 @@ async function executeRun(
   provider: OpenCodeProviderConfig,
   onEvent?: (event: AgentRuntimeEvent) => void,
 ) {
+  if (!isValidOpenCodeProviderConfig(provider)) {
+    throw new Error("runtime_request_provider_required")
+  }
   const emit = (event: AgentRuntimeEvent) => {
     onEvent?.(event)
     if (response && !response.writableEnded) eventLine(response, event)

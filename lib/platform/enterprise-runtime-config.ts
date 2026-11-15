@@ -122,7 +122,7 @@ export type EnterpriseAudioRuntimeOption = {
   runtime: EnterpriseAudioRuntimeConfig
 }
 
-const DEFAULT_TEXT_MODEL = "gpt-5.4-mini"
+const DEFAULT_TEXT_MODEL = "deepseek-v4-pro"
 const DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2"
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-2.5-flash-image"
 const DEFAULT_RUNNINGHUB_TXT2IMG_MODEL = "seedream-v5-text-to-image"

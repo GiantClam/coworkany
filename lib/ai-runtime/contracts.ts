@@ -1,4 +1,5 @@
 import type { WriterRuntimeContext } from "@/lib/writer/runtime/session-runtime"
+import { isDeprecatedTextModelId } from "../../packages/runtime-contracts/src/model-policy"
 
 export type AgentRuntimeProvider = "ai-sdk-native" | "opencode"
 
@@ -65,9 +66,9 @@ export type AgentRuntimeEvent =
   | { event: "skill_failed"; skillId: string; message: string; runId: string }
   | { event: "text_delta"; delta: string; runId: string }
   | { event: "reasoning_delta"; delta: string; runId: string }
-  | { event: "tool_event"; tool: string; toolCallId?: string; phase: "started" | "completed" | "failed"; message?: string; runId: string }
+  | { event: "tool_event"; tool: string; toolCallId?: string; phase: "started" | "progress" | "completed" | "failed"; message?: string; paths?: readonly string[]; runId: string }
   | { event: "writer_result_submitted"; result: Record<string, unknown>; runId: string }
-  | { event: "usage"; inputTokens?: number; outputTokens?: number; costUsd?: number; runId: string }
+  | { event: "usage"; usageId?: string; provider?: string; model?: string; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; reasoningTokens?: number; costUsd?: number; aggregation?: "delta" | "snapshot"; scope?: "step" | "run"; runId: string }
   | { event: "artifact_payload"; artifact: RuntimeArtifactPayload; runId: string }
   | { event: "artifact_reference"; artifact: RuntimeArtifactReference; runId: string }
   | { event: "checkpoint_saved"; checkpoint: RuntimeCheckpointRef; runId: string }
@@ -146,6 +147,7 @@ export function isValidOpenCodeProviderConfig(value: unknown): value is OpenCode
   const provider = value as Partial<OpenCodeProviderConfig>
   if (typeof provider.providerId !== "string" || !provider.providerId.trim()) return false
   if (typeof provider.modelId !== "string" || !provider.modelId.trim()) return false
+  if (isDeprecatedTextModelId(provider.modelId)) return false
   if (typeof provider.baseUrl !== "string" || !provider.baseUrl.trim()) return false
   if (typeof provider.apiKey !== "string" || !provider.apiKey.trim()) return false
   try {

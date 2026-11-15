@@ -1,6 +1,7 @@
 import { z } from "zod"
 
 import * as pptWorkerCapabilitiesModule from "../../../../lib/lead-tools/ppt-worker-capabilities.js"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 const pptWorkerCapabilities = (
   "default" in pptWorkerCapabilitiesModule ? pptWorkerCapabilitiesModule.default : pptWorkerCapabilitiesModule
@@ -10,10 +11,6 @@ function normalizeWorkerModelAlias(value: unknown) {
   if (typeof value !== "string") return value
 
   const normalized = value.trim().toLowerCase()
-  if (normalized === "openai/gpt-5.4-mini" || normalized === "gpt-5.4-mini") {
-    return "deepseek-v4-pro"
-  }
-
   return value.trim()
 }
 
@@ -43,14 +40,14 @@ export const previewRequestSchema = z.object({
       "MiniMax-M3",
       "deepseek-v4-pro",
       "deepseek-v4-flash",
-      "gpt-5.4",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
+      "gpt-6-astra",
+      "gpt-6-luna",
+      "gpt-6-sol",
+      "gpt-6.1-sol",
       "step-3.7-flash",
     ]),
   ).optional(),
-  runtimeSlideModel: z.string().trim().min(1).optional(),
+  runtimeSlideModel: z.string().trim().min(1).refine((model) => !isDeprecatedTextModelId(model), "Deprecated text model").optional(),
   runtimeSlideProvider: z.string().trim().min(1).optional(),
   preferredProviderId: z.string().trim().min(1).optional(),
   templateMode: z.enum(["auto-4", "single-template"]),

@@ -9,6 +9,10 @@ on:
       - "lib/ai-entry/runtime/**"
       - "app/api/ai/chat/route.ts"
       - "app/api/platform/artifacts/**"
+      - "tsconfig.opencode-runner.json"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - "Dockerfile"
   push:
     branches: [main]
@@ -18,6 +22,10 @@ on:
       - "lib/ai-entry/runtime/**"
       - "app/api/ai/chat/route.ts"
       - "app/api/platform/artifacts/**"
+      - "tsconfig.opencode-runner.json"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - "Dockerfile"
 
 jobs:
@@ -25,17 +33,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: infra/cloudflare/opencode-runner/package-lock.json
+          cache: pnpm
       - name: Verify app runtime
         run: |
-          npm ci --legacy-peer-deps
-          npx tsc --noEmit --pretty false
-          npx eslint app/api/ai/chat/route.ts lib/ai-runtime lib/ai-entry/runtime lib/ai-entry/conversation-state.ts lib/ai-entry/repository.ts --max-warnings=0
-          npx tsx --test lib/ai-runtime/opencode-protocol.test.ts lib/ai-entry/runtime/*.test.ts app/api/ai/chat/route.test.ts
+          pnpm install --frozen-lockfile
+          pnpm exec tsc --noEmit --pretty false -p tsconfig.opencode-runner.json
+          pnpm exec eslint app/api/ai/chat/route.ts lib/ai-runtime lib/ai-entry/runtime lib/ai-entry/conversation-state.ts lib/ai-entry/repository.ts --max-warnings=0
+          pnpm exec tsx --test lib/ai-runtime/opencode-protocol.test.ts lib/ai-entry/runtime/*.test.ts app/api/ai/chat/route.test.ts
       - name: Verify Cloudflare runner
         working-directory: infra/cloudflare/opencode-runner
         run: |

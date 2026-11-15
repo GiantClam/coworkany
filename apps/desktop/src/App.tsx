@@ -23,11 +23,11 @@ import { buildAgencyAgentGroups } from "./agency-agent-catalog";
 import { closeDesktopMediaTab, createDesktopMediaTab, openDesktopMediaTab, syncDesktopMediaTabModel, type DesktopMediaTabState } from "./media-tabs";
 import { PROVIDER_PLATFORM_OPTIONS, platformIdForProvider, providerPlatformForId } from "./provider-platforms";
 import { capabilityEnglish, desktopCopy, desktopWriterCopy, homeGroupLabels, mediaEnglish, mediaFieldEnglish, mediaOptionEnglish, mediaPlaceholderEnglish, mediaSubmitEnglish, mediaSummaryEnglish, quickPromptsForDesktopRoute, resolveDesktopLocale, workflowActionEnglish, writerContentTypeEnglish, writerLanguageEnglish, writerModeEnglish, writerPlatformEnglish, type DesktopLocalePreference } from "./i18n";
-import { capabilityForWorkflowAction, configuredModelOptions, configuredProviderEntries, configuredTextModelOptions, configuredTextModelSelectionId, isDevelopmentRunningHubWorkflowId, isMediaProviderConfigured, modelOptionsForProvider, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, requiresConfiguredProviderForWorkflowAction, selectConfiguredTextModel, setProviderCapabilityModel, setProviderCapabilityModels, supportsProviderCapability, supportsRunningHubWorkflowCapability, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "./provider-config";
+import { capabilityForWorkflowAction, configuredModelOptions, configuredProviderEntries, configuredTextModelOptions, configuredTextModelSelectionId, filterDeprecatedModelIds, isDevelopmentRunningHubWorkflowId, isMediaProviderConfigured, modelOptionsForProvider, parseProviderImport, preferredConfiguredModel, providerForCapability, providerForId, requiresConfiguredProviderForWorkflowAction, selectConfiguredTextModel, setProviderCapabilityModel, setProviderCapabilityModels, supportsProviderCapability, supportsRunningHubWorkflowCapability, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "./provider-config";
 import { CHEAPBUDDY, createCheapBuddyProvider, mergeCheapBuddyProvider } from "./cheapbuddy";
 import { CheapBuddyAccountPanel } from "./cheapbuddy-account";
 import { SIGNED_OUT_CHEAPBUDDY_STATE, type CheapBuddyAccountAction, type CheapBuddyAccountState } from "./cheapbuddy-contract";
-import { bindWorkflowProviderDefaults, isMediaWorkflowNodeType } from "./workflow-provider-binding";
+import { bindWorkflowProviderDefaults, isMediaWorkflowNodeType, summarizeWorkflowModels } from "./workflow-provider-binding";
 import { applyConfiguredMediaModels } from "./media-model-options";
 import { buildDesktopImageRunInput, getDesktopImageParameterSchema, normalizeDesktopImageSettings, resolveDesktopImageModelKind } from "./image-model-parameters";
 import { createSessionRecoverySnapshot } from "./session-recovery";
@@ -53,6 +53,7 @@ import { isWorkbenchQuestionToolEvent } from "@coworkany/workbench-client";
 import { questionConversationForRoute, questionSessionIdForRoute } from "./question-session-route";
 import { isCurrentWorkflowRestore, type WorkflowRestoreToken } from "./workflow-restore-guard";
 import { normalizeDesktopMetricEvent } from "./run-metrics-events";
+import { resolveDesktopRunModel } from "./desktop-run-model";
 import { DesktopUsageDashboard } from "./usage-dashboard";
 import { ImageMaskEditor } from "./image-mask-editor";
 import { createWorkflowAiController, parseWorkflowAiAssistantResponse, recordWorkflowAiRepairAttempt, resolveWorkflowAiTextProvider, shouldRetryWorkflowAiRepair, workflowAiProviderOptions, type WorkflowAiController } from "./workflow-ai-controller";
@@ -293,6 +294,10 @@ const UNBOUND_MEDIA_PROVIDER: DesktopProviderConfig = { id: "", source: "unconfi
 
 export function projectOpenedWorkflowDefinition(definition: WorkflowDefinitionEnvelope, metadata: Pick<WorkflowMetadata, "description" | "status">): WorkflowDefinitionEnvelope {
   return sanitizeWorkflowDefinitionForStorage({ ...definition, metadata: { ...(definition.metadata ?? {}), description: metadata.description, status: metadata.status } });
+}
+export function persistedWorkflowStatus(definition: WorkflowDefinitionEnvelope | null, saved = Boolean(definition)): WorkflowStatus {
+  const status = definition?.metadata?.status;
+  return status === "draft" || status === "live" || status === "archived" ? status : (saved ? "live" : "draft");
 }
 type ArtifactRow = { id: string; relative_path: string; mime_type: string; byte_length: number; sha256: string; created_at: string; available?: boolean };
 type LocalMediaPreview = { mimeType: string; data: number[] };
@@ -999,6 +1004,11 @@ function isWorkflowDefinition(value: unknown): value is WorkflowDefinitionEnvelo
   return Boolean(value && typeof value === "object" && (value as { schemaVersion?: unknown }).schemaVersion === 2 && Array.isArray((value as { nodes?: unknown }).nodes) && Array.isArray((value as { edges?: unknown }).edges));
 }
 
+function toWorkflowDefinitionEnvelope(definition: WorkbenchWorkflow["definition"]): WorkflowDefinitionEnvelope {
+  if (!isWorkflowDefinition(definition)) throw new Error("workflow_save_invalid_definition");
+  return definition;
+}
+
 export function parseImageInputs(prompt: string): Record<string, unknown> {
   const read = (...labels: string[]) => {
     for (const label of labels) {
@@ -1092,6 +1102,8 @@ export function localizedSkillSystemPrompt(_skillId: SkillId, _locale: "zh" | "e
 export function resolveDesktopSkillId(path: string, requestedAgentId: string | null): SkillId {
   if (path.includes("executive-ppt")) return "ppt-master";
   if (path.includes("executive-presentation-ppt")) return "dashi-ppt";
+  if (requestedAgentId === "entry:consulting-advisor") return "executive-consulting-suite";
+  if (new URLSearchParams(path.split("?", 2)[1] ?? "").get("entry") === "consulting-advisor") return "executive-consulting-suite";
   // Agency Agents are packaged as native OpenCode agents, not Skills. The
   // selected agent is sent separately as `agentId` on the session prompt.
   if (requestedAgentId?.startsWith("agency-")) return "auto";
@@ -1842,7 +1854,6 @@ type WorkflowBuilderSurfaceProps = {
   startPanelDrag: (panel: "left" | "right", event: React.PointerEvent<HTMLElement>) => void;
   movePanel: (event: React.PointerEvent<HTMLDivElement>) => void;
   endPanelDrag: () => void;
-  consumePanelClick: () => boolean;
   aiSidebarOpen: boolean;
   onAiSidebarOpenChange: (open: boolean) => void;
   aiSidebar: React.ReactNode;
@@ -1974,17 +1985,17 @@ function DesktopWorkflowBuilderSurface(props: WorkflowBuilderSurfaceProps) {
     }
     props.onAddNode(type);
   };
-  return <div className="workflow-workspace workflow-workspace-fullscreen" onPointerMove={props.movePanel} onPointerUp={props.endPanelDrag} onPointerCancel={props.endPanelDrag}>
-     <header className="workflow-page-header workflow-builder-toolbar"><div className="workflow-builder-title"><button className="workflow-back-button" type="button" aria-label={locale === "zh" ? "返回工作流" : "Back to workflows"} title={locale === "zh" ? "返回工作流" : "Back to workflows"} onClick={props.onBack}><ArrowLeft size={16} aria-hidden="true" /></button><h1>{props.workflowMetadata.title.trim() || route.label}</h1></div><div className="workflow-header-actions"><button className={"ghost workflow-ai-toggle " + (props.aiSidebarOpen ? "active" : "")} type="button" aria-pressed={props.aiSidebarOpen} onClick={() => props.onAiSidebarOpenChange(!props.aiSidebarOpen)}><Sparkles size={14} aria-hidden="true" />{locale === "zh" ? "AI 助手" : "AI assistant"}</button><button className={"ghost workflow-operation-button workflow-operation-" + (operationState?.kind === "save" ? operationState.phase : "idle")} type="button" disabled={operationState?.phase === "running"} data-workflow-operation="save" data-operation-state={operationState?.kind === "save" ? operationState.phase : "idle"} aria-busy={operationState?.kind === "save" && operationState.phase === "running"} onClick={() => void runBuilderOperation("save", () => props.onSave(localDefinition))}>{operationState?.kind === "save" ? operationText("save", operationState.phase) : copy.save}</button><button className={"ghost workflow-operation-button workflow-operation-" + (operationState?.kind === "export" ? operationState.phase : "idle")} type="button" disabled={operationState?.phase === "running"} data-workflow-operation="export" data-operation-state={operationState?.kind === "export" ? operationState.phase : "idle"} aria-busy={operationState?.kind === "export" && operationState.phase === "running"} onClick={() => void runBuilderOperation("export", () => props.onExport(localDefinition))}>{operationState?.kind === "export" ? operationText("export", operationState.phase) : copy.export}</button><label className={"ghost workflow-import-button workflow-operation-" + (operationState?.kind === "import" ? operationState.phase : "idle")} data-workflow-operation="import" data-operation-state={operationState?.kind === "import" ? operationState.phase : "idle"} aria-disabled={operationState?.phase === "running"}>{operationState?.kind === "import" ? operationText("import", operationState.phase) : copy.import}<input type="file" accept="application/json,.json" disabled={operationState?.phase === "running"} onChange={(event) => { const file = event.target.files?.[0]; if (file) void runBuilderOperation("import", () => props.onImport(file)); event.currentTarget.value = ""; }} /></label><span className="sr-only" role="status" aria-live="polite">{operationState ? operationText(operationState.kind, operationState.phase) : ""}</span><div className="workflow-run-actions"><button className="primary" type="button" disabled={Boolean(props.activeRunId) || issues.length > 0} onClick={() => props.onRun(localDefinition)}>{props.activeRunId ? (locale === "zh" ? "运行中" : "Running") : copy.run}</button>{props.activeRunId ? <button className="ghost" type="button" onClick={props.onCancel}>{locale === "zh" ? "停止" : "Stop"}</button> : null}{canContinue ? <button className="ghost" type="button" onClick={() => props.onRerun(localDefinition)}>{copy.rerun}</button> : null}{canContinue ? <button className="ghost" type="button" onClick={() => props.onContinue?.()}>{copy.continue}</button> : null}</div></div></header>
+  return <div id="poc-workflow-builder" data-poc-surface="workflow-builder" className="workflow-workspace workflow-workspace-fullscreen" onPointerMove={props.movePanel} onPointerUp={props.endPanelDrag} onPointerCancel={props.endPanelDrag}>
+     <header className="workflow-page-header workflow-builder-toolbar"><div className="workflow-builder-title"><button id="poc-workflow-back" className="workflow-back-button" type="button" aria-label={locale === "zh" ? "返回工作流" : "Back to workflows"} title={locale === "zh" ? "返回工作流" : "Back to workflows"} onClick={props.onBack}><ArrowLeft size={16} aria-hidden="true" /></button><h1>{props.workflowMetadata.title.trim() || route.label}</h1></div><div className="workflow-header-actions" data-poc-actions="workflow-builder"><button className={"ghost workflow-ai-toggle " + (props.aiSidebarOpen ? "active" : "")} type="button" aria-pressed={props.aiSidebarOpen} onClick={() => props.onAiSidebarOpenChange(!props.aiSidebarOpen)}><Sparkles size={14} aria-hidden="true" />{locale === "zh" ? "AI 助手" : "AI assistant"}</button><button className={"ghost workflow-operation-button workflow-operation-" + (operationState?.kind === "save" ? operationState.phase : "idle")} type="button" disabled={operationState?.phase === "running"} id="poc-workflow-save" title={operationState?.kind === "save" && operationState.phase === "success" ? "poc-save-success" : operationState?.kind === "save" && operationState.phase === "error" ? "poc-save-error" : "poc-save-idle"} data-poc-action="save-workflow" data-poc-save-state={operationState?.kind === "save" ? operationState.phase : "idle"} data-workflow-operation="save" data-operation-state={operationState?.kind === "save" ? operationState.phase : "idle"} aria-busy={operationState?.kind === "save" && operationState.phase === "running"} onClick={() => void runBuilderOperation("save", () => props.onSave(localDefinition))}>{operationState?.kind === "save" ? operationText("save", operationState.phase) : copy.save}</button><button className={"ghost workflow-operation-button workflow-operation-" + (operationState?.kind === "export" ? operationState.phase : "idle")} type="button" disabled={operationState?.phase === "running"} data-workflow-operation="export" data-operation-state={operationState?.kind === "export" ? operationState.phase : "idle"} aria-busy={operationState?.kind === "export" && operationState.phase === "running"} onClick={() => void runBuilderOperation("export", () => props.onExport(localDefinition))}>{operationState?.kind === "export" ? operationText("export", operationState.phase) : copy.export}</button><label className={"ghost workflow-import-button workflow-operation-" + (operationState?.kind === "import" ? operationState.phase : "idle")} data-workflow-operation="import" data-operation-state={operationState?.kind === "import" ? operationState.phase : "idle"} aria-disabled={operationState?.phase === "running"}>{operationState?.kind === "import" ? operationText("import", operationState.phase) : copy.import}<input type="file" accept="application/json,.json" disabled={operationState?.phase === "running"} onChange={(event) => { const file = event.target.files?.[0]; if (file) void runBuilderOperation("import", () => props.onImport(file)); event.currentTarget.value = ""; }} /></label><span className="sr-only" role="status" aria-live="polite">{operationState ? operationText(operationState.kind, operationState.phase) : ""}</span><div className="workflow-run-actions"><button className="primary" type="button" disabled={Boolean(props.activeRunId) || issues.length > 0} onClick={() => props.onRun(localDefinition)}>{props.activeRunId ? (locale === "zh" ? "运行中" : "Running") : copy.run}</button>{props.activeRunId ? <button className="ghost" type="button" onClick={props.onCancel}>{locale === "zh" ? "停止" : "Stop"}</button> : null}{canContinue ? <button className="ghost" type="button" onClick={() => props.onRerun(localDefinition)}>{copy.rerun}</button> : null}{canContinue ? <button className="ghost" type="button" onClick={() => props.onContinue?.()}>{copy.continue}</button> : null}</div></div></header>
      <div className="workflow-canvas-ai-layout"><div className="workflow-canvas-shell"><Suspense fallback={<div className="workflow-canvas-loading" role="status">{locale === "zh" ? "正在加载工作流画布…" : "Loading workflow canvas…"}</div>}><DesktopWorkflowCanvas nodes={canvasNodes} edges={localDefinition.edges} selectedNodeKey={selectedNode?.nodeKey ?? null} nodeExecutionSnapshots={props.nodeExecutionSnapshots} pendingConnectionSourceKey={props.pendingConnectionSourceKey} onSelectNode={props.onSelectNode} onMoveNode={props.onMoveNode} onMoveNodes={props.onMoveNodes} providerConfiguredForNode={props.providerConfiguredForNode} providerSourceForNode={props.providerSourceForNode} onStartConnection={props.onStartConnection} onConnect={props.onConnect} onCancelConnection={props.onCancelConnection} onDeleteEdge={props.onDeleteEdge} onDeleteNode={props.onDeleteNode} onDuplicateNode={props.onDuplicateNode} onDuplicateNodes={props.onDuplicateNodes} onAddNodeAtPoint={props.onAddNode} onUpdateNode={props.onUpdateNode} onUpdateNodeParameter={props.onUpdateNodeConfig} onSelectWorkflowFiles={props.onSelectWorkflowFiles} canUndo={props.canUndo} canRedo={props.canRedo} onUndo={props.onUndo} onRedo={props.onRedo} modelOptions={modelOptions} modelLabel={runningHubModelCatalog ? (locale === "zh" ? "工作流" : "Workflow") : undefined} hideWorkflowReference={runningHubModelCatalog} providerOptions={providerOptions} voiceOptions={workflowVoiceOptions.map((voice) => ({ value: voice.voiceId, label: voice.voiceName, description: voice.description?.[0] }))} agentOptions={props.agentOptions} voiceOptionsLoading={workflowVoiceOptionsLoading} voiceOptionsError={workflowVoiceOptionsError} initialViewport={canvasInitialViewport} locale={locale} /></Suspense><div className="workflow-canvas-overlay-toolbar"><span>{copy.canvas}</span><span className="muted">{localDefinition.nodes.length} {copy.nodes} · {localDefinition.edges.length} {copy.edges} {issues.length ? "· " + issues.length + (locale === "en" ? " connection issues" : " 个连接问题") : "· " + copy.runnable}</span></div></div>{props.aiSidebar}</div>
-    {props.leftPanelOpen ? <aside className="workflow-floating-panel workflow-floating-panel-left" style={{ left: props.panelPosition.left.x, top: props.panelPosition.left.y }}><div className="workflow-floating-panel-header" onPointerDown={(event) => props.startPanelDrag("left", event)}><div><strong>{copy.nodesMenu}</strong><span>{props.savedWorkflows.length} {locale === "en" ? "saved" : "个"} · {localDefinition.nodes.length} {copy.nodes}</span></div><button type="button" className="workflow-panel-toggle" onPointerDown={(event) => event.stopPropagation()} onClick={() => props.setLeftPanelOpen(false)} aria-label={copy.close}>−</button></div><div className="workflow-action-list">{props.workflowActions.map((item) => <button key={item.id} type="button" className={"workflow-action-item " + (selectedNode?.type === item.id ? "active" : "")} onClick={() => addPaletteNode(item.id)} onPointerDown={(event) => startPaletteDrag(event, item.id)}>{item.label}<small>{item.output.toUpperCase()} · {locale === "en" ? "Add" : "添加"}</small></button>)}</div></aside> : <button type="button" className="workflow-floating-panel-tab workflow-floating-panel-tab-left" style={{ left: props.panelPosition.left.x, top: props.panelPosition.left.y }} onPointerDown={(event) => props.startPanelDrag("left", event)} onClick={() => { if (props.consumePanelClick()) return; props.setLeftPanelOpen(true); }}>{copy.open} {copy.nodesMenu}</button>}
+    {props.leftPanelOpen ? <aside className="workflow-floating-panel workflow-floating-panel-left" style={{ left: props.panelPosition.left.x, top: props.panelPosition.left.y }}><div className="workflow-floating-panel-header" onPointerDown={(event) => props.startPanelDrag("left", event)}><div><strong>{copy.nodesMenu}</strong><span>{props.savedWorkflows.length} {locale === "en" ? "saved" : "个"} · {localDefinition.nodes.length} {copy.nodes}</span></div><button type="button" className="workflow-panel-toggle" onPointerDown={(event) => event.stopPropagation()} onClick={() => props.setLeftPanelOpen(false)} aria-label={copy.close}>−</button></div><div className="workflow-action-list">{props.workflowActions.map((item) => <button key={item.id} type="button" className={"workflow-action-item " + (selectedNode?.type === item.id ? "active" : "")} onClick={() => addPaletteNode(item.id)} onPointerDown={(event) => startPaletteDrag(event, item.id)}>{item.label}<small>{item.output.toUpperCase()} · {locale === "en" ? "Add" : "添加"}</small></button>)}</div></aside> : <button type="button" className="workflow-floating-panel-tab workflow-floating-panel-tab-left" style={{ left: props.panelPosition.left.x, top: props.panelPosition.left.y }} onClick={() => props.setLeftPanelOpen(true)}>{copy.open} {copy.nodesMenu}</button>}
     {props.rightPanelOpen ? (
       <aside className="workflow-floating-panel workflow-floating-panel-right" style={{ right: props.panelPosition.right.x, top: props.panelPosition.right.y }}>
         <div className="workflow-floating-panel-header" onPointerDown={(event) => props.startPanelDrag("right", event)}><div><strong>{copy.workflow}</strong><span>{copy.workflowDescription}</span></div><button type="button" className="workflow-panel-toggle" onPointerDown={(event) => event.stopPropagation()} onClick={() => props.setRightPanelOpen(false)} aria-label={copy.close}>-</button></div>
-        <div className="workflow-info-fields"><label className="workflow-editor-field"><span>{copy.workflowTitle}</span><input value={props.workflowMetadata.title} onChange={(event) => props.onWorkflowMetaChange({ title: event.target.value })} /></label><label className="workflow-editor-field"><span>{copy.workflowDescription}</span><textarea value={props.workflowMetadata.description} onChange={(event) => props.onWorkflowMetaChange({ description: event.target.value })} /></label><label className="workflow-editor-field"><span>{copy.workflowStatus}</span><select value={props.workflowMetadata.status} onChange={(event) => props.onWorkflowMetaChange({ status: event.target.value as WorkflowStatus })}><option value="draft">draft</option><option value="live">live</option><option value="archived">archived</option></select></label></div>
+        <div className="workflow-info-fields"><label className="workflow-editor-field"><span>{copy.workflowTitle}</span><input id="poc-workflow-title" data-poc-field="workflow-title" value={props.workflowMetadata.title} onChange={(event) => props.onWorkflowMetaChange({ title: event.target.value })} /></label><label className="workflow-editor-field"><span>{copy.workflowDescription}</span><textarea id="poc-workflow-description" data-poc-field="workflow-description" value={props.workflowMetadata.description} onChange={(event) => props.onWorkflowMetaChange({ description: event.target.value })} /></label><label className="workflow-editor-field"><span>{copy.workflowStatus}</span><select id="poc-workflow-status" data-poc-field="workflow-status" value={props.workflowMetadata.status} onChange={(event) => props.onWorkflowMetaChange({ status: event.target.value as WorkflowStatus })}><option value="draft">draft</option><option value="live">live</option><option value="archived">archived</option></select></label><output id="poc-workflow-definition-hash" data-poc-field="workflow-definition-hash" aria-label="Workflow definition hash">{localDefinition.definitionHash}</output></div>
         {selectedNode ? <div className="workflow-selected-node-summary"><span>{locale === "zh" ? "当前节点" : "Selected node"}</span><strong>{selectedNode.title}</strong><small>{selectedNode.type}</small></div> : null}
       </aside>
-    ) : <button type="button" className="workflow-floating-panel-tab workflow-floating-panel-tab-right" style={{ right: props.panelPosition.right.x, top: props.panelPosition.right.y }} onPointerDown={(event) => props.startPanelDrag("right", event)} onClick={() => { if (props.consumePanelClick()) return; props.setRightPanelOpen(true); }}>{copy.open} {copy.workflow}</button>}
+    ) : <button id="poc-workflow-panel-open" type="button" className="workflow-floating-panel-tab workflow-floating-panel-tab-right" style={{ right: props.panelPosition.right.x, top: props.panelPosition.right.y }} aria-label={locale === "zh" ? "展开工作流信息" : "Expand workflow info"} onClick={() => props.setRightPanelOpen(true)}>{copy.open} {copy.workflow}</button>}
   </div>;
 }
 
@@ -2011,7 +2022,6 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, createAgentChat
   const workflowMetadata = initialWorkflowMetadata;
   const [panelPosition, setPanelPosition] = useState({ left: { x: 18, y: 82 }, right: { x: 18, y: 82 } });
   const panelDragRef = useRef<{ panel: "left" | "right"; startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
-  const suppressPanelClickRef = useRef(false);
   const workflowActions = workflowActionsBase.map((item) => ({ ...item, label: locale === "en" ? workflowActionEnglish[item.id] ?? item.label : item.label }));
   useEffect(() => {
     const collapseNarrowCanvasPanels = () => {
@@ -2389,15 +2399,9 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, createAgentChat
     const drag = panelDragRef.current;
     if (!drag) return;
     if (drag.moved) {
-      suppressPanelClickRef.current = true;
       setPanelPosition((current) => ({ ...current, [drag.panel]: { x: 12, y: current[drag.panel].y } }));
     }
     panelDragRef.current = null;
-  };
-  const consumePanelClick = () => {
-    const suppressed = suppressPanelClickRef.current;
-    suppressPanelClickRef.current = false;
-    return suppressed;
   };
   const selectNode = (nodeKey: string) => {
     setSelectedNodeKey(nodeKey);
@@ -2604,7 +2608,7 @@ function DesktopWorkflowWorkspace({ workflowId, workbenchClient, createAgentChat
   const onContinue = providedOnContinue ?? (() => undefined);
   const rerunWorkflow = onRerun;
   const continueWorkflow = onContinue;
-   return <DesktopWorkflowBuilderSurface route={route} onBack={onBack} prompt={_prompt} onPromptChange={_onPromptChange} runStatus={runStatus} activeRunId={_activeRunId} onRun={onRun} onRerun={rerunWorkflow} onContinue={continueWorkflow} onCancel={onCancel} lastRunStatus={lastRunStatus} savedWorkflows={savedWorkflows} workflowActions={workflowActions} localDefinition={localDefinition} canvasNodes={canvasNodes} selectedNode={selectedNode} selectedAction={selectedAction} issues={issues} upstreamEdge={upstreamEdge} upstreamOptions={upstreamOptions} nodeParameters={nodeParameters} providerConfiguredForNode={providerConfiguredForNode} providerSourceForNode={providerSourceForNode} nodeExecutionSnapshots={nodeExecutionSnapshots} onSelectWorkflowFiles={onSelectWorkflowFiles} canUndo={historyState.canUndo} canRedo={historyState.canRedo} onUndo={undoWorkflow} onRedo={redoWorkflow} pendingConnectionSourceKey={pendingConnectionSourceKey} onSelectNode={selectNode} onMoveNode={moveNode} onMoveNodes={moveNodes} onAddNode={addNode} onRemoveSelectedNode={removeSelectedNode} onDeleteNode={removeNode} onDuplicateNode={duplicateNode} onDuplicateNodes={duplicateNodes} onChangeNodeType={changeNodeType} onSetUpstream={setUpstream} onUpdateNodeParameter={updateNodeParameter} onUpdateNodeConfig={updateNodeConfig} onUpdateNode={updateNode} onStartConnection={setPendingConnectionSourceKey} onConnect={connectNodes} onCancelConnection={() => setPendingConnectionSourceKey(null)} onDeleteEdge={deleteEdge} workflowMetadata={workflowMetadata} onWorkflowMetaChange={onWorkflowMetaChange} locale={locale} model={model} models={models} modelForNode={modelForNode} modelsForNode={modelsForNode} providersForNode={providersForNode} agentOptions={agentOptions} loadVoicesForProvider={loadVoicesForProvider} reasoningEffort={reasoningEffort} skillId={skillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} onSave={onSave} onExport={onExport} onImport={onImport} leftPanelOpen={leftPanelOpen} rightPanelOpen={rightPanelOpen} panelPosition={panelPosition} setLeftPanelOpen={setLeftPanelOpen} setRightPanelOpen={setRightPanelOpen} startPanelDrag={startPanelDrag} movePanel={movePanel} endPanelDrag={endPanelDrag} consumePanelClick={consumePanelClick} aiSidebarOpen={aiSidebarOpen} onAiSidebarOpenChange={setAiSidebarOpen} aiSidebar={aiSidebar} />;
+   return <DesktopWorkflowBuilderSurface route={route} onBack={onBack} prompt={_prompt} onPromptChange={_onPromptChange} runStatus={runStatus} activeRunId={_activeRunId} onRun={onRun} onRerun={rerunWorkflow} onContinue={continueWorkflow} onCancel={onCancel} lastRunStatus={lastRunStatus} savedWorkflows={savedWorkflows} workflowActions={workflowActions} localDefinition={localDefinition} canvasNodes={canvasNodes} selectedNode={selectedNode} selectedAction={selectedAction} issues={issues} upstreamEdge={upstreamEdge} upstreamOptions={upstreamOptions} nodeParameters={nodeParameters} providerConfiguredForNode={providerConfiguredForNode} providerSourceForNode={providerSourceForNode} nodeExecutionSnapshots={nodeExecutionSnapshots} onSelectWorkflowFiles={onSelectWorkflowFiles} canUndo={historyState.canUndo} canRedo={historyState.canRedo} onUndo={undoWorkflow} onRedo={redoWorkflow} pendingConnectionSourceKey={pendingConnectionSourceKey} onSelectNode={selectNode} onMoveNode={moveNode} onMoveNodes={moveNodes} onAddNode={addNode} onRemoveSelectedNode={removeSelectedNode} onDeleteNode={removeNode} onDuplicateNode={duplicateNode} onDuplicateNodes={duplicateNodes} onChangeNodeType={changeNodeType} onSetUpstream={setUpstream} onUpdateNodeParameter={updateNodeParameter} onUpdateNodeConfig={updateNodeConfig} onUpdateNode={updateNode} onStartConnection={setPendingConnectionSourceKey} onConnect={connectNodes} onCancelConnection={() => setPendingConnectionSourceKey(null)} onDeleteEdge={deleteEdge} workflowMetadata={workflowMetadata} onWorkflowMetaChange={onWorkflowMetaChange} locale={locale} model={model} models={models} modelForNode={modelForNode} modelsForNode={modelsForNode} providersForNode={providersForNode} agentOptions={agentOptions} loadVoicesForProvider={loadVoicesForProvider} reasoningEffort={reasoningEffort} skillId={skillId} onModelChange={onModelChange} onReasoningChange={onReasoningChange} onSkillChange={onSkillChange} onSave={onSave} onExport={onExport} onImport={onImport} leftPanelOpen={leftPanelOpen} rightPanelOpen={rightPanelOpen} panelPosition={panelPosition} setLeftPanelOpen={setLeftPanelOpen} setRightPanelOpen={setRightPanelOpen} startPanelDrag={startPanelDrag} movePanel={movePanel} endPanelDrag={endPanelDrag} aiSidebarOpen={aiSidebarOpen} onAiSidebarOpenChange={setAiSidebarOpen} aiSidebar={aiSidebar} />;
 }
 
 function DesktopMediaWorkspaceBody({
@@ -3567,7 +3571,9 @@ function DesktopProviderEditorModal({ target, profile, locale, onClose, onSave, 
   const isCheapBuddy = platform?.id === CHEAPBUDDY.id;
   const runningHubWorkflowModels = [...new Set(draft.workflows.map((workflow) => workflow.remoteWorkflowId.trim()).filter(Boolean))];
   const legacyModels = profile?.capabilityModels?.[target.capability]?.models ?? profile?.models ?? (profile?.model ? [profile.model] : []);
-  const modelChoices = isRunningHub ? runningHubWorkflowModels : [...new Set([...discoveredModelIds, ...draft.modelIds, ...legacyModels])];
+  const modelChoices = isRunningHub ? runningHubWorkflowModels : target.capability === "text"
+    ? filterDeprecatedModelIds([...discoveredModelIds, ...draft.modelIds, ...legacyModels])
+    : [...new Set([...discoveredModelIds, ...draft.modelIds, ...legacyModels])];
   const useModelSelect = modelChoices.length > 0;
   const discoverModels = (automatic = false) => {
     const baseUrl = draft.baseUrl.trim();
@@ -4045,7 +4051,9 @@ export function App() {
   const requestedAgentId = activePath.startsWith("/dashboard/ai")
     ? (new URLSearchParams(activePath.split("?", 2)[1] ?? "").get("agent")?.trim() || (conversationScope?.startsWith("entry:") ? null : conversationScope))
     : null;
-  const effectiveSkillId: SkillId = resolveDesktopSkillId(selected.path, requestedAgentId);
+  // Resolve entry-scoped advisor Skills from the full path. The route manifest
+  // may resolve the UI to its base path before a chat ID is attached.
+  const effectiveSkillId: SkillId = resolveDesktopSkillId(activePath, requestedAgentId ?? conversationScope);
   const localAgentGroups = useMemo(() => [...buildOnlineAgentGroups(locale, Boolean(activeModel.trim())), ...buildAgencyAgentGroups(locale, Boolean(activeModel.trim())), ...buildLocalAgentGroups(localSkills, locale, Boolean(activeModel.trim()))], [activeModel, localSkills, locale]);
   const workflowAgentOptions = useMemo<WorkflowDynamicOption[]>(() => localAgentGroups.flatMap((group) => group.cards.map((card) => ({ value: card.id, label: card.title, description: card.description }))), [localAgentGroups]);
   const agentCardsById = useMemo(() => new Map(localAgentGroups.flatMap((group) => group.cards.map((card) => [card.id, card] as const))), [localAgentGroups]);
@@ -4573,7 +4581,7 @@ export function App() {
       description: capabilities.length
         ? capabilities.map((node) => locale === "zh" ? node.title : workflowActionEnglish[node.type] ?? node.title).join(" → ")
         : (locale === "zh" ? "本地可编辑工作流" : "Locally editable workflow"),
-      status: definition ? "live" : "draft",
+      status: persistedWorkflowStatus(definition),
       updatedAt: workflow.updated_at,
       nodeCount: definition?.nodes.length ?? 0,
     };
@@ -5188,7 +5196,7 @@ export function App() {
             const metric = normalizedMetric.kind === "usage" ? {
               ...normalizedMetric,
               provider: normalizedMetric.provider ?? configRef.current.provider.id,
-              model: normalizedMetric.model ?? runModelsRef.current.get(event.runId) ?? configRef.current.provider.model ?? "unknown",
+              model: resolveDesktopRunModel(normalizedMetric.model, runModelsRef.current.get(event.runId), configRef.current.provider.model),
             } satisfies UsageMetricEvent : normalizedMetric;
             const accumulator = applyRunMetricsEvent(metricAccumulators.get(event.runId) ?? createRunMetricsAccumulator(event.runId), metric);
             metricAccumulators.set(event.runId, accumulator);
@@ -5244,7 +5252,7 @@ export function App() {
           }
           if (eventType === "usage") {
             const provider = event.provider ?? configRef.current.provider.id;
-            const model = event.model?.trim() || runModelsRef.current.get(event.runId) || configRef.current.provider.model || "unknown";
+            const model = resolveDesktopRunModel(event.model, runModelsRef.current.get(event.runId), configRef.current.provider.model);
             const createdAt = new Date().toISOString();
             const parts = assistantPartsRef.current.get(event.runId) ?? [];
             assistantPartsRef.current.set(event.runId, applyWorkbenchRunEventToParts(parts, { type: "usage", usage: { runId: event.runId, usageId: event.usageId, provider, model, inputTokens: event.inputTokens, outputTokens: event.outputTokens, cachedInputTokens: event.cachedInputTokens, reasoningTokens: event.reasoningTokens, providerCost: event.costUsd, aggregation: event.aggregation === "snapshot" ? "snapshot" : "delta", scope: event.scope === "run" ? "run" : "step" }, sequence, createdAt }));
@@ -5813,12 +5821,20 @@ export function App() {
     try {
       const savedResponse = await workbenchClient.workflows.save({ id: workflowId, title, definition });
       const saved = toSavedWorkflow(savedResponse);
+      // The local editor may contain provider bindings and other runtime-only
+      // fields that storage intentionally removes. The save response is the
+      // authoritative persisted definition; keep it in the editor so the
+      // visible hash and the post-restart hash describe the same graph.
+      const persistedDefinition = toWorkflowDefinitionEnvelope(savedResponse.definition);
+      const persistedDefinitionHash = hashWorkflowDefinition(persistedDefinition);
+      const persistedPresentationHash = hashWorkflowPresentation(persistedDefinition, saved.name);
       currentWorkflowIdRef.current = saved.id;
-      savedWorkflowHashRef.current = definitionHash;
-      savedWorkflowPresentationHashRef.current = presentationHash;
+      savedWorkflowHashRef.current = persistedDefinitionHash;
+      savedWorkflowPresentationHashRef.current = persistedPresentationHash;
+      setWorkflowDefinition((current) => current?.definitionHash === persistedDefinitionHash && current.revision === persistedDefinition.revision ? current : persistedDefinition);
       setSavedWorkflows((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setRunStatus(mode === "auto" ? (locale === "zh" ? "工作流已自动保存" : "Workflow auto-saved") : (locale === "zh" ? "工作流已保存到本机" : "Workflow saved locally"));
-      return savedResponse.definition as WorkflowDefinitionEnvelope;
+      return persistedDefinition;
     } catch (error) {
       setRunStatus(error instanceof Error ? error.message : (mode === "auto" ? (locale === "zh" ? "工作流自动保存失败" : "Workflow auto-save failed") : (locale === "zh" ? "工作流保存失败" : "Workflow save failed")));
       return false;
@@ -5863,7 +5879,7 @@ export function App() {
     const metadata = definition.metadata ?? {};
     const savedTitle = saved?.name ?? (locale === "zh" ? "未命名工作流" : "Untitled workflow");
     const savedDescription = typeof metadata.description === "string" ? metadata.description : "";
-    const savedStatus = metadata.status === "live" || metadata.status === "archived" ? metadata.status : (saved ? "live" : "draft");
+    const savedStatus = persistedWorkflowStatus(normalizedDefinition, Boolean(saved));
     const persistedSaveShape = projectOpenedWorkflowDefinition(normalizedDefinition, { description: savedDescription, status: savedStatus });
     savedWorkflowHashRef.current = saved ? hashWorkflowDefinition(persistedSaveShape) : null;
     savedWorkflowPresentationHashRef.current = saved ? hashWorkflowPresentation(persistedSaveShape, saved.name) : null;
@@ -6350,13 +6366,16 @@ export function App() {
            ? requestedModel
            : capabilityProvider.model,
        };
-       runModelsRef.current.set(runId, selectedProvider.model);
+       const workflowModelSummary = isWorkflowRun
+         ? summarizeWorkflowModels(bindWorkflowProviderDefaults(launchWorkflowDefinition ?? currentWorkflowDefinition(), launchConfig))
+         : { model: selectedProvider.model, models: selectedProvider.model ? [selectedProvider.model] : [] };
+       runModelsRef.current.set(runId, workflowModelSummary.model ?? (isWorkflowRun ? "unknown" : selectedProvider.model));
        // Image generation is a media workflow, not a Skill-driven text turn.
        // Keep the writer Skill out of this run so a Skill's example provider or
        // model can never compete with the configured image capability.
        const runSkillId: SkillId = actionId === "image_generate" ? "auto" : launchEffectiveSkillId;
        const runSource = isWorkflowRun ? "workflow" : actionId === "ppt_generate" ? "ppt" : mediaFeatureId ? "media" : conversationAgentId ? "agent" : "conversation";
-       await workbenchClient.runs.start({ id: runId, conversationId, prompt: userPrompt, model: selectedProvider.model || undefined, skillId: runSkillId, reasoningEffort: selectedProvider.reasoningEffort ?? reasoningEffort, source: runSource, assistantMessageId: conversationId ? `assistant-${runId}` : undefined });
+       await workbenchClient.runs.start({ id: runId, conversationId, prompt: userPrompt, model: workflowModelSummary.model || undefined, skillId: runSkillId, reasoningEffort: selectedProvider.reasoningEffort ?? reasoningEffort, source: runSource, assistantMessageId: conversationId ? `assistant-${runId}` : undefined });
        const workflowDefinitionSnapshot = isWorkflowRun
          ? sanitizeWorkflowDefinitionForStorage(launchWorkflowDefinition ?? currentWorkflowDefinition())
          : undefined;
@@ -6386,6 +6405,7 @@ export function App() {
           : undefined;
        const taskMetadata: DesktopTaskMetadata = {
        kind: isWorkflowRun ? "workflow" : mediaFeatureId ? "media" : "agent",
+       ...(isWorkflowRun ? { workflowModels: workflowModelSummary.models } : {}),
        ...(mediaFeatureId && mediaFeatureId !== "image_generate" ? { featureId: mediaFeatureId } : {}),
        ...(actionId === "image_generate" ? { imageGeneration: buildDesktopImageGenerationMetadata(displayedUserPrompt, resolvedMediaInputs) } : {}),
          ...(savedWorkflowForRun ? { workflowId: savedWorkflowForRun.id, workflowTitle: savedWorkflowForRun.name, definitionHash: workflowDefinitionSnapshot?.definitionHash, workflowDefinition: workflowDefinitionSnapshot } : {}),
@@ -6396,7 +6416,7 @@ export function App() {
        setRunMetadataById((current) => new Map(current).set(runId, taskMetadata));
        await tauriBridge.invoke("append_run_event", { runId, sequence: -1, eventType: "task_metadata", payloadJson: JSON.stringify(taskMetadata) });
        persistedRun = true;
-       setRuns((current) => [{ id: runId, conversation_id: conversationId, status: "running", model: selectedProvider.model || null, started_at: new Date().toISOString(), finished_at: null }, ...current].slice(0, 100));
+       setRuns((current) => [{ id: runId, conversation_id: conversationId, status: "running", model: workflowModelSummary.model || null, started_at: new Date().toISOString(), finished_at: null }, ...current].slice(0, 100));
         const workflowExecutionPrompt = launchSelectedPath === "/dashboard/workflows" && actionId === "writer"
         ? `${runtimePrompt}\n\n输出约束：只输出可直接交付的最终中文营销文案；不要解释过程，不要提及 Skill、模型或工具，不要输出英文前言。按用户要求保留标题、正文和行动号召。`
         : runtimePrompt;

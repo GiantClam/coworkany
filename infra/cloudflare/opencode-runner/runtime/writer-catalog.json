@@ -13,7 +13,7 @@
         "dirName": "khazix-writer",
         "interfaceVersion": "writer-result-v1",
         "release": "2026.08.06",
-        "digest": "sha256:2609df76756fe9c523a84db80c6ade5ce43b994ad06265916ee243c6c78d335e"
+        "digest": "sha256:d3b15b441b0d8fd6f85be13ad0b504e69b32748c3cc4905d5cdbc88864ff00a1"
       },
       "compatibleStyleSkillIds": [
         "analytical",
@@ -61,7 +61,7 @@
         "dirName": "writer-xiaohongshu",
         "interfaceVersion": "writer-result-v1",
         "release": "2026.08.06",
-        "digest": "sha256:fe34c9662914ef0e386d28d388055cdd518dd0919f9f9073c9a2bccc500657dd"
+        "digest": "sha256:eab495234f122b3e772aa7cf26e62f7e0d8db48ee16c0946d27cf805fe53bd82"
       },
       "compatibleStyleSkillIds": [],
       "operations": [
@@ -104,7 +104,7 @@
         "dirName": "writer-weibo",
         "interfaceVersion": "writer-result-v1",
         "release": "2026.08.06",
-        "digest": "sha256:88aa65f18a8c298d8acb36ac491a9b653bdc62a8df1d222de8b05de6223413d7"
+        "digest": "sha256:a0acba9411cd7f7998014d7905a51f5fded319ae08a18c1d4a86ad10639278f0"
       },
       "compatibleStyleSkillIds": [],
       "operations": [
@@ -148,7 +148,7 @@
         "dirName": "writer-douyin",
         "interfaceVersion": "writer-result-v1",
         "release": "2026.08.06",
-        "digest": "sha256:c721c1213836ea1d78cb5fed38d587e267c000e84a8cf00f2c32b483f9536142"
+        "digest": "sha256:e27ea150e6d05c3dd46811cd6154b4cf983aab90b67531ff69362a7d31383de4"
       },
       "compatibleStyleSkillIds": [],
       "operations": [
@@ -191,7 +191,7 @@
         "dirName": "writer-x",
         "interfaceVersion": "writer-result-v1",
         "release": "2026.08.06",
-        "digest": "sha256:21d44007bbaa3646ffce7f05f885177e877289938fcf18454a25a766790c2bc1"
+        "digest": "sha256:27af3d1921954bc641e2396a8875a11e631ca58ef73914c92d3eaf7f43f7c897"
       },
       "compatibleStyleSkillIds": [],
       "operations": [
@@ -234,7 +234,7 @@
         "dirName": "writer-linkedin",
         "interfaceVersion": "writer-result-v1",
         "release": "2026.08.06",
-        "digest": "sha256:30a03f94d83712374ba9b1633c2532e6154b5d5d880116ff2c872d0c925601c3"
+        "digest": "sha256:48bbca50676618bf1738cc16149c34830d05c9acdbd8d05df4251d5f9fe2dbb1"
       },
       "compatibleStyleSkillIds": [],
       "operations": [
@@ -277,7 +277,7 @@
         "dirName": "writer-instagram",
         "interfaceVersion": "writer-result-v1",
         "release": "2026.08.06",
-        "digest": "sha256:c223903369fe721402d008c671e48237b106e51e63892742ee356b810bf8a7c8"
+        "digest": "sha256:cf0f429c6f0eca025594c936b99e5f64755a677ff364fe0dd1ba7e27681ef0ed"
       },
       "compatibleStyleSkillIds": [],
       "operations": [
@@ -319,7 +319,7 @@
         "dirName": "writer-tiktok",
         "interfaceVersion": "writer-result-v1",
         "release": "2026.08.06",
-        "digest": "sha256:fbc97348cf6eec6557b79a7c9cad802ab70b56e6d4a7b0dc20a201fd35a66848"
+        "digest": "sha256:6ed2fab19e80dbf87e91713566991c184641bbe50df3bde330c5bcbc39dd8f3f"
       },
       "compatibleStyleSkillIds": [],
       "operations": [
@@ -361,7 +361,7 @@
         "dirName": "writer-facebook",
         "interfaceVersion": "writer-result-v1",
         "release": "2026.08.06",
-        "digest": "sha256:6b6d6c478f8a11f027574a104f52bbfc50e816c608cf0c231ff9350569bb4628"
+        "digest": "sha256:5265349a15e72f8fe152245b8427c85a2b6b4817aaa2fd7730fa4569e544462d"
       },
       "compatibleStyleSkillIds": [],
       "operations": [
@@ -405,7 +405,7 @@
         "dirName": "writer-reddit",
         "interfaceVersion": "writer-result-v1",
         "release": "2026.08.06",
-        "digest": "sha256:bec2e9b1a0acb5b7e11c84cb9cdb6cd7ac874d67b3cb8a9892e778e5aa5d683f"
+        "digest": "sha256:a4f713478061918e19511302f52e1adb438ba88601b177aad0ae3987c759082f"
       },
       "compatibleStyleSkillIds": [],
       "operations": [

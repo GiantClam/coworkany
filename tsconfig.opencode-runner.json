@@ -1,0 +1,26 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "incremental": false
+  },
+  "include": [
+    "app/api/ai/chat/route.ts",
+    "lib/ai-entry/conversation-state.ts",
+    "lib/ai-entry/repository.ts",
+    "lib/ai-entry/runtime/**/*.ts",
+    "lib/ai-runtime/**/*.ts"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "node_modules",
+    "infra/cloudflare/opencode-runner",
+    "infra/cloudflare/dashi-ppt-smoke",
+    "zola-reference",
+    ".next",
+    "coverage"
+  ]
+}

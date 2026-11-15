@@ -1,4 +1,5 @@
 import { createOpenAI } from "@ai-sdk/openai"
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy"
 
 export type AiEntryProviderId =
   | "deepseek"
@@ -90,9 +91,9 @@ const DEFAULT_AIBERM_BASE_URL = "https://aiberm.com/v1"
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 const DEFAULT_PPTOKEN_BASE_URL = "https://api.pptoken.org/v1"
 const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-const DEFAULT_MODEL = "openai/gpt-5.4-mini"
-const DEFAULT_PPTOKEN_MODEL = "gpt-5.6-luna"
-const DEFAULT_OPENROUTER_MODEL = "openai/gpt-4.1-mini"
+const DEFAULT_MODEL = "deepseek-v4-pro"
+const DEFAULT_PPTOKEN_MODEL = "gpt-6.1-sol"
+const DEFAULT_OPENROUTER_MODEL = "deepseek/deepseek-v4-pro"
 const PROVIDER_MODEL_LIST_CACHE_TTL_MS = parsePositiveInt(
   process.env.AI_ENTRY_PROVIDER_MODEL_LIST_CACHE_TTL_MS,
   30 * 60 * 1000,
@@ -660,8 +661,11 @@ export function getConfiguredAiEntryProviderForModel(
 ): AiEntryProviderConfig | null {
   const normalizedProviderId = normalizeText(providerId).toLowerCase()
   const normalizedModelId = normalizeText(modelId)
+  if (normalizedModelId && isDeprecatedTextModelId(normalizedModelId)) return null
   const provider = getRawProviderConfigs().find((item) => item.id === normalizedProviderId)
   if (!provider) return null
+
+  if (isDeprecatedTextModelId(provider.model)) return null
 
   if (normalizedProviderId !== "pptoken" || !isPptokenGrokModel(normalizedModelId)) {
     return provider.apiKey && provider.baseURL ? provider : null
@@ -691,10 +695,14 @@ export function resolveAiEntryOpenCodeProvider(input: {
 } = {}) {
   const requestedProviderId = normalizeText(input.providerId).toLowerCase()
   const requestedModelId = normalizeText(input.modelId)
+  if (requestedModelId && isDeprecatedTextModelId(requestedModelId)) return null
   const provider = requestedProviderId
     ? getConfiguredAiEntryProviderForModel(requestedProviderId, requestedModelId)
-    : getConfiguredAiEntryProviders()[0] || null
+    : getConfiguredAiEntryProviders().find(
+        (item) => !isDeprecatedTextModelId(item.model),
+      ) || null
   if (!provider) return null
+  if (isDeprecatedTextModelId(provider.model)) return null
 
   return {
     providerId: provider.id,
@@ -705,7 +713,9 @@ export function resolveAiEntryOpenCodeProvider(input: {
 }
 
 export function getAiEntryCurrentProviderConfig() {
-  const providers = getConfiguredAiEntryProviders()
+  const providers = getConfiguredAiEntryProviders().filter(
+    (provider) => !isDeprecatedTextModelId(provider.model),
+  )
   if (providers.length === 0) return null
   const state = getRoutingState()
   const index = clampIndex(state.activeIndex, providers.length - 1)
@@ -717,6 +727,9 @@ async function buildProviderRuntimes(
 ): Promise<AiEntryProviderRuntime[]> {
   const preferredProviderId = options?.preferredProviderId || null
   const preferredModel = normalizeText(options?.preferredModel || undefined)
+  if (preferredModel && isDeprecatedTextModelId(preferredModel)) {
+    throw new Error("deprecated_text_model_unavailable")
+  }
   const forcePreferredProvider = Boolean(options?.forcePreferredProvider && preferredProviderId)
   const disableProviderFailover = Boolean(options?.disableProviderFailover)
   const forceModelAcrossProviders = Boolean(
@@ -731,7 +744,9 @@ async function buildProviderRuntimes(
       ? options.providerConfigs.filter((item) => item.apiKey && item.baseURL)
       : null
 
-  let configs = explicitProviderConfigs || getConfiguredAiEntryProviders()
+  let configs = (explicitProviderConfigs || getConfiguredAiEntryProviders()).filter(
+    (item) => !isDeprecatedTextModelId(item.model),
+  )
   if (configs.length === 0) return []
 
   const routingModel = preferredModel || getAiEntryDefaultModel()

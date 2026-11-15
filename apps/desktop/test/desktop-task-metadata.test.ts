@@ -38,3 +38,8 @@ test("metadata parser preserves full schema-v2 workflow data and image parameter
   assert.deepEqual(readDesktopTaskMetadata(makeDetail([{ sequence: 1, payloadJson: JSON.stringify({ kind: "media", imageGeneration: { prompt: "prompt only" } }) }])), { kind: "media", imageGeneration: { prompt: "prompt only", parameters: {} } });
   assert.deepEqual(readDesktopTaskMetadata(makeDetail([{ sequence: 1, payloadJson: JSON.stringify({ kind: "media", imageGeneration: { parameters: { width: 1 } } }) }])), { kind: "media", imageGeneration: { prompt: "", parameters: { width: 1 } } });
 });
+
+test("metadata parser preserves the actual workflow node model selection", () => {
+  const metadata = readDesktopTaskMetadata(makeDetail([{ sequence: 1, payloadJson: JSON.stringify({ kind: "workflow", workflowModels: [" gpt-6-luna ", "gpt-6-luna", "gpt-6.1-sol"] }) }]));
+  assert.deepEqual(metadata?.workflowModels, ["gpt-6-luna", "gpt-6.1-sol"]);
+});

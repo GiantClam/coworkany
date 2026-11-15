@@ -10,7 +10,11 @@ test("qualifies DeepSeek display IDs for OpenCode", () => {
 
 test("preserves already-qualified and non-DeepSeek model IDs", () => {
   assert.equal(resolveOpenCodeModelHint({ providerId: "deepseek", modelId: "deepseek/deepseek-v4-pro" }), "deepseek/deepseek-v4-pro")
-  assert.equal(resolveOpenCodeModelHint({ providerId: "pptoken", modelId: "gpt-5.4" }), "pptoken/gpt-5.4")
+  assert.equal(resolveOpenCodeModelHint({ providerId: "pptoken", modelId: "gpt-6.1-sol" }), "pptoken/gpt-6.1-sol")
+  assert.throws(
+    () => resolveOpenCodeModelHint({ providerId: "pptoken", modelId: "gpt-5.4" }),
+    { message: "deprecated_text_model_unavailable" },
+  )
   assert.equal(resolveOpenCodeModelHint({ providerId: null, modelId: null }), null)
 })
 

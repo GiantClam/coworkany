@@ -227,10 +227,10 @@ const models: ModelDefinition[] = [
     providerMetadata: { nativeModel: "happyhorse-1.0-video-edit", featureId: "video-edit" },
   },
   {
-    id: "openai:text:gpt-5.4-mini",
+    id: "openai:text:gpt-6.1-sol",
     provider: "openai_compatible",
     capability: "text.generate",
-    label: "GPT-5.4 Mini",
+    label: "GPT-6.1 Sol",
     async: false,
     outputKind: "text",
     parameterSchema: [
@@ -242,7 +242,7 @@ const models: ModelDefinition[] = [
       ]),
     ],
     providerMetadata: {
-      nativeModel: "gpt-5.4-mini",
+      nativeModel: "gpt-6.1-sol",
     },
   },
   {
@@ -842,7 +842,7 @@ const models: ModelDefinition[] = [
 
 const modelById = new Map(models.map((model) => [model.id, model]))
 const defaultModelsByCapability = new Map<ModelCapability, string>([
-  ["text.generate", "openai:text:gpt-5.4-mini"],
+  ["text.generate", "openai:text:gpt-6.1-sol"],
   ["image.text_to_image", "runninghub:image:seedream-v5-text-to-image"],
   ["image.image_to_image", "runninghub:image:seedream-v5-image-to-image"],
   ["video.text_to_video", `minimax:video:text-to-video:${DEFAULT_MINIMAX_VIDEO_MODEL}`],

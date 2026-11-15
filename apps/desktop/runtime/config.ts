@@ -1,8 +1,9 @@
 import { copyFile, mkdir, open, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { DesktopPaths } from "./paths";
-import { normalizeCapabilityModels, usableRunningHubWorkflowId, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "../src/provider-config";
+import { filterDeprecatedModelIds, normalizeCapabilityModels, usableRunningHubWorkflowId, type DesktopProviderConfig, type DesktopProviderDefaults, type DesktopProviderProfiles, type ProviderCapability } from "../src/provider-config";
 import { createCheapBuddyProvider } from "../src/cheapbuddy";
+import { isDeprecatedTextModelId } from "@coworkany/runtime-contracts/model-policy";
 import { migrateLegacyRunningHubWorkflows, normalizeRunningHubCharacterImageBindings, type RunningHubWorkflowRegistration } from "../src/runninghub-workflow";
 
 export interface DesktopConfig {
@@ -52,14 +53,15 @@ export async function writeDesktopConfig(paths: DesktopPaths, config: DesktopCon
 function parseConfig(raw: string): DesktopConfig {
   const value = JSON.parse(raw) as Partial<DesktopConfig>;
   if (value.schemaVersion !== 1 || typeof value.workspacePath !== "string" || !value.provider || !value.runtime) throw new Error("invalid desktop config");
-  const models = normalizeConfiguredModels(value.provider.models);
-  const requestedModel = String(value.provider.model ?? "").trim();
-  const model = models.includes(requestedModel) ? requestedModel : (models[0] ?? requestedModel);
   const capabilities = normalizeProviderCapabilities(value.provider.capabilities);
+  const capabilityModels = normalizeCapabilityModels(value.provider.capabilityModels);
+  const primaryCapability = primaryConfiguredCapability(capabilities, capabilityModels);
+  const models = normalizeConfiguredModels(value.provider.models, primaryCapability);
+  const requestedModel = String(value.provider.model ?? "").trim();
+  const model = models.includes(requestedModel) ? requestedModel : (models[0] ?? (primaryCapability === "text" && isDeprecatedTextModelId(requestedModel) ? "" : requestedModel));
   const embedding = normalizeEmbeddingConfig(value.embedding);
   const providerWorkflows = normalizeAndMigrateRunningHubWorkflows(value.provider.workflows, legacyWorkflowIds(value.provider));
   const credentialRef = typeof value.provider.credentialRef === "string" ? value.provider.credentialRef.trim() : "";
-  const capabilityModels = normalizeCapabilityModels(value.provider.capabilityModels);
   return {
     schemaVersion: 1,
     locale: value.locale === "zh" || value.locale === "en" ? value.locale : "auto",
@@ -100,15 +102,16 @@ function normalizeProviderProfiles(value: unknown): DesktopProviderProfiles | un
     const record = raw as Record<string, unknown>;
     const id = typeof record.id === "string" && record.id.trim() ? record.id.trim() : key.trim();
     if (!id) continue;
-    const models = normalizeConfiguredModels(record.models);
     const capabilities = normalizeProviderCapabilities(record.capabilities);
+    const capabilityModels = normalizeCapabilityModels(record.capabilityModels);
+    const primaryCapability = primaryConfiguredCapability(capabilities, capabilityModels);
+    const models = normalizeConfiguredModels(record.models, primaryCapability);
     const workflows = normalizeAndMigrateRunningHubWorkflows(record.workflows, legacyWorkflowIds(record));
     const credentialRef = typeof record.credentialRef === "string" ? record.credentialRef.trim() : "";
-    const capabilityModels = normalizeCapabilityModels(record.capabilityModels);
     profiles[key] = {
       id,
       ...(typeof record.source === "string" && record.source.trim() ? { source: record.source.trim() } : {}),
-      ...(typeof record.model === "string" ? { model: models.includes(record.model.trim()) ? record.model.trim() : (models[0] ?? record.model.trim()) } : models.length ? { model: models[0] } : {}),
+      ...(typeof record.model === "string" ? { model: models.includes(record.model.trim()) ? record.model.trim() : (models[0] ?? (primaryCapability === "text" && isDeprecatedTextModelId(record.model) ? "" : record.model.trim())) } : models.length ? { model: models[0] } : {}),
       ...(models.length ? { models } : {}),
       ...(capabilityModels ? { capabilityModels } : {}),
       ...(credentialRef ? { credentialRef } : {}),
@@ -155,9 +158,16 @@ function normalizeProviderDefaults(value: unknown): DesktopProviderDefaults | un
   return Object.keys(defaults).length ? defaults : undefined;
 }
 
-function normalizeConfiguredModels(value: unknown): string[] {
+function normalizeConfiguredModels(value: unknown, capability: ProviderCapability = "text"): string[] {
   if (!Array.isArray(value)) return [];
-  return [...new Set(value.filter((model): model is string => typeof model === "string").map((model) => model.trim()).filter(Boolean))];
+  return filterDeprecatedModelIds(value.filter((model): model is string => typeof model === "string"), capability);
+}
+
+function primaryConfiguredCapability(capabilities?: readonly ProviderCapability[], selections?: DesktopProviderConfig["capabilityModels"]): ProviderCapability {
+  if (capabilities?.length === 1) return capabilities[0]!;
+  const selectedCapabilities = Object.keys(selections ?? {}) as ProviderCapability[];
+  if (selectedCapabilities.length === 1) return selectedCapabilities[0]!;
+  return "text";
 }
 
 function normalizeProviderCapabilities(value: unknown): ProviderCapability[] | undefined {

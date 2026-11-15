@@ -15,6 +15,7 @@ export type DesktopTaskMetadata = {
   readonly workflowTitle?: string;
   readonly definitionHash?: string;
   readonly workflowDefinition?: WorkflowDefinitionEnvelope;
+  readonly workflowModels?: readonly string[];
 };
 
 function readWorkflowDefinition(value: unknown): WorkflowDefinitionEnvelope | undefined {
@@ -47,6 +48,9 @@ function parsePayload(payloadJson: string): DesktopTaskMetadata | null {
   }
   if (payload.kind !== "workflow" && payload.kind !== "media" && payload.kind !== "agent") return null;
   const workflowDefinition = readWorkflowDefinition(payload.workflowDefinition);
+  const workflowModels = Array.isArray(payload.workflowModels)
+    ? [...new Set(payload.workflowModels.filter((model): model is string => typeof model === "string" && Boolean(model.trim())).map((model) => model.trim()))]
+    : [];
   const imageGeneration = readImageGeneration(payload.imageGeneration);
   return {
     kind: payload.kind,
@@ -57,6 +61,7 @@ function parsePayload(payloadJson: string): DesktopTaskMetadata | null {
     ...(typeof payload.workflowTitle === "string" ? { workflowTitle: payload.workflowTitle } : {}),
     ...(typeof payload.definitionHash === "string" ? { definitionHash: payload.definitionHash } : {}),
     ...(workflowDefinition ? { workflowDefinition } : {}),
+    ...(workflowModels.length ? { workflowModels } : {}),
   };
 }
 

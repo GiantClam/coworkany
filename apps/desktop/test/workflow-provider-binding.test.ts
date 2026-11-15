@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkflowDefinitionEnvelope } from "@coworkany/workflow-core";
-import { bindWorkflowProviderDefaults } from "../src/workflow-provider-binding";
+import { bindWorkflowProviderDefaults, summarizeWorkflowModels } from "../src/workflow-provider-binding";
 import { sanitizeWorkflowDefinitionForStorage } from "../src/workflow-storage";
 import { createCheapBuddyProvider } from "../src/cheapbuddy";
 import { setProviderCapabilityModels, type DesktopProviderConfig } from "../src/provider-config";
@@ -49,6 +49,29 @@ test("mixed media workflows bind each node to its configured capability provider
   assert.deepEqual(bound.nodes.find((node) => node.nodeKey === "image")?.config, { provider: "image-main", model: "image/fast", baseUrl: "https://image.example.test" });
   assert.deepEqual(bound.nodes.find((node) => node.nodeKey === "video")?.config, { provider: "video-main", model: "video/standard", baseUrl: "https://video.example.test" });
   assert.deepEqual(bound.nodes.find((node) => node.nodeKey === "audio")?.config, { provider: "audio-main", model: "audio/music", baseUrl: "https://audio.example.test" });
+});
+
+test("workflow run summary follows its configured node model instead of the global chat model", () => {
+  const textProvider: DesktopProviderConfig = { id: "pptoken", source: "openai-compatible", model: "gpt-6.1-sol", models: ["gpt-6.1-sol", "gpt-6-luna"], baseUrl: "https://provider.example.test" };
+  const workflow: WorkflowDefinitionEnvelope = { ...definition, nodes: [
+    { nodeKey: "input", type: "text_input" as const, nodeVersion: 1, title: "Input", positionX: 0, positionY: 0, config: { text: "" } },
+    { nodeKey: "writer", type: "writer" as const, nodeVersion: 1, title: "Writer", positionX: 1, positionY: 0, config: { selectedProviderId: "pptoken", selectedModelId: "gpt-6-luna" } },
+    { nodeKey: "output", type: "output" as const, nodeVersion: 1, title: "Output", positionX: 2, positionY: 0, config: {} },
+  ] };
+  const bound = bindWorkflowProviderDefaults(workflow, { provider: textProvider, providers: { pptoken: textProvider } });
+
+  assert.deepEqual(summarizeWorkflowModels(bound), { model: "gpt-6-luna", models: ["gpt-6-luna"] });
+});
+
+test("mixed-model workflows do not claim one node model for the whole run", () => {
+  const textProvider: DesktopProviderConfig = { id: "pptoken", source: "openai-compatible", model: "gpt-6.1-sol", models: ["gpt-6.1-sol", "gpt-6-luna"], baseUrl: "https://provider.example.test" };
+  const workflow: WorkflowDefinitionEnvelope = { ...definition, nodes: [
+    { nodeKey: "writer-a", type: "writer" as const, nodeVersion: 1, title: "Writer A", positionX: 0, positionY: 0, config: { selectedProviderId: "pptoken", selectedModelId: "gpt-6-luna" } },
+    { nodeKey: "writer-b", type: "writer" as const, nodeVersion: 1, title: "Writer B", positionX: 1, positionY: 0, config: { selectedProviderId: "pptoken", selectedModelId: "gpt-6.1-sol" } },
+  ] };
+  const bound = bindWorkflowProviderDefaults(workflow, { provider: textProvider, providers: { pptoken: textProvider } });
+
+  assert.deepEqual(summarizeWorkflowModels(bound), { models: ["gpt-6-luna", "gpt-6.1-sol"] });
 });
 
 test("provider binding leaves text/input nodes unchanged and does not introduce credentials", () => {
