@@ -35,9 +35,9 @@
       "script": "desktop:release:regression"
     },
     "smoke": {
-      "id": "smoke-deployed-regression.yml",
-      "kind": "workflow",
-      "workflow": "deployed-regression.yml"
+      "id": "smoke-desktop-release-regression",
+      "kind": "package-script",
+      "script": "desktop:release:regression"
     }
   },
   "release": {
@@ -86,7 +86,7 @@
       "versionSource": "project"
     },
     "publish": {
-      "enabled": true,
+      "enabled": false,
       "provider": "github",
       "generateNotes": true,
       "assets": []
