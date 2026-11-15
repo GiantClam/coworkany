@@ -1,0 +1,159 @@
+{
+  "status": "needs_human",
+  "stage": "commit",
+  "reason": "unresolved_worktree_changes",
+  "question": "发布动作需要人工确认，请检查返回的变更和发布范围。",
+  "choices": [],
+  "details": {
+    "status": "needs_human",
+    "stage": "commit",
+    "reason": "unresolved_worktree_changes",
+    "question": "工作区包含未授权变更。请选择要提交的路径，或先在隔离 worktree 中继续。",
+    "choices": [
+      "补充允许提交的路径",
+      "切换到隔离 worktree",
+      "保留当前工作区并稍后继续"
+    ],
+    "details": {
+      "status": "needs_human",
+      "dirtyEntries": [
+        {
+          "code": " M",
+          "path": "apps/desktop/src/App.tsx"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/src/generated-agency-agent-catalog.ts"
+        },
+        {
+          "code": " M",
+          "path": "package.json"
+        },
+        {
+          "code": " M",
+          "path": "pnpm-lock.yaml"
+        },
+        {
+          "code": " M",
+          "path": "scripts/desktop-release-entry-regression.mjs"
+        },
+        {
+          "code": " M",
+          "path": "scripts/desktop-release-entry-regression.test.mjs"
+        },
+        {
+          "code": " M",
+          "path": "scripts/verify-desktop-network-boundary.mjs"
+        },
+        {
+          "code": " M",
+          "path": "scripts/verify-desktop-network-boundary.test.mjs"
+        },
+        {
+          "code": "??",
+          "path": ".artifacts/dashi-ppt-acquire-d2b75389ca056a3a8fb5b997b79a098acce0c189/"
+        },
+        {
+          "code": "??",
+          "path": ".artifacts/ppt-master-acquire-3af3e8ef774c4d67ee57e1306d9256d08c9ee1bf/"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261115-coworkany-release/case.json"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261115-coworkany-release/events.jsonl"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/project.json"
+        },
+        {
+          "code": "??",
+          "path": "scripts/autosoftwarefactory-implementation-check.mjs"
+        }
+      ],
+      "allowedEntries": [
+        {
+          "code": " M",
+          "path": "apps/desktop/src/App.tsx"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/src/generated-agency-agent-catalog.ts"
+        },
+        {
+          "code": " M",
+          "path": "package.json"
+        },
+        {
+          "code": " M",
+          "path": "pnpm-lock.yaml"
+        },
+        {
+          "code": " M",
+          "path": "scripts/desktop-release-entry-regression.mjs"
+        },
+        {
+          "code": " M",
+          "path": "scripts/desktop-release-entry-regression.test.mjs"
+        },
+        {
+          "code": " M",
+          "path": "scripts/verify-desktop-network-boundary.mjs"
+        },
+        {
+          "code": " M",
+          "path": "scripts/verify-desktop-network-boundary.test.mjs"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261115-coworkany-release/case.json"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261115-coworkany-release/events.jsonl"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/project.json"
+        },
+        {
+          "code": "??",
+          "path": "scripts/autosoftwarefactory-implementation-check.mjs"
+        }
+      ],
+      "unresolvedEntries": [
+        {
+          "code": "??",
+          "path": ".artifacts/dashi-ppt-acquire-d2b75389ca056a3a8fb5b997b79a098acce0c189/"
+        },
+        {
+          "code": "??",
+          "path": ".artifacts/ppt-master-acquire-3af3e8ef774c4d67ee57e1306d9256d08c9ee1bf/"
+        }
+      ],
+      "allowedPaths": [
+        ".autotest",
+        "package.json",
+        "pnpm-lock.yaml",
+        "apps/desktop/src/App.tsx",
+        "apps/desktop/src/generated-agency-agent-catalog.ts",
+        "scripts/autosoftwarefactory-implementation-check.mjs",
+        "scripts/desktop-release-entry-regression.mjs",
+        "scripts/desktop-release-entry-regression.test.mjs",
+        "scripts/verify-desktop-network-boundary.mjs",
+        "scripts/verify-desktop-network-boundary.test.mjs",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/characters-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/complete-studio-background-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/desk-state-variants-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/display-source-art-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/office-chair-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/rig-animation-data-v1.json"
+      ]
+    },
+    "createdAt": "2026-11-15T15:40:54.466Z"
+  },
+  "createdAt": "2026-11-15T15:40:54.466Z"
+}

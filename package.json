@@ -13,6 +13,7 @@
     "clean:build": "node scripts/clean-build-artifacts.js",
     "dev": "node scripts/run-next-dev-with-local-proxy.cjs",
     "lint": "eslint app components lib modules --max-warnings=0",
+    "autosoftwarefactory:implementation": "node scripts/autosoftwarefactory-implementation-check.mjs",
     "lint:skills": "node scripts/validate-skill-files.js",
     "check:shared-boundaries": "node scripts/validate-shared-package-boundaries.mjs",
     "test:shared-boundaries": "node --test scripts/validate-shared-package-boundaries.test.mjs",

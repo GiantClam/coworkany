@@ -32,7 +32,7 @@ test("CheapBuddy permits only its fixed account and Relay origins", () => {
 
 test("desktop network boundary ignores library documentation and XML namespace URLs", () => {
   assert.deepEqual(scanDesktopNetworkBoundary([
-    { filePath: "fixture.js", source: "https://react.dev/errors/1 https://github.com/org/repo https://radix-ui.com/primitives/docs/components/dialog http://www.w3.org/2000/svg" },
+    { filePath: "fixture.js", source: "https://react.dev/errors/1 https://github.com/org/repo https://radix-ui.com/primitives/docs/components/dialog http://www.w3.org/2000/svg https://www.pixijs.com/ https://fonts.googleapis.com/css2" },
   ]), []);
 });
 

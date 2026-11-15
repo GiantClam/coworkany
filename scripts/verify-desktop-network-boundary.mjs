@@ -8,7 +8,7 @@ const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 export const STATIC_REMOTE_URL = /\bhttps?:\/\/[a-z0-9][a-z0-9.-]*(?::\d+)?(?:[/?#'"`)]|$)/giu;
 
-const DOCUMENTATION_URL = /^(?:https?:\/\/(?:example\.com(?:[/?#'"`)]|$)|www\.w3\.org\/|www\.ibm\.com\/|json-schema\.org\/)|https:\/\/(?:react\.dev|github\.com|radix-ui\.com)\/)/iu;
+const DOCUMENTATION_URL = /^(?:https?:\/\/(?:example\.com(?:[/?#'"`)]|$)|www\.w3\.org\/|www\.ibm\.com\/|json-schema\.org\/)|https?:\/\/(?:react\.dev|github\.com|radix-ui\.com|www\.pixijs\.com|fonts\.googleapis\.com)\/)/iu;
 // Provider catalog defaults are displayed as configuration suggestions. They
 // are not contacted by the bundled UI; actual requests still flow through the
 // host/provider adapter and user configuration.
