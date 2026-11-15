@@ -1906,7 +1906,8 @@ mod tests {
     fn poc_data_dir_override_is_debug_only_safe_and_absolute() {
         assert_eq!(parse_poc_data_dir_override(None).unwrap(), None);
         assert_eq!(parse_poc_data_dir_override(Some(std::ffi::OsStr::new("relative"))).unwrap_err(), "poc_data_dir_must_be_absolute");
-        assert_eq!(parse_poc_data_dir_override(Some(std::ffi::OsStr::new("/"))).unwrap_err(), "poc_data_dir_must_not_be_filesystem_root");
+        let filesystem_root = if cfg!(windows) { "C:\\" } else { "/" };
+        assert_eq!(parse_poc_data_dir_override(Some(std::ffi::OsStr::new(filesystem_root))).unwrap_err(), "poc_data_dir_must_not_be_filesystem_root");
         let path = parse_poc_data_dir_override(Some(std::ffi::OsStr::new("/tmp/coworkany-poc-data"))).unwrap().unwrap();
         assert_eq!(path, PathBuf::from("/tmp/coworkany-poc-data"));
     }
@@ -2293,7 +2294,17 @@ mod tests {
             .output()
             .unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        let archived = fs::read_to_string(extracted.join("config.redacted.json")).unwrap();
+        fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
+            for entry in fs::read_dir(root).ok()? {
+                let path = entry.ok()?.path();
+                if path.file_name().and_then(|value| value.to_str()) == Some(name) { return Some(path); }
+                if path.is_dir() {
+                    if let Some(found) = find_file(&path, name) { return Some(found); }
+                }
+            }
+            None
+        }
+        let archived = fs::read_to_string(find_file(&extracted, "config.redacted.json").unwrap()).unwrap();
         assert!(!archived.contains("archive-secret"));
         assert!(archived.contains("[REDACTED]"));
         assert!(archived.contains("中文"));
