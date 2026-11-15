@@ -102,9 +102,12 @@ tests/screenshots/
 .artifacts/portable-smoke-current/
 .artifacts/lancedb-test-*/
 .artifacts/tmp-lancedb-*/
+.artifacts/dashi-ppt-acquire-*/
+.artifacts/ppt-master-acquire-*/
 apps/desktop/dist/
 apps/desktop/dist-runtime/
 apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
 apps/desktop/*.test.local.json
 scripts/desktop-spikes/**/evidence/*.local.json
 
@@ -136,4 +139,9 @@ docs/desktop/*
 !docs/upstream/infinite-canvas-import-manifest.md
 !docs/performance/
 !docs/performance/workflow-canvas-m3.md
+!docs/superpowers/
+!docs/superpowers/assets/
+!docs/superpowers/assets/drafts/
+!docs/superpowers/assets/drafts/2026-10-10-virtual-studio/
+!docs/superpowers/assets/drafts/2026-10-10-virtual-studio/*
 !docs/payment-plan.zh-CN.md

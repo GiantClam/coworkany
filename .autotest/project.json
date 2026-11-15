@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "id": "coworkany",
+    "root": ".",
+    "repository": "GiantClam/coworkany",
+    "defaultBranch": "main"
+  },
+  "required": {
+    "implementation": true,
+    "verify": true,
+    "build": true,
+    "package": true,
+    "smoke": true
+  },
+  "methods": {
+    "implementation": {
+      "id": "implementation-autosoftwarefactory-release",
+      "kind": "package-script",
+      "script": "autosoftwarefactory:implementation"
+    },
+    "verify": {
+      "id": "verify-lint",
+      "kind": "package-script",
+      "script": "lint"
+    },
+    "build": {
+      "id": "build-build",
+      "kind": "package-script",
+      "script": "build"
+    },
+    "package": {
+      "id": "package-desktop:release:regression",
+      "kind": "package-script",
+      "script": "desktop:release:regression"
+    },
+    "smoke": {
+      "id": "smoke-deployed-regression.yml",
+      "kind": "workflow",
+      "workflow": "deployed-regression.yml"
+    }
+  },
+  "release": {
+    "commit": {
+      "enabled": true,
+      "message": "chore: prepare project release",
+      "paths": [
+        ".autotest",
+      ".gitignore",
+        "package.json",
+      "apps/desktop/package.json",
+      "apps/desktop/src-tauri/Cargo.lock",
+      "apps/desktop/src-tauri/Cargo.toml",
+      "apps/desktop/src-tauri/tauri.conf.json",
+        "pnpm-lock.yaml",
+        "apps/desktop/src/App.tsx",
+        "apps/desktop/src/generated-agency-agent-catalog.ts",
+        "scripts/autosoftwarefactory-implementation-check.mjs",
+        "scripts/desktop-release-entry-regression.mjs",
+        "scripts/desktop-release-entry-regression.test.mjs",
+      "scripts/validate-infinite-canvas-import-manifest.ts",
+      "scripts/validate-infinite-canvas-import-manifest.test.ts",
+        "scripts/verify-desktop-network-boundary.mjs",
+        "scripts/verify-desktop-network-boundary.test.mjs",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/characters-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/complete-studio-background-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/desk-state-variants-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/display-source-art-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/office-chair-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/rig-animation-data-v1.json"
+      ]
+    },
+    "push": {
+      "enabled": true,
+      "remote": "origin"
+    },
+    "merge": {
+      "enabled": true,
+      "strategy": "squash",
+      "deleteBranch": true,
+      "createIfMissing": true
+    },
+    "tag": {
+      "enabled": true,
+      "prefix": "v",
+      "versionSource": "project"
+    },
+    "publish": {
+      "enabled": true,
+      "provider": "github",
+      "generateNotes": true,
+      "assets": []
+    }
+  }
+}
