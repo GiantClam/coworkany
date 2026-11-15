@@ -130,5 +130,14 @@ test("offline bundle fingerprints complete skill trees and retains exact upstrea
 
     await put(root, `${ppt}/tools/工具.py`, "print('tampered')\n");
     await assert.rejects(bundle(), /skill_cache_integrity_failed:ppt-master/);
+
+    await rm(join(root, ppt), { recursive: true, force: true });
+    await rm(join(root, dashi), { recursive: true, force: true });
+    await run(process.execPath, [join(root, "scripts/bundle-desktop-skills.mjs")], {
+      windowsHide: true, timeout: 30000, maxBuffer: 16 * 1024,
+      env: { ...process.env, PATH: "", Path: "" },
+    });
+    assert.equal((await manifest()).commit, pptCommit);
+    assert.equal((await manifest("dashi-ppt")).commit, dashiCommit);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -60,6 +60,8 @@
         "scripts/autosoftwarefactory-implementation-check.mjs",
         "scripts/desktop-release-entry-regression.mjs",
         "scripts/desktop-release-entry-regression.test.mjs",
+        "scripts/bundle-desktop-skills.mjs",
+        "scripts/bundle-desktop-skills.test.mjs",
       "scripts/validate-infinite-canvas-import-manifest.ts",
       "scripts/validate-infinite-canvas-import-manifest.test.ts",
         "scripts/verify-desktop-network-boundary.mjs",

@@ -981,7 +981,11 @@ fn archive_diagnostics(staging: &std::path::Path, zip_path: &std::path::Path) ->
     {
     let source = powershell_quote(&staging.to_string_lossy());
     let destination = powershell_quote(&zip_path.to_string_lossy());
-    let command = format!("Compress-Archive -Path '{}\\*' -DestinationPath '{}' -Force", source, destination);
+    let command = format!(
+        "Add-Type -AssemblyName System.IO.Compression.FileSystem; $source = [IO.Path]::GetFullPath('{}'); $destination = [IO.Path]::GetFullPath('{}'); [IO.Compression.ZipFile]::CreateFromDirectory($source, $destination, [IO.Compression.CompressionLevel]::Optimal, $false)",
+        source,
+        destination,
+    );
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-Command", &command])
         .output()

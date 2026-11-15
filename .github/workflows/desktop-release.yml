@@ -214,6 +214,14 @@ jobs:
           COWORKANY_MAC_RUNTIME_URL: ${{ matrix.id == 'arm64' && (inputs.runtime_url || vars.COWORKANY_MAC_RUNTIME_URL) || (inputs.x64_runtime_url || vars.COWORKANY_MAC_X64_RUNTIME_URL) }}
           COWORKANY_MAC_RUNTIME_SHA256: ${{ matrix.id == 'arm64' && (inputs.runtime_sha256 || vars.COWORKANY_MAC_RUNTIME_SHA256) || (inputs.x64_runtime_sha256 || vars.COWORKANY_MAC_X64_RUNTIME_SHA256) }}
         run: python3 scripts/prepare-macos-release-runtime.py
+      - name: Provide H.264 capable macOS media runtime
+        run: |
+          brew install ffmpeg
+          ffmpeg_root="$(brew --prefix ffmpeg)"
+          test "$("$ffmpeg_root/bin/ffmpeg" -hide_banner -encoders 2>&1 | grep -E '\blibx264\b')"
+          test "$("$ffmpeg_root/bin/ffprobe" -version | head -n 1)"
+          echo "COWORKANY_MAC_STATIC_FFMPEG_PATH=$ffmpeg_root/bin/ffmpeg" >> "$GITHUB_ENV"
+          echo "COWORKANY_MAC_STATIC_FFPROBE_PATH=$ffmpeg_root/bin/ffprobe" >> "$GITHUB_ENV"
       - name: Pin OpenCode runtime for the desktop bundle
         run: |
           install_root="$RUNNER_TEMP/coworkany-opencode"
