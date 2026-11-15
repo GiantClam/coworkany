@@ -1,0 +1,160 @@
+{
+  "status": "needs_human",
+  "stage": "commit",
+  "reason": "unresolved_worktree_changes",
+  "question": "发布动作需要人工确认，请检查返回的变更和发布范围。",
+  "choices": [],
+  "details": {
+    "status": "needs_human",
+    "stage": "commit",
+    "reason": "unresolved_worktree_changes",
+    "question": "工作区包含未授权变更。请选择要提交的路径，或先在隔离 worktree 中继续。",
+    "choices": [
+      "补充允许提交的路径",
+      "切换到隔离 worktree",
+      "保留当前工作区并稍后继续"
+    ],
+    "details": {
+      "status": "needs_human",
+      "dirtyEntries": [
+        {
+          "code": " M",
+          "path": ".github/workflows/desktop-release.yml"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/package.json"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/src-tauri/Cargo.lock"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/src-tauri/Cargo.toml"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/src-tauri/src/lib.rs"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/src-tauri/tauri.conf.json"
+        },
+        {
+          "code": " M",
+          "path": "package.json"
+        },
+        {
+          "code": " M",
+          "path": "scripts/bundle-desktop-skills.mjs"
+        },
+        {
+          "code": " M",
+          "path": "scripts/bundle-desktop-skills.test.mjs"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261116-coworkany-release-r7/case.json"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261116-coworkany-release-r7/events.jsonl"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261116-coworkany-release-r8/case.json"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261116-coworkany-release-r8/events.jsonl"
+        }
+      ],
+      "allowedEntries": [
+        {
+          "code": " M",
+          "path": ".github/workflows/desktop-release.yml"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/package.json"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/src-tauri/Cargo.lock"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/src-tauri/Cargo.toml"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/src-tauri/src/lib.rs"
+        },
+        {
+          "code": " M",
+          "path": "apps/desktop/src-tauri/tauri.conf.json"
+        },
+        {
+          "code": " M",
+          "path": "package.json"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261116-coworkany-release-r7/case.json"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261116-coworkany-release-r7/events.jsonl"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261116-coworkany-release-r8/case.json"
+        },
+        {
+          "code": "??",
+          "path": ".autotest/cases/WI-20261116-coworkany-release-r8/events.jsonl"
+        }
+      ],
+      "unresolvedEntries": [
+        {
+          "code": " M",
+          "path": "scripts/bundle-desktop-skills.mjs"
+        },
+        {
+          "code": " M",
+          "path": "scripts/bundle-desktop-skills.test.mjs"
+        }
+      ],
+      "allowedPaths": [
+        ".autotest",
+        ".github/workflows/desktop-release.yml",
+        ".gitignore",
+        "package.json",
+        "apps/desktop/package.json",
+        "apps/desktop/src-tauri/Cargo.lock",
+        "apps/desktop/src-tauri/Cargo.toml",
+        "apps/desktop/src-tauri/tauri.conf.json",
+        "apps/desktop/src-tauri/src/lib.rs",
+        "pnpm-lock.yaml",
+        "apps/desktop/src/App.tsx",
+        "apps/desktop/src/generated-agency-agent-catalog.ts",
+        "scripts/autosoftwarefactory-implementation-check.mjs",
+        "scripts/desktop-release-entry-regression.mjs",
+        "scripts/desktop-release-entry-regression.test.mjs",
+        "scripts/validate-infinite-canvas-import-manifest.ts",
+        "scripts/validate-infinite-canvas-import-manifest.test.ts",
+        "scripts/verify-desktop-network-boundary.mjs",
+        "scripts/verify-desktop-network-boundary.test.mjs",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/characters-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/complete-studio-background-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/desk-state-variants-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/display-source-art-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/office-chair-v1.png",
+        "docs/superpowers/assets/drafts/2026-10-10-virtual-studio/rig-animation-data-v1.json"
+      ]
+    },
+    "createdAt": "2026-11-15T23:43:08.255Z"
+  },
+  "createdAt": "2026-11-15T23:43:08.255Z"
+}

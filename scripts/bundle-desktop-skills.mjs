@@ -40,6 +40,11 @@ async function resolveLatestSkill(skill) {
     if (commit.toLowerCase() === skill.commit.toLowerCase()) return skill;
     return { ...skill, version: `${skill.branch}-${commit.slice(0, 12)}`, commit, directoryDigest: "" };
   } catch (error) {
+    const cached = await cachedBundledSkill(skill);
+    if (cached) {
+      console.warn(`Unable to resolve latest ${skill.id}; using cached ${cached.commit}: ${error instanceof Error ? error.message : String(error)}`);
+      return cached;
+    }
     console.warn(`Unable to resolve latest ${skill.id}; using locked ${skill.commit}: ${error instanceof Error ? error.message : String(error)}`);
     return skill;
   }
@@ -90,6 +95,19 @@ catch { throw new Error("Run the shared skill catalog generator before bundling 
 
 async function exists(path) {
   try { await access(path, constants.F_OK); return true; } catch { return false; }
+}
+
+async function cachedBundledSkill(skill) {
+  const directory = join(target, skill.id);
+  const manifestPath = join(target, `${skill.id}.manifest.json`);
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    if (manifest.source !== skill.repo || !/^[a-f0-9]{40}$/iu.test(manifest.commit) || !/^[a-f0-9]{64}$/iu.test(manifest.directoryDigest)) return null;
+    if (!(await exists(join(directory, "SKILL.md"))) || await digestDirectory(directory) !== manifest.directoryDigest) return null;
+    return { ...skill, version: typeof manifest.version === "string" && manifest.version ? manifest.version : `cached-${manifest.commit.slice(0, 12)}`, commit: manifest.commit, directoryDigest: manifest.directoryDigest };
+  } catch {
+    return null;
+  }
 }
 
 // Preserve the directory itself for Tauri's concurrent resource scanner, while
@@ -144,10 +162,15 @@ async function digestDirectory(directory) {
 async function acquireGitSkill({ id, repo, commit, branch, skillPath, stagingName, directoryDigest }) {
   const staging = join(repoRoot, ".artifacts", `${stagingName}-${commit}`);
   const acquired = join(staging, skillPath);
+  const bundled = join(target, id);
   if (await exists(join(acquired, "SKILL.md"))) {
-    if (directoryDigest && await digestDirectory(acquired) !== directoryDigest) throw new Error(`skill_cache_integrity_failed:${id}`);
+    if (directoryDigest && await digestDirectory(acquired) !== directoryDigest) {
+      if (await exists(join(bundled, "SKILL.md")) && await digestDirectory(bundled) === directoryDigest) return bundled;
+      throw new Error(`skill_cache_integrity_failed:${id}`);
+    }
     return acquired;
   }
+  if (await exists(join(bundled, "SKILL.md")) && directoryDigest && await digestDirectory(bundled) === directoryDigest) return bundled;
   if (offline) throw new Error(`offline_skill_missing:${repo}@${commit}`);
   await rm(staging, { recursive: true, force: true });
   await mkdir(dirname(staging), { recursive: true });
@@ -176,10 +199,10 @@ const pptTarget = join(target, "ppt-master");
 // Tauri scans bundled resource directories while `beforeDevCommand` is still
 // running. Keep the target directory present and overlay the pinned skill so
 // the resource scanner never observes a path that was listed and then removed.
-await syncDirectory(pptSource, pptTarget);
+if (pptSource !== pptTarget) await syncDirectory(pptSource, pptTarget);
 const dashiSource = await acquireGitSkill(dashiPpt);
 const dashiTarget = join(target, "dashi-ppt");
-await syncDirectory(dashiSource, dashiTarget);
+if (dashiSource !== dashiTarget) await syncDirectory(dashiSource, dashiTarget);
 await patchDashiPreviewDesktopBridge(dashiTarget);
 const desktopPreviewPolicy = `
 
