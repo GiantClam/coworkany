@@ -982,7 +982,7 @@ fn archive_diagnostics(staging: &std::path::Path, zip_path: &std::path::Path) ->
     let source = powershell_quote(&staging.to_string_lossy());
     let destination = powershell_quote(&zip_path.to_string_lossy());
     let command = format!(
-        "Add-Type -AssemblyName System.IO.Compression.FileSystem; $source = [IO.Path]::GetFullPath('{}'); $destination = [IO.Path]::GetFullPath('{}'); [IO.Compression.ZipFile]::CreateFromDirectory($source, $destination, [IO.Compression.CompressionLevel]::Optimal, $false)",
+        r#"Add-Type -AssemblyName System.IO.Compression; Add-Type -AssemblyName System.IO.Compression.FileSystem; $source = [IO.Path]::GetFullPath('{}'); $destination = [IO.Path]::GetFullPath('{}'); [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null; $archive = [IO.Compression.ZipFile]::Open($destination, [IO.Compression.ZipArchiveMode]::Create); try {{ foreach ($file in [IO.Directory]::EnumerateFiles($source, '*', [IO.SearchOption]::AllDirectories)) {{ $relative = $file.Substring($source.Length).TrimStart([char[]]@('\','/')); [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file, $relative, [IO.Compression.CompressionLevel]::Optimal) | Out-Null }} }} finally {{ $archive.Dispose() }}"#,
         source,
         destination,
     );
