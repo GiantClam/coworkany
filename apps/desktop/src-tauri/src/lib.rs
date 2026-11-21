@@ -982,7 +982,7 @@ fn archive_diagnostics(staging: &std::path::Path, zip_path: &std::path::Path) ->
     let source = powershell_quote(&staging.to_string_lossy());
     let destination = powershell_quote(&zip_path.to_string_lossy());
     let command = format!(
-        r#"$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.IO.Compression; Add-Type -AssemblyName System.IO.Compression.FileSystem; $source = [IO.Path]::GetFullPath('{}'); $destination = [IO.Path]::GetFullPath('{}'); [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null; $archive = [IO.Compression.ZipFile]::Open($destination, [IO.Compression.ZipArchiveMode]::Create); try {{ foreach ($file in [IO.Directory]::EnumerateFiles($source, '*', [IO.SearchOption]::AllDirectories)) {{ $relative = $file.Substring($source.Length).TrimStart([char[]]@('\','/')); [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file, $relative, [IO.Compression.CompressionLevel]::Optimal) | Out-Null }} }} finally {{ $archive.Dispose() }}"#,
+        "$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; $source = [IO.Path]::GetFullPath('{}'); $destination = [IO.Path]::GetFullPath('{}'); [IO.Compression.ZipFile]::CreateFromDirectory($source, $destination, [IO.Compression.CompressionLevel]::Optimal, $false)",
         source,
         destination,
     );
@@ -2291,7 +2291,7 @@ mod tests {
 
         archive_diagnostics(&staging, &archive).unwrap();
         let command = format!(
-            "$ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
+            "$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::ExtractToDirectory('{}', '{}')",
             powershell_quote(&archive.to_string_lossy()),
             powershell_quote(&extracted.to_string_lossy())
         );
