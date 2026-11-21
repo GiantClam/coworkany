@@ -47,6 +47,7 @@
       "paths": [
         ".autotest",
       ".github/workflows/desktop-release.yml",
+        ".github/workflows/desktop-windows.yml",
       ".gitignore",
         "package.json",
       "apps/desktop/package.json",
@@ -82,7 +83,8 @@
       "enabled": true,
       "strategy": "squash",
       "deleteBranch": true,
-      "createIfMissing": true
+      "createIfMissing": true,
+      "requiredChecks": ["windows-validation", "validate (macos-15, arm64)", "validate (macos-15-intel, x86_64)"]
     },
     "tag": {
       "enabled": true,

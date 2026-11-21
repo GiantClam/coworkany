@@ -982,7 +982,7 @@ fn archive_diagnostics(staging: &std::path::Path, zip_path: &std::path::Path) ->
     let source = powershell_quote(&staging.to_string_lossy());
     let destination = powershell_quote(&zip_path.to_string_lossy());
     let command = format!(
-        r#"Add-Type -AssemblyName System.IO.Compression; Add-Type -AssemblyName System.IO.Compression.FileSystem; $source = [IO.Path]::GetFullPath('{}'); $destination = [IO.Path]::GetFullPath('{}'); [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null; $archive = [IO.Compression.ZipFile]::Open($destination, [IO.Compression.ZipArchiveMode]::Create); try {{ foreach ($file in [IO.Directory]::EnumerateFiles($source, '*', [IO.SearchOption]::AllDirectories)) {{ $relative = $file.Substring($source.Length).TrimStart([char[]]@('\','/')); [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file, $relative, [IO.Compression.CompressionLevel]::Optimal) | Out-Null }} }} finally {{ $archive.Dispose() }}"#,
+        r#"$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.IO.Compression; Add-Type -AssemblyName System.IO.Compression.FileSystem; $source = [IO.Path]::GetFullPath('{}'); $destination = [IO.Path]::GetFullPath('{}'); [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null; $archive = [IO.Compression.ZipFile]::Open($destination, [IO.Compression.ZipArchiveMode]::Create); try {{ foreach ($file in [IO.Directory]::EnumerateFiles($source, '*', [IO.SearchOption]::AllDirectories)) {{ $relative = $file.Substring($source.Length).TrimStart([char[]]@('\','/')); [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file, $relative, [IO.Compression.CompressionLevel]::Optimal) | Out-Null }} }} finally {{ $archive.Dispose() }}"#,
         source,
         destination,
     );
@@ -2286,10 +2286,12 @@ mod tests {
         let mut value = serde_json::json!({ "provider": { "apiKey": "archive-secret" }, "label": "中文" });
         redact_diagnostic_value(&mut value);
         fs::write(staging.join("config.redacted.json"), serde_json::to_vec(&value).unwrap()).unwrap();
+        fs::create_dir_all(staging.join("logs")).unwrap();
+        fs::write(staging.join("logs").join("runtime.jsonl"), b"{\"ready\":true}").unwrap();
 
         archive_diagnostics(&staging, &archive).unwrap();
         let command = format!(
-            "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
+            "$ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
             powershell_quote(&archive.to_string_lossy()),
             powershell_quote(&extracted.to_string_lossy())
         );
@@ -2308,10 +2310,24 @@ mod tests {
             }
             None
         }
-        let archived = fs::read_to_string(find_file(&extracted, "config.redacted.json").unwrap()).unwrap();
+        let archived_path = find_file(&extracted, "config.redacted.json").unwrap_or_else(|| {
+            panic!("diagnostics config missing after extraction: archive={} bytes={:?} extracted={:?} stdout={} stderr={}", archive.display(), fs::metadata(&archive).map(|info| info.len()), fs::read_dir(&extracted).map(|entries| entries.filter_map(Result::ok).map(|entry| entry.path()).collect::<Vec<_>>()), String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        });
+        let archived = fs::read_to_string(archived_path).unwrap();
         assert!(!archived.contains("archive-secret"));
         assert!(archived.contains("[REDACTED]"));
         assert!(archived.contains("中文"));
+        assert_eq!(fs::read_to_string(find_file(&extracted, "runtime.jsonl").unwrap()).unwrap(), "{\"ready\":true}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn diagnostic_archive_rejects_a_missing_source() {
+        let root = std::env::temp_dir().join(format!("coworkany-missing-diagnostics-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let error = archive_diagnostics(&root.join("missing"), &root.join("diagnostics.zip")).unwrap_err();
+        assert!(error.starts_with("diagnostics_archive_failed:"), "{error}");
         let _ = fs::remove_dir_all(root);
     }
 
