@@ -118,15 +118,11 @@ The system WebView2 runtime is not copied; the first launch probes or repairs it
 "@
 
 if (Test-Path -LiteralPath $zip -PathType Leaf) { Remove-Item -LiteralPath $zip -Force }
-$tarCommand = Get-Command tar.exe -ErrorAction SilentlyContinue
-if ($null -ne $tarCommand) {
-  # Windows ships bsdtar; it is materially faster and more reliable than
-  # Compress-Archive for the 270 MB green package on large runtime trees.
-  & $tarCommand.Source -a -c -f $zip -C $stage $packageName
-  if ($LASTEXITCODE -ne 0) { throw "desktop_package_tar_failed:$LASTEXITCODE" }
-} else {
-  Compress-Archive -LiteralPath $packageRoot -DestinationPath $zip -CompressionLevel Optimal
-}
+# The Windows 2022 runner's tar.exe can crash with an access violation while
+# compressing this runtime tree. Use the streaming .NET ZIP implementation and
+# retain the same top-level package directory and archive-content checks.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory($packageRoot, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $true)
 Assert-DesktopPackageArchive -ArchivePath $zip -PackageName $packageName -ExecutablePath $executable -RuntimePath $distRuntime -ExpectPortable:$Portable
 Get-Item -LiteralPath $zip | Select-Object FullName, Length, LastWriteTime
 } finally {
