@@ -69,6 +69,7 @@
         "scripts/desktop-poc/scenarios/workflow-persistence.json",
         "scripts/desktop-release-entry-regression.mjs",
         "scripts/desktop-release-entry-regression.test.mjs",
+        "scripts/package-desktop-zip.ps1",
         "scripts/bundle-desktop-skills.mjs",
         "scripts/bundle-desktop-skills.test.mjs",
       "scripts/validate-infinite-canvas-import-manifest.ts",
