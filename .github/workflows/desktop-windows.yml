@@ -7,6 +7,8 @@ on:
       - "packages/**"
       - "content/**"
       - "scripts/desktop-poc/**"
+      - "scripts/package-desktop-zip*"
+      - "scripts/stage-desktop-runtime.ps1"
       - "package.json"
       - "pnpm-lock.yaml"
       - ".github/workflows/desktop-windows.yml"
@@ -19,7 +21,7 @@ permissions:
 jobs:
   windows-validation:
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -39,3 +41,13 @@ jobs:
         env:
           TAURI_CONFIG: '{"bundle":{"resources":[]}}'
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Install pinned OpenCode CLI for package validation
+        run: npm install --global --no-audit --no-fund opencode-ai@1.19.4
+      - name: Build Windows installer before release
+        run: pnpm tauri:build
+      - name: Validate Windows normal and portable ZIP packages before release
+        run: |
+          New-Item -ItemType Directory -Force -Path apps/desktop/src-tauri/target/release/_up_ | Out-Null
+          Copy-Item -LiteralPath apps/desktop/dist-runtime -Destination apps/desktop/src-tauri/target/release/_up_ -Recurse -Force
+          & scripts/package-desktop-zip.ps1
+          & scripts/package-desktop-zip.ps1 -Portable
