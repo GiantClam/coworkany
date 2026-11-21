@@ -19,7 +19,7 @@ overrides:
   glob: ^10.5.0
   lodash: ^4.17.23
   tar: ^7.5.11
-  brace-expansion: 5.0.9
+  brace-expansion: 5.0.12
   "esbuild@<=0.24.2": ">=0.25.0"
   "picomatch@>=4.0.0 <4.0.4": ">=4.0.4"
   "lodash@>=4.0.0 <=4.17.23": ">=4.18.0"
@@ -42,8 +42,14 @@ overrides:
   "tar@<=7.5.16": ">=7.5.17"
   "shell-quote@<=1.8.4": ">=1.9.0"
   "protobufjs@>=7.5.0 <=7.6.4": ">=7.6.5"
-  sharp: 0.35.3
-  next: 15.5.21
+  sharp: 0.35.5
+  next: 15.5.29
+  "shell-quote@<1.11.0": 1.11.0
+  "undici@>=7.0.0 <7.30.1": 7.30.1
+  "browserslist@>=4.0.0 <4.28.7": 4.28.7
+  "source-map-js@<1.2.2": 1.2.2
+  "baseline-browser-mapping@<2.11.0": 2.11.0
+  "postcss-selector-parser@>=6.0.0 <6.1.5": 6.1.5
   postcss: 8.5.26
   "tar@<=7.5.20": ">=7.5.21"
   "postcss@<=8.5.22": ">=8.5.23"
