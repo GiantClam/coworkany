@@ -294,6 +294,7 @@ export type JevSelectorOptions = {
   readonly environment?: NodeJS.ProcessEnv;
   readonly runCommand?: JevCommandRunner;
   readonly requireCredentials?: boolean;
+  readonly credentialsAvailable?: typeof jevCredentialsAvailable;
 };
 
 export class JevSelector {
@@ -302,6 +303,7 @@ export class JevSelector {
   private readonly environment: NodeJS.ProcessEnv;
   private readonly runCommand: JevCommandRunner;
   private readonly requireCredentials: boolean;
+  private readonly credentialsAvailable: typeof jevCredentialsAvailable;
 
   constructor(options: JevSelectorOptions = {}) {
     this.command = options.command ?? "jev";
@@ -309,10 +311,11 @@ export class JevSelector {
     this.environment = options.environment ?? process.env;
     this.runCommand = options.runCommand ?? defaultRunCommand;
     this.requireCredentials = options.requireCredentials ?? true;
+    this.credentialsAvailable = options.credentialsAvailable ?? jevCredentialsAvailable;
   }
 
   assertConfigured() {
-    if (this.requireCredentials && !jevCredentialsAvailable(this.environment)) {
+    if (this.requireCredentials && !this.credentialsAvailable(this.environment)) {
       throw new JevSelectorError("jev_credentials_missing", "Jev API credentials are required; set JEV_API_KEY or run `jev login`.");
     }
   }

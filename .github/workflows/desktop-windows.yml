@@ -6,6 +6,7 @@ on:
       - "apps/desktop/**"
       - "packages/**"
       - "content/**"
+      - "scripts/desktop-poc/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - ".github/workflows/desktop-windows.yml"

@@ -440,6 +440,28 @@ export function unwrapAgentDesktopProperty(value: unknown): unknown {
   return isRecord(value) && "value" in value ? value.value : value;
 }
 
+export async function waitForSnapshotTarget({ target, timeoutMs, readSnapshot, intervalMs = 500 }: {
+  target: ScenarioStep["target"];
+  timeoutMs: number;
+  readSnapshot: () => Promise<unknown>;
+  intervalMs?: number;
+}): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() <= deadline) {
+    try {
+      if (snapshotContainsTarget(await readSnapshot(), target)) return;
+    } catch (error) {
+      if (!(error instanceof PocError) || !["APP_UNRESPONSIVE", "TIMEOUT"].includes(error.code)) throw error;
+      lastError = error;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(intervalMs, remaining));
+  }
+  throw new PocError("app_ready_timeout", `application did not expose the launch target: ${target?.pocId ?? target?.name ?? "unknown"}${lastError instanceof Error ? ` (${lastError.message})` : ""}`, "environment");
+}
+
 export class AgentDesktopAdapter implements ScenarioAdapter {
   private readonly options: NativeAdapterOptions;
   private readonly selector?: JevSelector;
@@ -567,6 +589,15 @@ export class AgentDesktopAdapter implements ScenarioAdapter {
     await execFileAsync("osascript", ["-e", `tell application "System Events" to set frontmost of process "${processName}" to true`], { timeout: 10_000 }).catch(() => undefined);
   }
 
+  private async waitForReadyTarget(target: ScenarioStep["target"], timeoutMs: number) {
+    if (!target) return;
+    return waitForSnapshotTarget({
+      target,
+      timeoutMs,
+      readSnapshot: async () => this.cli("snapshot", [...this.windowScopeArgs(), "--interactive-only", "--compact"], Math.min(5_000, timeoutMs)),
+    });
+  }
+
   private async get(ref: string, property: string) {
     return unwrapAgentDesktopProperty(await this.cli("get", ["--property", property, ref], 10_000));
   }
@@ -609,9 +640,9 @@ export class AgentDesktopAdapter implements ScenarioAdapter {
         try { this.selector?.assertConfigured(); }
         catch (error) { if (error instanceof JevSelectorError) throw new PocError(error.code, error.message, "environment"); throw error; }
         this.windowId = undefined;
-        const result = await startRun({ root: this.options.runRoot, repoRoot: this.options.repoRoot, waitMs: step.timeoutMs }); await this.waitForAppWindow(step.timeoutMs); await this.focusNativeApplication(); return { observation: result };
+        const result = await startRun({ root: this.options.runRoot, repoRoot: this.options.repoRoot, waitMs: step.timeoutMs }); await this.waitForAppWindow(step.timeoutMs); await this.focusNativeApplication(); await this.waitForReadyTarget(step.target, step.timeoutMs); return { observation: result };
       }
-      if (step.action === "restart") { this.windowId = undefined; const result = await restartRun(this.options.runRoot, { waitMs: step.timeoutMs }); await this.waitForAppWindow(step.timeoutMs); await this.focusNativeApplication(); return { observation: result }; }
+      if (step.action === "restart") { this.windowId = undefined; const result = await restartRun(this.options.runRoot, { waitMs: step.timeoutMs }); await this.waitForAppWindow(step.timeoutMs); await this.focusNativeApplication(); await this.waitForReadyTarget(step.target, step.timeoutMs); return { observation: result }; }
       if (step.action === "stop") return { observation: await stopRun(this.options.runRoot) };
       if (step.action === "cleanup") return { observation: await cleanupRun(this.options.runRoot) };
     }

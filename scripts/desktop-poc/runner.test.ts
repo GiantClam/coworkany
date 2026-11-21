@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { expandRunId } from "./canonical";
-import { runScenario, MockScenarioAdapter, selectRunWindow, snapshotContainsTarget, snapshotContainsText, snapshotObservation, snapshotPropertyValue, snapshotTargetRefs, unwrapAgentDesktopProperty } from "./runner";
+import { runScenario, MockScenarioAdapter, PocError, waitForSnapshotTarget, selectRunWindow, snapshotContainsTarget, snapshotContainsText, snapshotObservation, snapshotPropertyValue, snapshotTargetRefs, unwrapAgentDesktopProperty } from "./runner";
 import scenario from "./scenarios/workflow-persistence.json";
 
 function plan() {
@@ -28,6 +28,25 @@ function plan() {
     stopConditions: [],
   };
 }
+
+test("native launch waits through bootstrap and transient AX errors for its semantic target", async () => {
+  let reads = 0;
+  await waitForSnapshotTarget({
+    target: { role: "button", name: "工作流" }, timeoutMs: 1000, intervalMs: 1,
+    readSnapshot: async () => {
+      reads += 1;
+      if (reads === 1) throw new PocError("APP_UNRESPONSIVE", "AXWindows incomplete");
+      if (reads === 2) return { tree: { role: "statictext", name: "正在启动本地工作台" } };
+      return { tree: { role: "button", name: "工作流" } };
+    },
+  });
+  assert.equal(reads, 3);
+});
+
+test("native readiness remains bounded and does not retry permission errors", async () => {
+  await assert.rejects(waitForSnapshotTarget({ target: { role: "button", name: "工作流" }, timeoutMs: 5, intervalMs: 1, readSnapshot: async () => ({ tree: {} }) }), /application did not expose/);
+  await assert.rejects(waitForSnapshotTarget({ target: { role: "button", name: "工作流" }, timeoutMs: 1000, readSnapshot: async () => { throw new PocError("PERMISSION_DENIED", "permission denied"); } }), /permission denied/);
+});
 
 test("runScenario expands placeholders, writes one timeline event per step, and always cleans up", async () => {
   const root = await mkdtemp(join(tmpdir(), "coworkany-poc-runner-"));

@@ -8,6 +8,7 @@ on:
       - "content/**"
       - "package.json"
       - "scripts/desktop-release*.mjs"
+      - "scripts/desktop-poc/**"
       - "scripts/release-macos*"
       - "scripts/macos-release.entitlements.plist"
       - "scripts/prepare-macos-release-runtime*"
@@ -52,6 +53,7 @@ jobs:
       - name: Validate desktop TypeScript and platform tests
         run: |
           pnpm desktop:typecheck
+          pnpm desktop:poc:contract-test
           pnpm --filter @coworkany/desktop build:host
           # Keep platform validation offline and deterministic while providing
           # the same runtime skill contract that the Rust tests resolve.

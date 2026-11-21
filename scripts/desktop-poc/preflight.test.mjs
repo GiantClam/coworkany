@@ -31,6 +31,7 @@ test("preflight does not report ready while a manual gate remains", async () => 
   try {
     const result = await runPreflight({
     repoRoot,
+    port: 0,
     platform: "darwin",
     environment: { COWORKANY_DESKTOP_POC_BASE: "/tmp/poc", COWORKANY_DESKTOP_POC_RUN_ID: "run-test" },
     commandAvailableFn: (command) => ["node", "pnpm", "cargo", "osascript", "jev", "/usr/sbin/screencapture"].includes(command),
