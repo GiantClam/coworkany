@@ -1,0 +1,41 @@
+name: Desktop Windows Validation
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "packages/**"
+      - "content/**"
+      - "scripts/desktop-poc/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/desktop-windows.yml"
+      - ".github/workflows/desktop-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-validation:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: pnpm
+      - name: Prepare desktop host and platform fixtures
+        run: |
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter @coworkany/desktop build:host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node -e "const fs=require('node:fs'); const path=require('node:path'); const root='apps/desktop/dist-runtime/skills'; for (const id of ['ppt-master','dashi-ppt']) { fs.mkdirSync(path.join(root,id),{recursive:true}); fs.writeFileSync(path.join(root,id,'SKILL.md'),'# '+id+'\n'); fs.writeFileSync(path.join(root,id+'.manifest.json'),'{}\n'); }"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Validate Windows Rust behavior before release
+        env:
+          TAURI_CONFIG: '{"bundle":{"resources":[]}}'
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml

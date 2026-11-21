@@ -113,6 +113,9 @@ scripts/desktop-spikes/**/evidence/*.local.json
 
 .playwright-cli/
 
+# Locally recovered offline runtime inputs are build cache, not source.
+.artifacts/release-runtime-inputs-*/
+
 docs/
 !docs/
 docs/*

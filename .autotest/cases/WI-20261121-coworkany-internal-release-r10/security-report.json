@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "scope": "production dependencies across the pnpm workspace",
+  "command": "corepack pnpm@11.19.0 audit --prod --json",
+  "date": "2026-11-21",
+  "before": { "critical": 4, "high": 17, "moderate": 19, "low": 3 },
+  "after": { "critical": 0, "high": 1, "moderate": 2, "low": 0 },
+  "patched": {
+    "next": "15.5.29",
+    "sharp": "0.35.5",
+    "shell-quote": "1.11.0",
+    "undici": "7.30.1",
+    "browserslist": "4.28.7",
+    "brace-expansion": "5.0.12",
+    "source-map-js": "1.2.2",
+    "baseline-browser-mapping": "2.11.0",
+    "postcss-selector-parser": "6.1.5"
+  },
+  "remainingHigh": {
+    "package": "zod",
+    "installedMajor": 3,
+    "patched": ">=4.6.6",
+    "advisory": "https://github.com/advisories/GHSA-mrhx-c7xc-m3w5",
+    "disposition": "Major-version migration remains open; this delivery is an internal-test draft, not production acceptance."
+  },
+  "releaseScope": "User selected internal packages and a GitHub Release draft; no public release publication or production deployment."
+}

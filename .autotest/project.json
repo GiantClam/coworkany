@@ -35,9 +35,9 @@
       "script": "desktop:release:regression"
     },
     "smoke": {
-      "id": "smoke-desktop-release-regression",
+      "id": "smoke-desktop-native-poc",
       "kind": "package-script",
-      "script": "desktop:release:regression"
+      "script": "desktop:poc:run"
     }
   },
   "release": {
@@ -47,6 +47,8 @@
       "paths": [
         ".autotest",
       ".github/workflows/desktop-release.yml",
+        ".github/workflows/desktop-windows.yml",
+        ".github/workflows/desktop-macos.yml",
       ".gitignore",
         "package.json",
       "apps/desktop/package.json",
@@ -55,9 +57,16 @@
       "apps/desktop/src-tauri/tauri.conf.json",
       "apps/desktop/src-tauri/src/lib.rs",
         "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
         "apps/desktop/src/App.tsx",
         "apps/desktop/src/generated-agency-agent-catalog.ts",
         "scripts/autosoftwarefactory-implementation-check.mjs",
+        "scripts/desktop-poc/runner.ts",
+        "scripts/desktop-poc/runner.test.ts",
+        "scripts/desktop-poc/preflight.test.mjs",
+        "scripts/desktop-poc/jev-selector.ts",
+        "scripts/desktop-poc/jev-selector.test.ts",
+        "scripts/desktop-poc/scenarios/workflow-persistence.json",
         "scripts/desktop-release-entry-regression.mjs",
         "scripts/desktop-release-entry-regression.test.mjs",
         "scripts/bundle-desktop-skills.mjs",
@@ -82,7 +91,8 @@
       "enabled": true,
       "strategy": "squash",
       "deleteBranch": true,
-      "createIfMissing": true
+      "createIfMissing": true,
+      "requiredChecks": ["windows-validation", "validate (macos-15, arm64)", "validate (macos-15-intel, x86_64)"]
     },
     "tag": {
       "enabled": true,

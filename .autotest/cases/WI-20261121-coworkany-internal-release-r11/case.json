@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "workItemId": "WI-20261121-coworkany-internal-release-r11",
+  "project": "coworkany",
+  "repository": "GiantClam/coworkany",
+  "targetSha": "bf8997d26894b7b41ad22d7f899cb428b9cf891c",
+  "branch": "codex/autosoftwarefactory-coworkany-release-20261116",
+  "environment": {
+    "node": "v25.2.1"
+  },
+  "policy": {
+    "requiredEvidence": []
+  },
+  "lifecycleStages": [
+    "intake",
+    "triage",
+    "discover",
+    "clarification",
+    "requirement-review",
+    "research",
+    "spec",
+    "planning",
+    "implementation",
+    "review",
+    "verify",
+    "security",
+    "release-candidate",
+    "acceptance",
+    "release-approval",
+    "commit",
+    "push",
+    "merge",
+    "tag",
+    "publish",
+    "deploy",
+    "smoke",
+    "observe",
+    "iteration",
+    "closed"
+  ],
+  "statuses": [
+    "passed",
+    "failed",
+    "blocked",
+    "needs_human",
+    "planned",
+    "skipped"
+  ],
+  "createdAt": "2026-11-21T12:02:07.368Z"
+}

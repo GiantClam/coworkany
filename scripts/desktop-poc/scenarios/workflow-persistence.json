@@ -9,7 +9,7 @@
     "No CoworkAny provider key or external business action is required; Jev selector calls are the only external decision requests."
   ],
   "steps": [
-    { "actor": "operator", "action": "launch", "stepId": "launch-isolated-app", "timeoutMs": 180000, "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
+    { "actor": "operator", "action": "launch", "stepId": "launch-isolated-app", "timeoutMs": 180000, "target": { "pocId": "workflow-navigation", "role": "button", "name": "工作流" }, "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
     { "actor": "desktop-agent", "action": "click", "stepId": "open-workflow-directory", "timeoutMs": 10000, "target": { "pocId": "workflow-navigation", "role": "button", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
     { "actor": "desktop-agent", "action": "focus", "stepId": "focus-directory", "timeoutMs": 10000, "target": { "pocId": "workflow-directory", "role": "group", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
     { "actor": "desktop-agent", "action": "snapshot", "stepId": "observe-directory", "timeoutMs": 10000, "target": { "pocId": "workflow-directory", "role": "group", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
@@ -28,7 +28,7 @@
     { "actor": "desktop-agent", "action": "click", "stepId": "back-to-directory", "timeoutMs": 10000, "target": { "pocId": "back-to-workflows", "role": "button" }, "evidence": { "snapshot": true, "trace": true } },
     { "actor": "desktop-agent", "action": "snapshot", "stepId": "observe-directory-after-save", "timeoutMs": 10000, "target": { "pocId": "workflow-directory", "role": "group", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
     { "actor": "desktop-agent", "action": "assert", "stepId": "assert-saved-card", "timeoutMs": 10000, "target": { "pocId": "workflow-card", "name": "POC-${runId}" }, "assertion": { "kind": "exists", "expected": true }, "evidence": { "snapshot": true, "trace": true } },
-    { "actor": "operator", "action": "restart", "stepId": "restart-same-data-root", "timeoutMs": 180000, "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
+    { "actor": "operator", "action": "restart", "stepId": "restart-same-data-root", "timeoutMs": 180000, "target": { "pocId": "workflow-navigation", "role": "button", "name": "工作流" }, "evidence": { "snapshot": true, "screenshot": true, "trace": true } },
     { "actor": "desktop-agent", "action": "click", "stepId": "open-workflow-directory-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-navigation", "role": "button", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
     { "actor": "desktop-agent", "action": "focus", "stepId": "focus-directory-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-directory", "role": "group", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },
     { "actor": "desktop-agent", "action": "snapshot", "stepId": "observe-after-restart", "timeoutMs": 10000, "target": { "pocId": "workflow-directory", "role": "group", "name": "工作流" }, "evidence": { "snapshot": true, "trace": true } },

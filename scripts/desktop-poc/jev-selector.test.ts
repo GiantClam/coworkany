@@ -114,6 +114,6 @@ test("Jev selector preserves the observation decision for a bounded retry", asyn
 });
 
 test("native Jev selector fails closed without credentials", async () => {
-  const selector = new JevSelector({ environment: {}, requireCredentials: true, runCommand: async () => { throw new Error("must not call API"); } });
+  const selector = new JevSelector({ environment: {}, requireCredentials: true, credentialsAvailable: () => false, runCommand: async () => { throw new Error("must not call API"); } });
   await assert.rejects(() => selector.select({ snapshot: {}, step }), (error: unknown) => error instanceof JevSelectorError && error.code === "jev_credentials_missing");
 });
